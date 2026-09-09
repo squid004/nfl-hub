@@ -4,8 +4,8 @@
 // table is "anon all" (personal single-tenant tool). Fill these in after creating the
 // project and running supabase/schema.sql.
 const DB = {
-  SUPABASE_URL: 'PASTE_SUPABASE_URL',
-  SUPABASE_ANON: 'PASTE_SUPABASE_ANON_KEY',
+  SUPABASE_URL: 'https://ssomwvamhlmozguhosaf.supabase.co',
+  SUPABASE_ANON: 'sb_publishable_ViNynCyQ-0IrksDFyGtqGQ_IrJamDpX',
   _sb: null,
 
   init() {
