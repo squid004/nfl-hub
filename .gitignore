@@ -1,0 +1,7 @@
+.env
+oauth2.json
+__pycache__/
+*.pyc
+.venv/
+venv/
+nflhub/web/
