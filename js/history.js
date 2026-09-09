@@ -73,6 +73,7 @@ const History = {
       groups[this.bucketLabel(Math.abs(o.spread))].push({
         fav: homeFav ? g.home : g.away,
         dog: homeFav ? g.away : g.home,
+        dogHome: !homeFav,          // home team is the underdog
         su: cell.su,
         ats: cell.ats,
         picked: (ctx.pPicks[g.game_id] || {}).pick,
@@ -97,7 +98,7 @@ const History = {
         const dogHit = x.picked && x.picked === x.dog;
         return `<span class="dogpick${t ? ' take' : ''}${dogHit ? ' on' : ''}" ` +
           `title="${x.fav} favored — wins SU ${Math.round(x.su * 100)}% historically">` +
-          `${x.dog}${t ? ' ✓' : ''}</span>`;
+          `${x.dog} ${x.dogHome ? 'H' : 'A'}${t ? ' ✓' : ''}</span>`;
       }).join(' ');
       return `<tr>
         <td>${lab}</td>
@@ -163,50 +164,58 @@ const History = {
     if (!d) { host.innerHTML = '<div class="panel"><h2>History</h2><p class="muted">Not built yet — appears after the next daily refresh.</p></div>'; return; }
 
     const s1 = d.summary.week1, sr = d.summary.rest;
+    const up = v => v == null ? '—' : Math.round((1 - v) * 100) + '%'; // 1 - fav SU = dog upset rate
+
+    // "home dog" = home team is the underdog => the AWAY team is favored => away_su cell.
     const row = (lab, s) => `<tr><td>${lab}</td>
-      <td class="num">${Math.round(s.su * 100)}%</td>
-      <td class="num">${Math.round(s.ats * 100)}%</td>
-      <td class="num">${s.home_ats != null ? Math.round(s.home_ats * 100) + '%' : '—'}</td>
-      <td class="num muted">${s.avg_miss ?? '—'}</td>
+      <td class="num">${up(s.su)}</td>
+      <td class="num" title="home team as underdog, n=${s.away_n ?? '—'}">${up(s.away_su)}</td>
+      <td class="num" title="away team as underdog, n=${s.home_n ?? '—'}">${up(s.home_su)}</td>
+      <td class="num muted">${s.ats != null ? Math.round(s.ats * 100) + '%' : '—'}</td>
       <td class="num muted">${s.n}</td></tr>`;
 
     const wkRows = d.byweek.map(w => `<tr>
       <td>Wk ${w.week}</td>
-      <td class="num">${w.su != null ? Math.round(w.su * 100) + '%' : '—'}</td>
-      <td class="num">${w.ats != null ? Math.round(w.ats * 100) + '%' : '—'}</td>
-      <td class="num muted">${w.avg_miss ?? '—'}</td>
+      <td class="num">${up(w.su)}</td>
+      <td class="num">${up(w.away_su)}</td>
+      <td class="num">${up(w.home_su)}</td>
       <td class="num muted">${w.n}</td></tr>`).join('');
 
-    // per spread-bucket cells for the current week bucket
     const wkKey = this.weekBucket(ctx.week);
-    const cellAll = (d.cells[wkKey] && d.cells[wkKey].all) || {};
+    const cells = d.cells[wkKey] || {};
     const bktRows = d.buckets.map(b => {
-      const c = cellAll[b] || {};
+      const any = (cells.all || {})[b] || {};
+      const hd = (cells.away || {})[b] || {};   // away favored -> home dog
+      const ad = (cells.home || {})[b] || {};   // home favored -> away dog
       return `<tr><td>${b}</td>
-        <td class="num">${c.su != null ? Math.round(c.su * 100) + '%' : '—'}</td>
-        <td class="num">${c.ats != null ? Math.round(c.ats * 100) + '%' : '—'}</td>
-        <td class="num muted">${c.n ?? '—'}</td></tr>`;
+        <td class="num">${up(any.su)}</td>
+        <td class="num" title="n=${hd.n ?? '—'}">${up(hd.su)}</td>
+        <td class="num" title="n=${ad.n ?? '—'}">${up(ad.su)}</td>
+        <td class="num muted">${any.n ?? '—'}</td></tr>`;
     }).join('');
 
+    const wkLabel = wkKey === 'week1' ? 'Week 1' : 'Weeks 2+';
     host.innerHTML = `
       <div class="panel">
-        <h2>History &mdash; favorite vs. the number (${d.seasons})</h2>
-        <p class="muted">Straight-up win and against-the-spread cover rates for closing favorites.
-          Shrunk toward each bucket's all-weeks rate (k=${d.shrink_k}); n is the raw sample.</p>
+        <h2>History &mdash; dog upset rates (${d.seasons})</h2>
+        <p class="muted">How often the underdog wins outright, split by whether the dog is at
+          home or on the road. Shrunk toward each bucket's all-weeks rate (k=${d.shrink_k});
+          n is the raw sample. (Favorite ATS cover % shown for reference.)</p>
         <div class="grid2">
           <div>
             <h3>Week 1 vs. the rest</h3>
-            <table><thead><tr><th>Split</th><th class="num">Fav SU</th><th class="num">Fav ATS</th>
-              <th class="num">Home-fav ATS</th><th class="num">Avg miss</th><th class="num">n</th></tr></thead>
+            <table><thead><tr><th>Split</th><th class="num">Any dog</th><th class="num">Home dog</th>
+              <th class="num">Away dog</th><th class="num">Fav ATS</th><th class="num">n</th></tr></thead>
               <tbody>${row('Week 1', s1)}${row('Weeks 2+', sr)}</tbody></table>
-            <h3 style="margin-top:14px;">By spread size &mdash; ${wkKey === 'week1' ? 'Week 1' : 'Weeks 2+'}</h3>
-            <table><thead><tr><th>Spread</th><th class="num">Fav SU</th><th class="num">Fav ATS</th><th class="num">n</th></tr></thead>
+            <h3 style="margin-top:14px;">By spread size &mdash; ${wkLabel}</h3>
+            <table><thead><tr><th>Spread</th><th class="num">Any dog</th><th class="num">Home dog</th>
+              <th class="num">Away dog</th><th class="num">n</th></tr></thead>
               <tbody>${bktRows}</tbody></table>
           </div>
           <div>
             <h3>Week over week</h3>
-            <table><thead><tr><th>Week</th><th class="num">Fav SU</th><th class="num">Fav ATS</th>
-              <th class="num">Avg miss</th><th class="num">n</th></tr></thead>
+            <table><thead><tr><th>Week</th><th class="num">Any dog</th><th class="num">Home dog</th>
+              <th class="num">Away dog</th><th class="num">n</th></tr></thead>
               <tbody>${wkRows}</tbody></table>
           </div>
         </div>

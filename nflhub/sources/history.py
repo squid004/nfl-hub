@@ -62,6 +62,7 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
     data: dict[tuple, dict] = defaultdict(_cell)   # (wk_bucket, side, label)
     prior: dict[str, dict] = defaultdict(_cell)    # label -> all weeks / all sides
     byweek: dict[int, dict] = defaultdict(_cell)   # week int -> all sides
+    byweek_side: dict[tuple, dict] = defaultdict(_cell)  # (week, fav side) -> all bins
     pooled: dict[tuple, dict] = defaultdict(_cell) # (wk_bucket, side) -> big-n summary
     max_season = min_season
 
@@ -129,6 +130,11 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
         b["su_w"] += su; b["su_n"] += 1; b["miss"] += miss
         if ats is not None:
             b["ats_w"] += ats; b["ats_n"] += 1
+        if not neutral:
+            bs = byweek_side[(week, side)]
+            bs["su_w"] += su; bs["su_n"] += 1
+            if ats is not None:
+                bs["ats_w"] += ats; bs["ats_n"] += 1
 
         for pkey in [(wkb, "all")] + ([] if neutral else [(wkb, side)]):
             pc = pooled[pkey]
@@ -161,8 +167,13 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
         summary[wkb] = {
             "su": _rate(allc["su_w"], allc["su_n"]),
             "ats": _rate(allc["ats_w"], allc["ats_n"]),
+            # su for a favored side; 1 - away_su = home-dog upset rate, 1 - home_su = away-dog
+            "home_su": _rate(homec["su_w"], homec["su_n"]),
+            "away_su": _rate(awayc["su_w"], awayc["su_n"]),
             "home_ats": _rate(homec["ats_w"], homec["ats_n"]),
             "away_ats": _rate(awayc["ats_w"], awayc["ats_n"]),
+            "home_n": int(homec["su_n"]),
+            "away_n": int(awayc["su_n"]),
             "avg_miss": round(allc["miss"] / allc["su_n"], 2) if allc["su_n"] else None,
             "n": int(allc["su_n"]),
         }
@@ -172,6 +183,8 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
             "week": w,
             "su": _rate(byweek[w]["su_w"], byweek[w]["su_n"]),
             "ats": _rate(byweek[w]["ats_w"], byweek[w]["ats_n"]),
+            "home_su": _rate(byweek_side[(w, "home")]["su_w"], byweek_side[(w, "home")]["su_n"]),
+            "away_su": _rate(byweek_side[(w, "away")]["su_w"], byweek_side[(w, "away")]["su_n"]),
             "avg_miss": round(byweek[w]["miss"] / byweek[w]["su_n"], 2) if byweek[w]["su_n"] else None,
             "n": int(byweek[w]["su_n"]),
         }
