@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 def push(cfg: Config, title: str, message: str, *, tags: str = "", priority: str | None = None,
          click: str | None = None) -> bool:
     if not cfg.ntfy.topic or cfg.ntfy.topic.startswith("CHANGE-ME"):
-        log.error("ntfy topic not configured; set [ntfy].topic in config.toml")
+        log.error("ntfy topic not configured; set NTFY_TOPIC")
         return False
     url = f"{cfg.ntfy.server}/{cfg.ntfy.topic}"
     headers = {
