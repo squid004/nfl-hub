@@ -50,6 +50,13 @@ const DB = {
     return map;
   },
 
+  async atsPicks(week) {
+    const { data } = await this._c().from('ats_pick').select('*').eq('week', week);
+    const map = {};
+    (data || []).forEach(p => { map[p.game_id] = p; });
+    return map;
+  },
+
   async survivorPicks() {
     const { data } = await this._c().from('survivor_pick').select('*').order('week');
     const map = {};
@@ -77,6 +84,15 @@ const DB = {
   async setPickemPick(week, gameId, team) {
     const { error } = await this._c().from('pickem_pick')
       .upsert({ week, game_id: gameId, pick: team, created_at: new Date().toISOString() },
+              { onConflict: 'week,game_id' });
+    if (error) throw error;
+  },
+
+  async setAtsPick(week, gameId, team, spread) {
+    const { error } = await this._c().from('ats_pick')
+      .upsert({ week, game_id: gameId, pick: team,
+                spread_at_pick: spread == null ? null : Number(spread),
+                created_at: new Date().toISOString() },
               { onConflict: 'week,game_id' });
     if (error) throw error;
   },

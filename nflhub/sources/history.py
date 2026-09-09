@@ -185,6 +185,8 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
             "ats": _rate(byweek[w]["ats_w"], byweek[w]["ats_n"]),
             "home_su": _rate(byweek_side[(w, "home")]["su_w"], byweek_side[(w, "home")]["su_n"]),
             "away_su": _rate(byweek_side[(w, "away")]["su_w"], byweek_side[(w, "away")]["su_n"]),
+            "home_ats": _rate(byweek_side[(w, "home")]["ats_w"], byweek_side[(w, "home")]["ats_n"]),
+            "away_ats": _rate(byweek_side[(w, "away")]["ats_w"], byweek_side[(w, "away")]["ats_n"]),
             "avg_miss": round(byweek[w]["miss"] / byweek[w]["su_n"], 2) if byweek[w]["su_n"] else None,
             "n": int(byweek[w]["su_n"]),
         }

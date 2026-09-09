@@ -72,6 +72,15 @@ create table if not exists survivor_pick (
   created_at timestamptz default now()
 );
 
+create table if not exists ats_pick (
+  week           int,
+  game_id        text,
+  pick           text,             -- team abbreviation picked to COVER
+  spread_at_pick real,             -- home spread when the pick was made (line can move)
+  created_at     timestamptz default now(),
+  primary key (week, game_id)
+);
+
 create table if not exists reminder_log (
   kind    text,
   key     text,
@@ -91,7 +100,7 @@ do $$
 declare t text;
 begin
   foreach t in array array[
-    'kv','game','odds','roster_snapshot','news','pickem_pick',
+    'kv','game','odds','roster_snapshot','news','pickem_pick','ats_pick',
     'survivor_pick','reminder_log','refresh_request'
   ]
   loop
