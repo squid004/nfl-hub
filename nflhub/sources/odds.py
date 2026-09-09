@@ -6,6 +6,7 @@ key is needed. "sportsgameodds" and "theoddsapi" fetch fuller lines with ODDS_AP
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import math
 from typing import Any, Optional
@@ -14,6 +15,14 @@ import requests
 
 log = logging.getLogger(__name__)
 TIMEOUT = 15
+
+# ESPN's per-game odds endpoint carries the DraftKings moneyline (the scoreboard feed
+# doesn't). Same API family, no key, works from CI. provider.id 100 = DraftKings.
+_ESPN_GAME_ODDS = (
+    "https://sports.core.api.espn.com/v2/sports/football/leagues/nfl"
+    "/events/{eid}/competitions/{eid}/odds"
+)
+_DK_PROVIDER_ID = 100
 
 # NFL result spread std deviation; used to turn a point spread into a win probability
 # when no moneyline is available. ~13.45 is the commonly cited historical value.
@@ -64,6 +73,63 @@ def _from_scoreboard(games: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             "book": raw.get("book", "ESPN"),
         }
     return out
+
+
+def _fetch_dk_game_odds(game_id: str) -> Optional[dict[str, Any]]:
+    """DraftKings spread/total/moneyline for one game from ESPN's per-competition endpoint."""
+    try:
+        r = requests.get(_ESPN_GAME_ODDS.format(eid=game_id), timeout=8)
+        r.raise_for_status()
+        items = r.json().get("items") or []
+    except (requests.RequestException, ValueError) as exc:
+        log.warning("espn game odds %s failed: %s", game_id, exc)
+        return None
+    if not items:
+        return None
+
+    def _pid(it: dict) -> str:
+        return str((it.get("provider") or {}).get("id"))
+
+    def _pname(it: dict) -> str:
+        return ((it.get("provider") or {}).get("name") or "").lower()
+
+    dk = next((it for it in items if _pid(it) == str(_DK_PROVIDER_ID)), None)
+    dk = dk or next((it for it in items if "draftkings" in _pname(it)), None)
+    dk = dk or items[0]
+    hto = dk.get("homeTeamOdds") or {}
+    ato = dk.get("awayTeamOdds") or {}
+    return {
+        "ml_home": hto.get("moneyLine"),
+        "ml_away": ato.get("moneyLine"),
+        "spread": dk.get("spread"),
+        "total": dk.get("overUnder"),
+    }
+
+
+def _enrich_espn_moneylines(games: list[dict[str, Any]], base: dict[str, dict[str, Any]]) -> None:
+    """Fill ml_home/ml_away (and re-devig implied_*) from ESPN's per-game DK odds. In place."""
+    targets = [g["game_id"] for g in games if g.get("state") in (None, "", "pre", "in")]
+    if not targets:
+        return
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+        fetched = dict(zip(targets, ex.map(_fetch_dk_game_odds, targets)))
+    for gid, extra in fetched.items():
+        row = base.get(gid)
+        if not extra or row is None:
+            continue
+        if extra.get("ml_home") is not None:
+            row["ml_home"] = int(extra["ml_home"])
+        if extra.get("ml_away") is not None:
+            row["ml_away"] = int(extra["ml_away"])
+        if extra.get("spread") is not None:
+            row["spread"] = float(extra["spread"])
+        if row.get("total") is None and extra.get("total") is not None:
+            row["total"] = float(extra["total"])
+        row["implied_home"], row["implied_away"] = compute_probs(
+            row.get("spread"), row.get("ml_home"), row.get("ml_away")
+        )
+        if row.get("ml_home") is not None or row.get("ml_away") is not None:
+            row["book"] = "DraftKings"
 
 
 def _match_game(games: list[dict[str, Any]], home_name: str, away_name: str) -> Optional[dict[str, Any]]:
@@ -141,20 +207,32 @@ def _from_sportsgameodds(games: list[dict[str, Any]], api_key: str) -> dict[str,
     return out
 
 
-def get_week_odds(games: list[dict[str, Any]], provider: str, api_key: str) -> dict[str, dict[str, Any]]:
-    """game_id -> odds dict. Falls back to scoreboard odds if a keyed provider fails."""
+def get_week_odds(
+    games: list[dict[str, Any]],
+    provider: str,
+    api_key: str,
+    espn_game_odds: bool = True,
+) -> dict[str, dict[str, Any]]:
+    """game_id -> odds dict.
+
+    Base = ESPN scoreboard (spread + total). When `espn_game_odds`, overlay the DraftKings
+    moneyline from ESPN's per-game endpoint. A keyed provider, if configured, overlays last.
+    """
     provider = (provider or "espn").lower()
+    merged = _from_scoreboard(games)
+    if espn_game_odds:
+        try:
+            _enrich_espn_moneylines(games, merged)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("espn game-odds enrichment failed: %s", exc)
+
     if provider == "espn" or not api_key:
-        return _from_scoreboard(games)
+        return merged
     try:
         if provider == "theoddsapi":
-            merged = _from_scoreboard(games)
             merged.update(_from_theoddsapi(games, api_key))
-            return merged
-        if provider == "sportsgameodds":
-            merged = _from_scoreboard(games)
+        elif provider == "sportsgameodds":
             merged.update(_from_sportsgameodds(games, api_key))
-            return merged
     except requests.RequestException as exc:
-        log.warning("odds provider %s failed (%s); using scoreboard odds", provider, exc)
-    return _from_scoreboard(games)
+        log.warning("odds provider %s failed (%s); using ESPN odds", provider, exc)
+    return merged

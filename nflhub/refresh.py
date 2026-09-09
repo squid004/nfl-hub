@@ -48,7 +48,9 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     # 2. odds
     wk_odds: dict[str, Any] = {}
     try:
-        wk_odds = odds.get_week_odds(games, cfg.odds.provider, cfg.odds.api_key)
+        wk_odds = odds.get_week_odds(
+            games, cfg.odds.provider, cfg.odds.api_key, cfg.odds.espn_game_odds
+        )
         for o in wk_odds.values():
             store.upsert_odds(o)
         summary["odds"] = len(wk_odds)
