@@ -10,11 +10,12 @@ const Survivor = {
     const opts = [];
     games.forEach(g => {
       const o = odds[g.game_id] || {};
-      [['home', g.home, g.away, g.home_full, o.implied_home],
-       ['away', g.away, g.home, g.away_full, o.implied_away]].forEach(([side, team, opp, full, wp]) => {
-        opts.push({ team, full, opp, side, kickoff: g.kickoff, wp,
-                    used: usedPrior.has(team), isPick: team === thisPick });
-      });
+      [['home', g.home, g.away, o.implied_home, o.spread, o.ml_home],
+       ['away', g.away, g.home, o.implied_away, o.spread == null ? null : -o.spread, o.ml_away]]
+        .forEach(([side, team, opp, wp, spread, ml]) => {
+          opts.push({ team, opp, side, kickoff: g.kickoff, wp, spread, total: o.total, ml,
+                      used: usedPrior.has(team), isPick: team === thisPick });
+        });
     });
     opts.sort((a, b) => (b.wp || 0) - (a.wp || 0));
 
@@ -24,6 +25,9 @@ const Survivor = {
         <td class="muted">${o.opp}</td>
         <td class="muted">${o.side}</td>
         <td class="muted">${fmtLocal(o.kickoff, false)}</td>
+        <td class="muted">${o.spread == null ? '—' : signed(o.spread)}</td>
+        <td class="muted">${o.total ?? '—'}</td>
+        <td class="num muted">${o.ml ?? '—'}</td>
         <td class="num">${pct(o.wp)}</td>
         <td>${o.used ? '<span class="muted">used</span>'
           : `<button data-act="surv" data-week="${week}" data-team="${o.team}"
@@ -38,7 +42,8 @@ const Survivor = {
           &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
         <p class="muted">Used: ${[...usedPrior].sort().join(', ') || 'none yet'}</p>
         <table><thead><tr><th>Team</th><th>Opp</th><th>H/A</th><th>Kick</th>
-          <th class="num">Win%</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+          <th>Spread</th><th>O/U</th><th class="num">ML</th><th class="num">Win%</th><th></th></tr></thead>
+          <tbody>${rows}</tbody></table>
       </div>`;
   },
 
