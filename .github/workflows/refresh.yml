@@ -1,0 +1,60 @@
+name: refresh
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 min (GitHub may delay under load)
+  workflow_dispatch: {}
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore Yahoo OAuth token
+        env:
+          YAHOO_OAUTH_JSON: ${{ secrets.YAHOO_OAUTH_JSON }}
+        run: |
+          if [ -n "$YAHOO_OAUTH_JSON" ]; then
+            printf '%s' "$YAHOO_OAUTH_JSON" > oauth2.json
+            echo "wrote oauth2.json"
+          else
+            echo "no YAHOO_OAUTH_JSON secret set; Yahoo fantasy will be skipped"
+          fi
+
+      - name: Refresh data + send due reminders
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          FANTASYPROS_API_KEY: ${{ secrets.FANTASYPROS_API_KEY }}
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          ESPN_SWID: ${{ secrets.ESPN_SWID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+          YAHOO_LEAGUE_ID: ${{ vars.YAHOO_LEAGUE_ID }}
+          ESPN_LEAGUE_ID: ${{ vars.ESPN_LEAGUE_ID }}
+          ESPN_TEAM_ID: ${{ vars.ESPN_TEAM_ID }}
+          FP_SCORING_YAHOO: ${{ vars.FP_SCORING_YAHOO }}
+          FP_SCORING_ESPN: ${{ vars.FP_SCORING_ESPN }}
+          ODDS_PROVIDER: ${{ vars.ODDS_PROVIDER }}
+          NTFY_SERVER: ${{ vars.NTFY_SERVER }}
+          TZ_NAME: ${{ vars.TZ_NAME }}
+          DASHBOARD_URL: ${{ vars.DASHBOARD_URL }}
+          REMINDER_OFFSETS: ${{ vars.REMINDER_OFFSETS }}
+          QUIET_START: ${{ vars.QUIET_START }}
+          QUIET_END: ${{ vars.QUIET_END }}
+        run: |
+          python -m nflhub refresh
+          python -m nflhub tick
