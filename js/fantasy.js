@@ -1,5 +1,20 @@
 'use strict';
 
+// Fixed slot order for the lineup table: QB, RB, RB, WR, WR, TE, FLEX, DEF, K.
+const SLOT_RANK = { QB: 0, RB: 1, WR: 2, TE: 3, K: 7, 'D/ST': 6, DEF: 6, DST: 6 };
+function slotRank(slot) {
+  const s = String(slot || '').toUpperCase();
+  if (s in SLOT_RANK) return SLOT_RANK[s];
+  if (/FLEX|W\/R|R\/W|REC/.test(s)) return 4;
+  if (/QB.*W.*R.*T|SUPER/.test(s)) return 5;
+  return 8;
+}
+function orderLineup(players) {
+  return (players || []).slice().sort((a, b) =>
+    slotRank(a.slot) - slotRank(b.slot) ||
+    (b.fp_points ?? b.projected ?? 0) - (a.fp_points ?? a.projected ?? 0));
+}
+
 const Fantasy = {
   render(ctx) {
     document.getElementById('fantasy').innerHTML =
@@ -24,7 +39,7 @@ const Fantasy = {
     const ptsCell = pl => pl.fp_points != null ? pl.fp_points.toFixed(1)
       : (pl.projected ? pl.projected.toFixed(1) : '—');
 
-    const rows = (p.starters || []).map(pl => `
+    const rows = orderLineup(p.starters).map(pl => `
       <tr>
         <td>${esc(pl.slot)}</td>
         <td>${esc(pl.name)} <span class="muted">${esc(pl.pro_team)}</span></td>
