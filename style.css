@@ -51,6 +51,11 @@ td.warn { color:var(--warn); font-weight:600; }
 .lean { margin:0 0 10px; padding:8px 10px; background:var(--panel2);
   border-left:3px solid var(--accent); border-radius:4px; font-size:.9rem; }
 .tablefoot { font-size:.78rem; margin-top:8px; }
+tr.tot td { border-top:2px solid var(--line); font-weight:600; }
+.dogpick { display:inline-block; padding:1px 6px; margin:1px 0; border-radius:3px;
+  font-size:.8rem; background:var(--panel2); border:1px solid var(--line); color:var(--dim); }
+.dogpick.take { color:var(--warn); border-color:#5a4a1e; font-weight:600; }
+.dogpick.on { outline:2px solid var(--accent); outline-offset:1px; color:var(--text); }
 
 button, select {
   font:inherit; background:var(--panel2); color:var(--text);

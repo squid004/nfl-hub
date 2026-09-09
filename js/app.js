@@ -34,6 +34,7 @@ const App = {
       Deadlines.render(ctx);
       Fantasy.render(ctx);
       Pickem.render(ctx);
+      History.renderBins(ctx);
       Survivor.render(ctx);
       History.render(ctx);
       Odds.render(ctx);

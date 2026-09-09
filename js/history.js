@@ -55,6 +55,74 @@ const History = {
       `Favorites cover ${Math.round(s.ats * 100)}% ATS historically → ~${covLean} dogs cover${homeNote}.`;
   },
 
+  // "Upset budget": this week's games grouped by spread bin, with how many to take as upsets.
+  renderBins(ctx) {
+    const host = document.getElementById('upsets');
+    if (!host) return;
+    const d = ctx.hist;
+    if (!d) { host.innerHTML = ''; return; }
+
+    const groups = {};
+    d.buckets.forEach(b => { groups[b] = []; });
+    for (const g of ctx.games) {
+      const o = ctx.odds[g.game_id];
+      if (!o || o.spread == null) continue;
+      const homeFav = o.spread <= 0;
+      const cell = this.lookup(d, Math.abs(o.spread), homeFav, ctx.week);
+      if (!cell || cell.su == null) continue;
+      groups[this.bucketLabel(Math.abs(o.spread))].push({
+        fav: homeFav ? g.home : g.away,
+        dog: homeFav ? g.away : g.home,
+        su: cell.su,
+        ats: cell.ats,
+        picked: (ctx.pPicks[g.game_id] || {}).pick,
+      });
+    }
+
+    let totN = 0, totMlUp = 0, totAtsUp = 0;
+    const rows = d.buckets.map(lab => {
+      const gs = groups[lab].slice().sort((a, b) => a.su - b.su); // weakest favorites first
+      const n = gs.length;
+      const mlUp = gs.reduce((s, x) => s + (1 - x.su), 0);
+      const atsUp = gs.reduce((s, x) => s + (x.ats != null ? 1 - x.ats : 0), 0);
+      const take = Math.round(mlUp);
+      totN += n; totMlUp += mlUp; totAtsUp += atsUp;
+      const list = gs.map((x, i) => {
+        const t = i < take;
+        const dogHit = x.picked && x.picked === x.dog;
+        return `<span class="dogpick${t ? ' take' : ''}${dogHit ? ' on' : ''}" ` +
+          `title="${x.fav} favored — wins SU ${Math.round(x.su * 100)}% historically">` +
+          `${x.dog}${t ? ' ✓' : ''}</span>`;
+      }).join(' ');
+      return `<tr>
+        <td>${lab}</td>
+        <td class="num">${n || '—'}</td>
+        <td class="num">${n ? Math.round(mlUp / n * 100) + '%' : '—'}</td>
+        <td class="num"><strong>${n ? take : 0}</strong></td>
+        <td>${list || '<span class="muted">—</span>'}</td>
+      </tr>`;
+    }).join('');
+
+    const totRate = totN ? Math.round(totMlUp / totN * 100) : 0;
+    host.innerHTML = `
+      <div class="panel">
+        <h2>Upset budget by spread bin &mdash; Week ${ctx.week}</h2>
+        <p class="muted">This week's games grouped by the favorite's spread. <strong>Take as upsets</strong>
+          is the bin's historical moneyline upset rate applied to this week's games, rounded.
+          The ✓ marks the least-safe favorites in each bin — spend the upset picks there.
+          A picked dog is highlighted.</p>
+        <table><thead><tr><th>Spread bin</th><th class="num">Games</th>
+          <th class="num">Upset rate</th><th class="num">Take as upsets</th><th>Fade the favorite in</th></tr></thead>
+          <tbody>${rows}
+            <tr class="tot"><td>Total</td><td class="num">${totN}</td>
+              <td class="num">${totRate}%</td><td class="num"><strong>${Math.round(totMlUp)}</strong></td><td></td></tr>
+          </tbody></table>
+        <p class="tablefoot muted">Spread pool: the same bins historically send about
+          <strong>${Math.round(totAtsUp)}</strong> of ${totN} favorites to <em>not</em> cover —
+          roughly half, tilted to the small-spread bins and home dogs.</p>
+      </div>`;
+  },
+
   render(ctx) {
     const host = document.getElementById('history');
     if (!host) return;
