@@ -79,14 +79,19 @@ const History = {
       });
     }
 
-    let totN = 0, totMlUp = 0, totAtsUp = 0;
+    let totN = 0, totMlUp = 0, totAtsUp = 0, totPicked = 0, totYourUp = 0;
+    const binStats = [];
     const rows = d.buckets.map(lab => {
       const gs = groups[lab].slice().sort((a, b) => a.su - b.su); // weakest favorites first
       const n = gs.length;
       const mlUp = gs.reduce((s, x) => s + (1 - x.su), 0);
       const atsUp = gs.reduce((s, x) => s + (x.ats != null ? 1 - x.ats : 0), 0);
       const take = Math.round(mlUp);
+      const pickedN = gs.filter(x => x.picked).length;
+      const yourUp = gs.filter(x => x.picked && x.picked === x.dog).length;
       totN += n; totMlUp += mlUp; totAtsUp += atsUp;
+      totPicked += pickedN; totYourUp += yourUp;
+      binStats.push({ lab, n, take, pickedN, yourUp });
       const list = gs.map((x, i) => {
         const t = i < take;
         const dogHit = x.picked && x.picked === x.dog;
@@ -104,6 +109,33 @@ const History = {
     }).join('');
 
     const totRate = totN ? Math.round(totMlUp / totN * 100) : 0;
+
+    // "your picks vs. the budget" — only once picks exist this week
+    let cmp = '';
+    if (totPicked > 0) {
+      const budget = Math.round(totMlUp);
+      const crows = binStats.filter(b => b.n).map(b => {
+        const dlt = b.yourUp - b.take;
+        const tag = dlt === 0 ? '<span class="chip good">on budget</span>'
+          : dlt > 0 ? `<span class="chip warn">+${dlt}</span>`
+          : `<span class="chip">${dlt}</span>`;
+        return `<tr><td>${b.lab}</td><td class="num">${b.pickedN}/${b.n}</td>
+          <td class="num">${b.yourUp}</td><td class="num">${b.take}</td><td>${tag}</td></tr>`;
+      }).join('');
+      const dlt = totYourUp - budget;
+      const verdict = dlt === 0 ? 'matches the budget'
+        : dlt > 0 ? `${dlt} more upset${dlt > 1 ? 's' : ''} than the budget — aggressive`
+        : `${-dlt} fewer upset${-dlt > 1 ? 's' : ''} than the budget — chalk-heavy`;
+      cmp = `
+        <h3 style="margin-top:16px;">Your picks vs. the budget</h3>
+        <p class="muted">${totPicked} of ${totN} games picked &middot;
+          ${totYourUp} upset pick${totYourUp === 1 ? '' : 's'} &middot; budget ~${budget}
+          &rarr; <strong>${verdict}</strong>.</p>
+        <table><thead><tr><th>Spread bin</th><th class="num">Picked</th>
+          <th class="num">Your upsets</th><th class="num">Budget</th><th>vs budget</th></tr></thead>
+          <tbody>${crows}</tbody></table>`;
+    }
+
     host.innerHTML = `
       <div class="panel">
         <h2>Upset budget by spread bin &mdash; Week ${ctx.week}</h2>
@@ -120,6 +152,7 @@ const History = {
         <p class="tablefoot muted">Spread pool: the same bins historically send about
           <strong>${Math.round(totAtsUp)}</strong> of ${totN} favorites to <em>not</em> cover —
           roughly half, tilted to the small-spread bins and home dogs.</p>
+        ${cmp}
       </div>`;
   },
 

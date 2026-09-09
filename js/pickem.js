@@ -5,9 +5,11 @@ const Pickem = {
     const { week, games, odds, pPicks, hist } = ctx;
     const rows = games.map(g => {
       const o = odds[g.game_id] || {};
-      const favTeam = o.spread == null ? null : (o.spread < 0 ? g.home : o.spread > 0 ? g.away : g.home);
+      const favTeam = o.spread == null ? null : (o.spread <= 0 ? g.home : g.away);
+      const dogTeam = favTeam == null ? null : (favTeam === g.home ? g.away : g.home);
       const favLabel = o.spread == null ? '—' : (o.spread === 0 ? 'PK' : `${favTeam} ${o.spread}`);
       const mine = (pPicks[g.game_id] || {}).pick;
+      const mineIsUpset = mine && dogTeam && mine === dogTeam;
       let result = null;
       if (g.state === 'post') result = g.home_score > g.away_score ? g.home
         : g.away_score > g.home_score ? g.away : 'TIE';
@@ -35,7 +37,7 @@ const Pickem = {
         <td class="num muted">${pct(o.implied_away)}</td>
         <td class="num muted">${pct(o.implied_home)}</td>
         ${suCell}${atsCell}
-        <td>${mine ? `<strong>${mine}</strong>` : '<span class="muted">—</span>'}</td>
+        <td>${mine ? `<strong>${mine}</strong>${mineIsUpset ? ' <span class="chip warn">upset</span>' : ''}` : '<span class="muted">—</span>'}</td>
         <td class="btns">${btn(g.away)} ${btn(g.home)}</td>
       </tr>`;
     }).join('');
