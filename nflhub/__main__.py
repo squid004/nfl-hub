@@ -30,9 +30,15 @@ def cmd_yahoo_auth(_args) -> int:
     if not cid or not csec:
         print("Set YAHOO_CLIENT_ID and YAHOO_CLIENT_SECRET in .env first.", file=sys.stderr)
         return 1
+    # yahoo_oauth defaults callback_uri to 'oob' (Yahoo shows a code to paste). Override
+    # only if you registered a real HTTPS redirect URI and will copy the ?code= param.
+    redirect = os.environ.get("YAHOO_REDIRECT_URI", "").strip()
+    record = {"consumer_key": cid, "consumer_secret": csec}
+    if redirect:
+        record["callback_uri"] = redirect
     if not OAUTH_PATH.exists():
-        OAUTH_PATH.write_text(json.dumps({"consumer_key": cid, "consumer_secret": csec}, indent=2))
-        print(f"Wrote {OAUTH_PATH}")
+        OAUTH_PATH.write_text(json.dumps(record, indent=2))
+        print(f"Wrote {OAUTH_PATH}" + (f" (redirect {redirect})" if redirect else " (oob flow)"))
     try:
         from yahoo_oauth import OAuth2
     except ImportError:
