@@ -22,19 +22,20 @@ const App = {
     if (!quiet) document.getElementById('status').textContent = 'Loading…';
     try {
       const week = parseInt((await DB.kv('week')) || '1', 10);
-      const [games, odds, yRoster, eRoster, pPicks, sPicks, news, refreshReq, lastRefresh] =
+      const [games, odds, yRoster, eRoster, pPicks, sPicks, news, refreshReq, lastRefresh, hist] =
         await Promise.all([
           DB.weekGames(week), DB.weekOdds(week),
           DB.latestRoster('yahoo'), DB.latestRoster('espn'),
           DB.pickemPicks(week), DB.survivorPicks(),
-          DB.news(), DB.refreshRequest(), DB.kv('last_refresh'),
+          DB.news(), DB.refreshRequest(), DB.kv('last_refresh'), DB.hist(),
         ]);
-      const ctx = { week, games, odds, yRoster, eRoster, pPicks, sPicks, news, refreshReq, lastRefresh };
+      const ctx = { week, games, odds, yRoster, eRoster, pPicks, sPicks, news, refreshReq, lastRefresh, hist };
       this._ctx = ctx;
       Deadlines.render(ctx);
       Fantasy.render(ctx);
       Pickem.render(ctx);
       Survivor.render(ctx);
+      History.render(ctx);
       Odds.render(ctx);
       News.render(ctx);
       this.renderStatus(ctx);

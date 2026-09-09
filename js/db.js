@@ -67,6 +67,12 @@ const DB = {
     return data || null;
   },
 
+  async hist() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'hist_distribution').maybeSingle();
+    if (!data) return null;
+    try { return JSON.parse(data.value); } catch { return null; }
+  },
+
   // --- writes ---
   async setPickemPick(week, gameId, team) {
     const { error } = await this._c().from('pickem_pick')

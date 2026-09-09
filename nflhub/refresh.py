@@ -8,7 +8,7 @@ from typing import Any
 
 from . import optimizer, store
 from .config import Config, get_config
-from .sources import espn_fantasy, fantasypros, nfl_schedule, odds, yahoo_fantasy
+from .sources import espn_fantasy, fantasypros, history, nfl_schedule, odds, yahoo_fantasy
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +103,13 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.exception("news refresh failed")
         summary["errors"].append(f"news: {exc}")
+
+    # 4b. historical favorite-vs-spread distribution (rebuilt once/day)
+    try:
+        summary["history"] = history.refresh(store)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("history refresh failed")
+        summary["errors"].append(f"history: {exc}")
 
     # 5. bookkeeping: clear the "Refresh now" flag, stamp last_refresh
     try:
