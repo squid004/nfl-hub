@@ -81,11 +81,18 @@ const DB = {
   },
 
   // --- writes ---
-  async setPickemPick(week, gameId, team) {
+  async setPickemPick(week, gameId, team, spread) {
     const { error } = await this._c().from('pickem_pick')
-      .upsert({ week, game_id: gameId, pick: team, created_at: new Date().toISOString() },
+      .upsert({ week, game_id: gameId, pick: team,
+                spread_at_pick: (spread == null || spread === '') ? null : Number(spread),
+                created_at: new Date().toISOString() },
               { onConflict: 'week,game_id' });
     if (error) throw error;
+  },
+
+  async budgetSnapshot(week) {
+    const { data } = await this._c().from('budget_snapshot').select('*').eq('week', week);
+    return data || [];
   },
 
   async setAtsPick(week, gameId, team, spread) {

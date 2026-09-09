@@ -94,8 +94,8 @@ const Pickem = {
       </div>`;
   },
 
-  async pick(week, gameId, team) {
-    try { await DB.setPickemPick(+week, gameId, team); App.reload(); }
+  async pick(week, gameId, team, spread) {
+    try { await DB.setPickemPick(+week, gameId, team, spread === '' ? null : spread); App.reload(); }
     catch (e) { alert('Could not save pick: ' + e.message); }
   },
 

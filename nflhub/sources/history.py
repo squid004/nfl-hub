@@ -204,6 +204,68 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
     }
 
 
+def _lookup(dist: dict, abs_spread: float, home_fav: bool, week: int) -> dict | None:
+    """Mirror of History.lookup in js/history.js: most specific cell for a game."""
+    wk = (dist.get("cells") or {}).get("week1" if week == 1 else "rest", {})
+    lab = _bucket(abs_spread)
+    side = "home" if home_fav else "away"
+    return wk.get(side, {}).get(lab) or wk.get("all", {}).get(lab)
+
+
+def week_budget(dist: dict, week: int, games: list[dict], odds_map: dict[str, dict]) -> dict[str, list[dict]]:
+    """Per spread-bin "take N dogs" suggestion for this week, for both modes.
+
+    Server-side twin of History.renderBins in js/history.js so the suggestion can be
+    frozen into budget_snapshot for end-of-season analysis.
+    """
+    out: dict[str, list[dict]] = {}
+    for mode, field in (("ml", "su"), ("ats", "ats")):
+        by_bin: dict[str, list[dict]] = {lab: [] for lab in BUCKET_LABELS}
+        for g in games:
+            o = odds_map.get(g["game_id"])
+            if not o or o.get("spread") is None:
+                continue
+            sp = float(o["spread"])
+            home_fav = sp <= 0
+            cell = _lookup(dist, abs(sp), home_fav, week)
+            if not cell or cell.get(field) is None:
+                continue
+            by_bin[_bucket(abs(sp))].append({
+                "game_id": g["game_id"],
+                "fav": g["home"] if home_fav else g["away"],
+                "dog": g["away"] if home_fav else g["home"],
+                "dog_home": not home_fav,
+                "hist_su": cell.get("su"),
+                "hist_ats": cell.get("ats"),
+                "_v": cell[field],
+            })
+        rows: list[dict] = []
+        tot_n = 0
+        tot_exp = 0.0
+        for lab in BUCKET_LABELS:
+            gs = sorted(by_bin[lab], key=lambda x: x["_v"])  # weakest favorites first
+            n = len(gs)
+            exp = sum(1 - x["_v"] for x in gs)
+            take = round(exp)
+            for i, x in enumerate(gs):
+                x["flagged"] = i < take
+                x.pop("_v")
+            tot_n += n
+            tot_exp += exp
+            rows.append({
+                "bin": lab, "n_games": n,
+                "rate": round(exp / n, 4) if n else None,
+                "suggested": take, "games": gs,
+            })
+        rows.append({
+            "bin": "TOTAL", "n_games": tot_n,
+            "rate": round(tot_exp / tot_n, 4) if tot_n else None,
+            "suggested": round(tot_exp), "games": [],
+        })
+        out[mode] = rows
+    return out
+
+
 def refresh(store, force: bool = False) -> str:
     """Rebuild the distribution at most once per day. Returns a status string."""
     today = date.today().isoformat()

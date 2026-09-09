@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -45,6 +46,7 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         games = [dict(g) for g in store.games_for_week(week)]
 
     # 2. odds
+    wk_odds: dict[str, Any] = {}
     try:
         wk_odds = odds.get_week_odds(games, cfg.odds.provider, cfg.odds.api_key)
         for o in wk_odds.values():
@@ -98,7 +100,7 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
                     }
                 )
         store.replace_news(news_items)
-        store.kv_set("injuries", _json(injuries))
+        store.kv_set("injuries", json.dumps(injuries))
         summary["news"] = len(news_items)
     except Exception as exc:  # noqa: BLE001
         log.exception("news refresh failed")
@@ -110,6 +112,34 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.exception("history refresh failed")
         summary["errors"].append(f"history: {exc}")
+
+    # 4c. freeze this week's "take N" suggestion until first kickoff (year-end analysis)
+    try:
+        dist_raw = store.kv_get("hist_distribution")
+        if dist_raw and games:
+            dist = json.loads(dist_raw)
+            first = None
+            for g in games:
+                k = g.get("kickoff")
+                if not k:
+                    continue
+                try:
+                    dt = datetime.fromisoformat(k)
+                except ValueError:
+                    continue
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                first = dt if first is None or dt < first else first
+            locked = first is not None and first <= datetime.now(timezone.utc)
+            if not locked or not store.has_budget_snapshot(week):
+                for mode, rows in history.week_budget(dist, week, games, wk_odds).items():
+                    store.upsert_budget_snapshot(week, mode, rows)
+                summary["budget_snapshot"] = "written"
+            else:
+                summary["budget_snapshot"] = "locked"
+    except Exception as exc:  # noqa: BLE001 - best-effort analytics; don't fail the run
+        log.warning("budget snapshot skipped: %s", exc)
+        summary["budget_snapshot"] = f"skipped ({exc})"
 
     # 5. bookkeeping: clear the "Refresh now" flag, stamp last_refresh
     try:
@@ -142,9 +172,3 @@ def _apply_fantasypros(cfg: Config, season: int, week: int, summary: dict[str, A
         store.save_roster_snapshot(league, week, payload)
         summary[f"{league}_fp"] = f"{matched} matched, delta {payload['fp']['delta'] if payload['fp'] else 'n/a'}"
     summary["fantasypros"] = "ok"
-
-
-def _json(obj: Any) -> str:
-    import json
-
-    return json.dumps(obj)

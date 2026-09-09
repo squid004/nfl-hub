@@ -10,7 +10,7 @@ const App = {
     document.body.addEventListener('click', e => {
       const b = e.target.closest('button[data-act]');
       if (!b) return;
-      if (b.dataset.act === 'pick') Pickem.pick(b.dataset.week, b.dataset.game, b.dataset.team);
+      if (b.dataset.act === 'pick') Pickem.pick(b.dataset.week, b.dataset.game, b.dataset.team, b.dataset.spread);
       if (b.dataset.act === 'atspick') Pickem.atspick(b.dataset.week, b.dataset.game, b.dataset.team, b.dataset.spread);
       if (b.dataset.act === 'surv') Survivor.pick(b.dataset.week, b.dataset.team);
       if (b.dataset.act === 'refresh') App.requestRefresh();
@@ -24,15 +24,15 @@ const App = {
     if (!quiet) document.getElementById('status').textContent = 'Loading…';
     try {
       const week = parseInt((await DB.kv('week')) || '1', 10);
-      const [games, odds, yRoster, eRoster, pPicks, aPicks, sPicks, news, refreshReq, lastRefresh, hist] =
+      const [games, odds, yRoster, eRoster, pPicks, aPicks, sPicks, news, refreshReq, lastRefresh, hist, bSnap] =
         await Promise.all([
           DB.weekGames(week), DB.weekOdds(week),
           DB.latestRoster('yahoo'), DB.latestRoster('espn'),
           DB.pickemPicks(week), DB.atsPicks(week), DB.survivorPicks(),
-          DB.news(), DB.refreshRequest(), DB.kv('last_refresh'), DB.hist(),
+          DB.news(), DB.refreshRequest(), DB.kv('last_refresh'), DB.hist(), DB.budgetSnapshot(week),
         ]);
       const ctx = { week, games, odds, yRoster, eRoster, pPicks, aPicks, sPicks,
-                    news, refreshReq, lastRefresh, hist };
+                    news, refreshReq, lastRefresh, hist, bSnap };
       this._ctx = ctx;
       Deadlines.render(ctx);
       Fantasy.render(ctx);

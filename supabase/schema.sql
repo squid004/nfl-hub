@@ -65,6 +65,21 @@ create table if not exists pickem_pick (
   created_at timestamptz default now(),
   primary key (week, game_id)
 );
+alter table pickem_pick add column if not exists spread_at_pick real;  -- home spread when picked
+
+-- Weekly "take N" suggestion frozen for end-of-season analysis. One row per
+-- (week, mode, spread bin), refreshed each cron run until the week's first kickoff.
+create table if not exists budget_snapshot (
+  week        int,
+  mode        text,              -- 'ml' | 'ats'
+  bin         text,              -- spread bucket label, or 'TOTAL'
+  n_games     int,
+  rate        real,              -- bin's historical dog upset / cover rate
+  suggested   int,               -- rounded "take N dogs" for the bin
+  games       jsonb,             -- [{game_id, fav, dog, dog_home, hist_su, hist_ats, flagged}]
+  captured_at timestamptz default now(),
+  primary key (week, mode, bin)
+);
 
 create table if not exists survivor_pick (
   week       int primary key,
@@ -101,7 +116,7 @@ declare t text;
 begin
   foreach t in array array[
     'kv','game','odds','roster_snapshot','news','pickem_pick','ats_pick',
-    'survivor_pick','reminder_log','refresh_request'
+    'survivor_pick','reminder_log','refresh_request','budget_snapshot'
   ]
   loop
     execute format('alter table %I enable row level security', t);

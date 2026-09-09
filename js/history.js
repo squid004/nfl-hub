@@ -177,12 +177,19 @@ const History = {
       : `Moneyline: the same bins historically see about <strong>${Math.round(totOther)}</strong>
          of ${totN} favorites lose outright.`;
 
+    const locked = (ctx.bSnap || []).find(r => r.mode === mode && r.bin === 'TOTAL');
+    const lockLine = locked
+      ? `<p class="muted">Locked for the record: <strong>take ${locked.suggested}</strong>
+         (frozen ${fmtLocal(locked.captured_at)}). Live number above may drift as lines move.</p>`
+      : '';
+
     host.innerHTML = `
       <div class="panel">
         <h2>${M.budgetTitle} by spread bin &mdash; Week ${ctx.week}</h2>
         <p class="muted">This week's games grouped by the favorite's spread. <strong>${M.budgetVerb}</strong>
           is the bin's historical ${M.dogWord} rate applied to this week's games, rounded.
           The ✓ marks the least-safe favorites in each bin. Dogs tagged H (home) / A (away).</p>
+        ${lockLine}
         <table><thead><tr><th>Spread bin</th><th class="num">Games</th>
           <th class="num">${M.budgetCol}</th><th class="num">${M.budgetVerb}</th><th>${M.fadeLabel}</th></tr></thead>
           <tbody>${rows}

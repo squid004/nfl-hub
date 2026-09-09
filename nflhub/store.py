@@ -154,6 +154,25 @@ def record_survivor_pick(week: int, team: str) -> None:
     _upsert("survivor_pick", {"week": week, "team": team, "created_at": _now()}, on_conflict="week")
 
 
+# --- weekly budget snapshot (end-of-season analysis) ----------------------
+
+def has_budget_snapshot(week: int) -> bool:
+    return bool(_get("budget_snapshot", {"week": f"eq.{week}", "limit": 1}))
+
+
+def upsert_budget_snapshot(week: int, mode: str, rows: list[dict[str, Any]]) -> None:
+    payload = [
+        {
+            "week": week, "mode": mode, "bin": r["bin"],
+            "n_games": r["n_games"], "rate": r["rate"], "suggested": r["suggested"],
+            "games": r["games"], "captured_at": _now(),
+        }
+        for r in rows
+    ]
+    if payload:
+        _upsert("budget_snapshot", payload, on_conflict="week,mode,bin")
+
+
 def get_survivor_picks() -> dict[int, str]:
     return {r["week"]: r["team"] for r in _get("survivor_pick", {"order": "week"})}
 
