@@ -96,6 +96,73 @@ create table if not exists ats_pick (
   primary key (week, game_id)
 );
 
+-- ---------------------------------------------------------------------------
+-- pickem-edge integration: leverage/fade recommendations for the straight
+-- moneyline pick'em pool, ported from github.com/squid004/pickem-edge.
+-- 'edge_' prefix keeps this distinct from the unrelated budget_snapshot
+-- (historical upset-rate) feature above.
+-- ---------------------------------------------------------------------------
+
+create table if not exists edge_national_pct (
+  season     int,
+  week       int,
+  team       text,
+  pct        real,               -- 0..1, fraction of the national pool picking this team
+  source     text,               -- 'nflpickwatch' | 'manual'
+  fetched_at timestamptz default now(),
+  is_stale   boolean not null default false,
+  primary key (season, week, team, source)
+);
+
+create table if not exists edge_opponent_pick (
+  season      int,
+  week        int,
+  opponent    text,               -- pool member's name
+  team_picked text,
+  imported_at timestamptz default now(),
+  source      text not null default 'paste',
+  primary key (season, week, opponent, team_picked)
+);
+
+create table if not exists edge_bias (
+  team           text primary key,
+  bias_value     real not null default 0,
+  n_observations int not null default 0,
+  last_updated   timestamptz default now(),
+  overridden     boolean not null default false  -- true = skip in the auto-recompute step
+);
+
+create table if not exists edge_season_standing (
+  season          int,
+  week            int,
+  standing_bucket text not null,   -- LEADING | EARLY | MIDDLE | BEHIND (always manual)
+  pool_size       int not null,
+  correct_picks   int,
+  total_picks     int,
+  rank            int,
+  updated_at      timestamptz default now(),
+  primary key (season, week)
+);
+
+-- Frozen at the week's first kickoff (same lock pattern as budget_snapshot) so
+-- season-log stats reflect what was actually recommended, not hindsight.
+create table if not exists edge_recommendation_log (
+  season         int,
+  week           int,
+  game_id        text,
+  favorite_team  text,
+  underdog_team  text,
+  p_favorite     real not null,
+  vig            real,
+  f_estimate     real,             -- null if leverage was gated out (p > MAX_P)
+  leverage       real,
+  eligible       boolean not null,
+  recommendation text not null,    -- FADE | CHALK | NO_PLAY
+  budget_at_time int,
+  generated_at   timestamptz default now(),
+  primary key (season, week, game_id)
+);
+
 create table if not exists reminder_log (
   kind    text,
   key     text,
@@ -116,7 +183,9 @@ declare t text;
 begin
   foreach t in array array[
     'kv','game','odds','roster_snapshot','news','pickem_pick','ats_pick',
-    'survivor_pick','reminder_log','refresh_request','budget_snapshot'
+    'survivor_pick','reminder_log','refresh_request','budget_snapshot',
+    'edge_national_pct','edge_opponent_pick','edge_bias','edge_season_standing',
+    'edge_recommendation_log'
   ]
   loop
     execute format('alter table %I enable row level security', t);

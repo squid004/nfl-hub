@@ -19,6 +19,7 @@ const Pickem = {
     const M = PICK_MODES[mode];
     const { week, games, odds, hist } = ctx;
     const picks = ctx[M.picksKey] || {};
+    const edgeLog = mode === 'ml' ? (ctx.edgeLog || {}) : {};
 
     const rows = games.map(g => {
       const o = odds[g.game_id] || {};
@@ -60,6 +61,22 @@ const Pickem = {
         data-team="${team}" data-spread="${hasLine ? o.spread : ''}"
         class="${mine === team ? 'primary' : ''}">${team}${mode === 'ats' ? lineFor(team) : ''}</button>`;
 
+      let edgeCells = '';
+      if (mode === 'ml') {
+        const e = edgeLog[g.game_id];
+        if (e && e.recommendation && e.recommendation !== 'NO_DATA') {
+          const rec = e.recommendation;
+          const chipClass = rec === 'FADE' ? 'good' : rec === 'CHALK' ? '' : 'muted';
+          const fadeTeam = rec === 'FADE' ? e.underdog_team : e.favorite_team;
+          edgeCells = `
+            <td class="num muted">${pct(e.f_estimate)}</td>
+            <td class="num muted">${e.leverage != null ? e.leverage.toFixed(3) : '—'}</td>
+            <td><span class="chip ${chipClass}" title="${e.favorite_team} p=${(e.p_favorite * 100).toFixed(1)}%, f=${e.f_estimate != null ? (e.f_estimate * 100).toFixed(0) + '%' : '—'}">${rec}${rec === 'FADE' ? ' ' + fadeTeam : ''}</span></td>`;
+        } else {
+          edgeCells = '<td class="num muted">—</td><td class="num muted">—</td><td class="muted">—</td>';
+        }
+      }
+
       return `<tr>
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
         <td>${g.away}${wchip(g.away)}</td>
@@ -68,7 +85,7 @@ const Pickem = {
         <td class="muted">${o.total ?? '—'}</td>
         <td class="num muted">${pct(o.implied_away)}</td>
         <td class="num muted">${pct(o.implied_home)}</td>
-        ${suCell}${atsCell}
+        ${suCell}${atsCell}${edgeCells}
         <td>${mine ? `<strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">—</span>'}</td>
         <td class="btns">${btn(g.away)} ${btn(g.home)}</td>
       </tr>`;
@@ -77,17 +94,24 @@ const Pickem = {
     const made = Object.keys(picks).length;
     const lean = hist ? History.summaryLine(ctx, mode) : '';
     const foot = mode === 'ml'
-      ? 'Fav SU / Fav ATS are historical rates for <em>any</em> favorite of that spread size in this part of the season — a low number is an upset lean.'
+      ? 'Fav SU / Fav ATS are historical rates for <em>any</em> favorite of that spread size in this part of the season — a low number is an upset lean. f/Leverage/Edge are your pool-specific lean, see the Edge panel below.'
       : 'Pick the side that covers. Fav ATS is the historical cover rate for any favorite of that spread size — below ~50% leans dog. The line is snapshotted when you pick.';
+    const edgeHeader = mode === 'ml'
+      ? `<th class="num" title="Estimated fraction of your pool taking the favorite">f</th>
+         <th class="num" title="(1-p)*f, gated off above p=0.65">Leverage</th>
+         <th title="This week's fade/chalk call from the Edge panel below">Edge</th>`
+      : '';
     document.getElementById(M.id).innerHTML = `
       <div class="panel">
         <h2>${M.title} &mdash; ${made}/${games.length} made
           &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
+        ${mode === 'ml' ? Edge.budgetBannerHtml(ctx) : ''}
         ${lean ? `<p class="lean">${esc(lean)}</p>` : ''}
         <table><thead><tr><th>Kick</th><th>Away</th><th>Home</th><th>Fav</th><th>O/U</th>
           <th class="num">Away%</th><th class="num">Home%</th>
           <th class="num" title="Historical: favorite of this spread wins straight up">Fav SU</th>
           <th class="num" title="Historical: favorite of this spread covers">Fav ATS</th>
+          ${edgeHeader}
           <th>Pick</th><th></th></tr></thead>
           <tbody>${rows}</tbody></table>
         <p class="tablefoot muted">Away%/Home% are this game's de-vigged market prices. ${foot}</p>

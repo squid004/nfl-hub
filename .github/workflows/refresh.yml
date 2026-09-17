@@ -55,6 +55,8 @@ jobs:
           REMINDER_OFFSETS: ${{ vars.REMINDER_OFFSETS }}
           QUIET_START: ${{ vars.QUIET_START }}
           QUIET_END: ${{ vars.QUIET_END }}
+          EDGE_SHEET_ID: ${{ vars.EDGE_SHEET_ID }}
+          EDGE_MY_NAME: ${{ vars.EDGE_MY_NAME }}
         run: |
           python -m nflhub refresh
           python -m nflhub tick

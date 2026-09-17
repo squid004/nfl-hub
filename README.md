@@ -51,7 +51,9 @@ Push this folder to a new repo, then in **Settings**:
   `FP_SCORING_YAHOO`/`FP_SCORING_ESPN` (`PPR`|`HALF`|`STD`), `ODDS_PROVIDER` (`espn`),
   `NTFY_SERVER` (`https://ntfy.sh`), `TZ_NAME` (`America/New_York`),
   `DASHBOARD_URL` (your Pages URL), `REMINDER_OFFSETS` (`24,3,0.75`),
-  `QUIET_START` (`23`), `QUIET_END` (`7`).
+  `QUIET_START` (`23`), `QUIET_END` (`7`),
+  `EDGE_SHEET_ID` (your pick'em pool's Google Sheet id, one "Week N" tab per week),
+  `EDGE_MY_NAME` (how your name appears in that sheet).
 
 The FantasyPros key is the same one used by the `ff-draft-edge` project.
 

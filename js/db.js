@@ -80,6 +80,43 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return null; }
   },
 
+  // --- pickem-edge ---
+  async edgeRecommendationLog(season, week) {
+    const { data } = await this._c().from('edge_recommendation_log').select('*')
+      .eq('season', season).eq('week', week);
+    const map = {};
+    (data || []).forEach(r => { map[r.game_id] = r; });
+    return map;
+  },
+
+  async edgeBiasAll() {
+    const { data } = await this._c().from('edge_bias').select('*').order('team');
+    return data || [];
+  },
+
+  async edgeStandings(season) {
+    const { data } = await this._c().from('edge_season_standing').select('*')
+      .eq('season', season).order('week');
+    return data || [];
+  },
+
+  async edgeOpponentPicks(season, week) {
+    const { data } = await this._c().from('edge_opponent_pick').select('*')
+      .eq('season', season).eq('week', week).order('opponent');
+    return data || [];
+  },
+
+  async edgeRecommendationLogSeason(season) {
+    const { data } = await this._c().from('edge_recommendation_log').select('*')
+      .eq('season', season).order('week');
+    return data || [];
+  },
+
+  async seasonGames(season) {
+    const { data } = await this._c().from('game').select('*').eq('season', season);
+    return data || [];
+  },
+
   // --- writes ---
   async setPickemPick(week, gameId, team, spread) {
     const { error } = await this._c().from('pickem_pick')
@@ -113,6 +150,46 @@ const DB = {
   async requestRefresh() {
     const { error } = await this._c().from('refresh_request')
       .update({ requested_at: new Date().toISOString(), handled_at: null }).eq('id', 1);
+    if (error) throw error;
+  },
+
+  async edgeUpsertStanding(row) {
+    const { error } = await this._c().from('edge_season_standing')
+      .upsert({ ...row, updated_at: new Date().toISOString() }, { onConflict: 'season,week' });
+    if (error) throw error;
+  },
+
+  async edgeSetBiasOverride(team, biasValue, nObservations) {
+    const { error } = await this._c().from('edge_bias').upsert({
+      team, bias_value: biasValue, n_observations: nObservations ?? 0,
+      overridden: true, last_updated: new Date().toISOString(),
+    }, { onConflict: 'team' });
+    if (error) throw error;
+  },
+
+  async edgeClearBiasOverride(team) {
+    const { error } = await this._c().from('edge_bias').update({ overridden: false }).eq('team', team);
+    if (error) throw error;
+  },
+
+  async edgeInsertOpponentPicks(rows) {
+    if (!rows.length) return;
+    const payload = rows.map(r => ({ ...r, imported_at: new Date().toISOString() }));
+    const { error } = await this._c().from('edge_opponent_pick')
+      .upsert(payload, { onConflict: 'season,week,opponent,team_picked' });
+    if (error) throw error;
+  },
+
+  async edgeDeleteOpponentPick(season, week, opponent, teamPicked) {
+    const { error } = await this._c().from('edge_opponent_pick').delete()
+      .eq('season', season).eq('week', week).eq('opponent', opponent).eq('team_picked', teamPicked);
+    if (error) throw error;
+  },
+
+  async edgeSetNationalPct(season, week, team, pct) {
+    const { error } = await this._c().from('edge_national_pct').upsert({
+      season, week, team, pct, source: 'manual', fetched_at: new Date().toISOString(), is_stale: false,
+    }, { onConflict: 'season,week,team,source' });
     if (error) throw error;
   },
 };

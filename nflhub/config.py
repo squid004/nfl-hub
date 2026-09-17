@@ -86,6 +86,12 @@ class RemindersCfg:
 
 
 @dataclass
+class EdgeCfg:
+    sheet_id: str      # Google Sheet id holding "Week N" tabs of opponent picks
+    my_name: str        # how your own name appears in the sheet, for standing auto-sync
+
+
+@dataclass
 class Config:
     timezone: str
     dashboard_url: str
@@ -96,6 +102,7 @@ class Config:
     fantasypros: FantasyProsCfg
     ntfy: NtfyCfg
     reminders: RemindersCfg
+    edge: EdgeCfg
     raw: dict = field(repr=False, default_factory=dict)
 
 
@@ -149,5 +156,9 @@ def get_config() -> Config:
             offsets_hours=_floats("REMINDER_OFFSETS", [24, 3, 0.75]),
             quiet_start=int(os.environ.get("QUIET_START", "23") or 23),
             quiet_end=int(os.environ.get("QUIET_END", "7") or 7),
+        ),
+        edge=EdgeCfg(
+            sheet_id=os.environ.get("EDGE_SHEET_ID", "").strip(),
+            my_name=os.environ.get("EDGE_MY_NAME", "").strip(),
         ),
     )

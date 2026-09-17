@@ -177,6 +177,148 @@ def get_survivor_picks() -> dict[int, str]:
     return {r["week"]: r["team"] for r in _get("survivor_pick", {"order": "week"})}
 
 
+# --- pickem-edge: national pick %, opponent picks, bias, standing, recs ----
+
+def edge_get_national_pct(season: int, week: int, team: str) -> Optional[float]:
+    """Prefers a manual entry over a scraped one for the same team/week."""
+    rows = _get("edge_national_pct", {
+        "season": f"eq.{season}", "week": f"eq.{week}", "team": f"eq.{team}",
+    })
+    if not rows:
+        return None
+    manual = next((r for r in rows if r["source"] == "manual"), None)
+    return (manual or rows[0])["pct"]
+
+
+def edge_set_national_pct(season: int, week: int, team: str, pct: float, source: str = "manual") -> None:
+    _upsert("edge_national_pct", {
+        "season": season, "week": week, "team": team, "pct": pct,
+        "source": source, "fetched_at": _now(), "is_stale": False,
+    }, on_conflict="season,week,team,source")
+
+
+def edge_bulk_set_national_pct(season: int, week: int, rows: list[dict[str, Any]], source: str = "nflpickwatch") -> None:
+    payload = [{
+        "season": season, "week": week, "team": r["team"], "pct": r["pct"],
+        "source": source, "fetched_at": _now(), "is_stale": False,
+    } for r in rows]
+    if payload:
+        _upsert("edge_national_pct", payload, on_conflict="season,week,team,source")
+
+
+def edge_bias_all() -> list[dict[str, Any]]:
+    return _get("edge_bias", {"order": "team"})
+
+
+def edge_get_bias(team: str) -> tuple[float, int, bool]:
+    """Returns (bias_value, n_observations, overridden); (0.0, 0, False) if unseen."""
+    rows = _get("edge_bias", {"team": f"eq.{team}", "limit": 1})
+    if not rows:
+        return 0.0, 0, False
+    r = rows[0]
+    return r["bias_value"], r["n_observations"], bool(r.get("overridden", False))
+
+
+def edge_upsert_bias(team: str, bias_value: float, n_observations: int, overridden: bool = False) -> None:
+    _upsert("edge_bias", {
+        "team": team, "bias_value": bias_value, "n_observations": n_observations,
+        "last_updated": _now(), "overridden": overridden,
+    }, on_conflict="team")
+
+
+def edge_set_bias_override(team: str, bias_value: float) -> None:
+    _, n, _ = edge_get_bias(team)
+    edge_upsert_bias(team, bias_value, n, overridden=True)
+
+
+def edge_clear_bias_override(team: str) -> None:
+    _patch("edge_bias", {"team": f"eq.{team}"}, {"overridden": False})
+
+
+def edge_opponent_picks_for_week(season: int, week: int) -> list[dict[str, Any]]:
+    return _get("edge_opponent_pick", {
+        "season": f"eq.{season}", "week": f"eq.{week}", "order": "opponent",
+    })
+
+
+def edge_insert_opponent_picks(rows: list[dict[str, Any]]) -> None:
+    payload = [{**r, "imported_at": _now()} for r in rows]
+    if payload:
+        _upsert("edge_opponent_pick", payload, on_conflict="season,week,opponent,team_picked")
+
+
+def edge_delete_opponent_pick(season: int, week: int, opponent: str, team_picked: str) -> None:
+    _delete("edge_opponent_pick", {
+        "season": f"eq.{season}", "week": f"eq.{week}",
+        "opponent": f"eq.{opponent}", "team_picked": f"eq.{team_picked}",
+    })
+
+
+def edge_all_opponent_picks() -> list[dict[str, Any]]:
+    return _get("edge_opponent_pick", {"select": "season,week,opponent,team_picked"})
+
+
+def edge_games_for_team(team: str) -> list[dict[str, Any]]:
+    return _get("game", {"or": f"(home.eq.{team},away.eq.{team})", "select": "season,week"})
+
+
+def edge_get_standing(season: int, week: int) -> Optional[dict[str, Any]]:
+    rows = _get("edge_season_standing", {"season": f"eq.{season}", "week": f"eq.{week}", "limit": 1})
+    return rows[0] if rows else None
+
+
+def edge_latest_standing_before(season: int, week: int) -> Optional[dict[str, Any]]:
+    rows = _get("edge_season_standing", {
+        "season": f"eq.{season}", "week": f"lte.{week}", "order": "week.desc", "limit": 1,
+    })
+    return rows[0] if rows else None
+
+
+def edge_all_standings(season: int) -> list[dict[str, Any]]:
+    return _get("edge_season_standing", {"season": f"eq.{season}", "order": "week"})
+
+
+def edge_upsert_standing(
+    season: int, week: int, standing_bucket: str, pool_size: int,
+    correct_picks: Optional[int] = None, total_picks: Optional[int] = None,
+    rank: Optional[int] = None,
+) -> None:
+    _upsert("edge_season_standing", {
+        "season": season, "week": week, "standing_bucket": standing_bucket,
+        "pool_size": pool_size, "correct_picks": correct_picks, "total_picks": total_picks,
+        "rank": rank, "updated_at": _now(),
+    }, on_conflict="season,week")
+
+
+def edge_recommendation_log_for_week(season: int, week: int) -> dict[str, dict[str, Any]]:
+    return {r["game_id"]: r for r in _get("edge_recommendation_log", {
+        "season": f"eq.{season}", "week": f"eq.{week}",
+    })}
+
+
+def edge_recommendation_log_for_season(season: int) -> list[dict[str, Any]]:
+    return _get("edge_recommendation_log", {"season": f"eq.{season}", "order": "week,game_id"})
+
+
+def edge_has_recommendation_log(season: int, week: int) -> bool:
+    return bool(_get("edge_recommendation_log", {
+        "season": f"eq.{season}", "week": f"eq.{week}", "limit": 1,
+    }))
+
+
+def edge_upsert_recommendation_log(season: int, week: int, rows: list[dict[str, Any]]) -> None:
+    payload = [{
+        "season": season, "week": week, "game_id": r["game_id"],
+        "favorite_team": r["favorite_team"], "underdog_team": r["underdog_team"],
+        "p_favorite": r["p_favorite"], "vig": r.get("vig"), "f_estimate": r.get("f_estimate"),
+        "leverage": r.get("leverage"), "eligible": r["eligible"],
+        "recommendation": r["recommendation"], "budget_at_time": r.get("budget_at_time"),
+        "generated_at": _now(),
+    } for r in rows]
+    if payload:
+        _upsert("edge_recommendation_log", payload, on_conflict="season,week,game_id")
+
+
 # --- reminder dedupe -------------------------------------------------
 
 def reminder_already_sent(kind: str, key: str) -> bool:

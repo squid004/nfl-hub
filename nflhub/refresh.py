@@ -9,7 +9,19 @@ from typing import Any
 
 from . import optimizer, store
 from .config import Config, get_config
-from .sources import espn_fantasy, fantasypros, history, nfl_schedule, odds, yahoo_fantasy
+from .sources import (
+    edge_bias,
+    edge_core,
+    edge_national,
+    edge_sheet,
+    espn_fantasy,
+    fantasypros,
+    history,
+    nfl_schedule,
+    odds,
+    yahoo_fantasy,
+)
+from .sources.edge_teams import UnknownTeamError, normalize_team
 
 log = logging.getLogger(__name__)
 
@@ -143,6 +155,13 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         log.warning("budget snapshot skipped: %s", exc)
         summary["budget_snapshot"] = f"skipped ({exc})"
 
+    # 4d. pickem-edge: leverage/fade recommendations for the straight pick'em pool
+    try:
+        _apply_edge(cfg, season, week, games, wk_odds, summary)
+    except Exception as exc:  # noqa: BLE001 - best-effort; a broken step here never
+        log.exception("edge step failed")  # blocks fantasy/odds/etc. from refreshing
+        summary["edge_recommendation"] = f"error ({exc})"
+
     # 5. bookkeeping: clear the "Refresh now" flag, stamp last_refresh
     try:
         if store.refresh_pending():
@@ -153,6 +172,156 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         log.warning("bookkeeping failed: %s", exc)
 
     return summary
+
+
+def _week_first_kickoff(games: list[dict[str, Any]]) -> datetime | None:
+    first = None
+    for g in games:
+        k = g.get("kickoff")
+        if not k:
+            continue
+        try:
+            dt = datetime.fromisoformat(k)
+        except ValueError:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        first = dt if first is None or dt < first else first
+    return first
+
+
+def _apply_edge(
+    cfg: Config, season: int, week: int, games: list[dict[str, Any]], wk_odds: dict[str, Any],
+    summary: dict[str, Any],
+) -> None:
+    """Leverage/fade recommendations for the straight moneyline pick'em pool, ported from
+    github.com/squid004/pickem-edge. See SPEC.md there; nflhub/sources/edge_core.py has the
+    ported math and the "why" for each formula.
+    """
+    # opponent picks + your own standing, pulled from your pool's Google Sheet ("Week N"
+    # tab). Every run, so a correction in the sheet shows up within one refresh cycle; the
+    # paste box on the page writes the same table, so both sources coexist without conflict.
+    if cfg.edge.sheet_id:
+        try:
+            sheet = edge_sheet.fetch_week(cfg.edge.sheet_id, week, normalize_team)
+            store.edge_insert_opponent_picks([
+                {"season": season, "week": week, "opponent": p.opponent,
+                 "team_picked": p.team_picked, "source": "sheet"}
+                for p in sheet.picks
+            ])
+            summary["edge_sheet"] = f"{len(sheet.picks)} picks, {sheet.pool_size} opponents"
+
+            if cfg.edge.my_name:
+                mine = next(
+                    (s for s in sheet.standings if cfg.edge.my_name.lower() in s.opponent.lower()),
+                    None,
+                )
+                if mine:
+                    existing = store.edge_get_standing(season, week)
+                    bucket = existing["standing_bucket"] if existing else "MIDDLE"
+                    store.edge_upsert_standing(
+                        season, week, bucket, sheet.pool_size,
+                        correct_picks=mine.correct_week, total_picks=mine.correct_season,
+                        rank=mine.rank,
+                    )
+                    summary["edge_standing_sync"] = f"rank {mine.rank}/{sheet.pool_size}"
+                else:
+                    summary["edge_standing_sync"] = f"'{cfg.edge.my_name}' not found in sheet"
+        except edge_sheet.EdgeSheetUnavailable as exc:
+            log.warning("edge sheet pull failed: %s", exc)
+            summary["edge_sheet"] = f"unavailable ({exc})"
+
+    # national pick % — best-effort scrape, at most once/day, never overwrites a manual row
+    today = datetime.now(timezone.utc).date().isoformat()
+    if store.kv_get("edge_national_date") != today:
+        try:
+            rows = edge_national.fetch_week(normalize_team)
+            store.edge_bulk_set_national_pct(
+                season, week, [{"team": r.team, "pct": r.pct} for r in rows]
+            )
+            store.kv_set("edge_national_date", today)
+            summary["edge_national"] = f"scraped {len(rows)} teams"
+        except edge_national.NflPickwatchUnavailable as exc:
+            log.warning("nflpickwatch scrape failed: %s", exc)
+            summary["edge_national"] = f"scrape failed ({exc})"
+
+    # recompute learned bias for every team with opponent picks (cheap; skips overridden)
+    edge_bias.recompute_all_bias()
+
+    # freeze recommendations at first kickoff, same lock pattern as budget_snapshot
+    first = _week_first_kickoff(games)
+    locked = first is not None and first <= datetime.now(timezone.utc)
+    if locked and store.edge_has_recommendation_log(season, week):
+        summary["edge_recommendation"] = "locked"
+        return
+
+    standing_row = store.edge_get_standing(season, week) or store.edge_latest_standing_before(
+        season, week
+    )
+    if not standing_row:
+        summary["edge_recommendation"] = "skipped (no season standing set yet)"
+        return
+    standing = edge_core.Standing(standing_row["standing_bucket"])
+    pool_size = standing_row["pool_size"]
+    budget_total = edge_core.deviation_budget(standing, pool_size)
+
+    candidates: list[tuple[dict, str, str, edge_core.DevigResult, float]] = []
+    no_data: list[tuple[dict, str, str, edge_core.DevigResult]] = []
+    for g in games:
+        o = wk_odds.get(g["game_id"])
+        if not o or o.get("spread") is None:
+            continue
+        home_fav = o["spread"] <= 0
+        fav_team = g["home"] if home_fav else g["away"]
+        dog_team = g["away"] if home_fav else g["home"]
+        ml_fav = o.get("ml_home") if home_fav else o.get("ml_away")
+        ml_dog = o.get("ml_away") if home_fav else o.get("ml_home")
+        if ml_fav is None or ml_dog is None:
+            continue
+        d = edge_core.devig_two_way(int(ml_fav), int(ml_dog))
+        try:
+            fav_norm = normalize_team(fav_team)
+        except UnknownTeamError:
+            fav_norm = fav_team
+        national = store.edge_get_national_pct(season, week, fav_norm)
+        if national is None:
+            no_data.append((g, fav_team, dog_team, d))
+            continue
+        bias_value, _, _ = store.edge_get_bias(fav_norm)
+        f = edge_core.pool_popularity(national, bias_value)
+        candidates.append((g, fav_team, dog_team, d, f))
+
+    ranked = sorted(
+        candidates,
+        key=lambda c: edge_core.leverage_score(c[3].p, c[4]) or -1.0,
+        reverse=True,
+    )
+    remaining = budget_total
+    rows: list[dict[str, Any]] = []
+    for g, fav, dog, d, f in ranked:
+        rec = edge_core.recommend(d.p, f, budget_remaining=remaining)
+        if rec.recommendation is edge_core.Recommendation.FADE:
+            remaining -= 1
+        rows.append({
+            "game_id": g["game_id"], "favorite_team": fav, "underdog_team": dog,
+            "p_favorite": round(d.p, 6), "vig": round(d.vig, 6),
+            "f_estimate": round(f, 6),
+            "leverage": round(rec.leverage, 6) if rec.leverage is not None else None,
+            "eligible": rec.eligible, "recommendation": rec.recommendation.value,
+            "budget_at_time": budget_total,
+        })
+    for g, fav, dog, d in no_data:
+        rows.append({
+            "game_id": g["game_id"], "favorite_team": fav, "underdog_team": dog,
+            "p_favorite": round(d.p, 6), "vig": round(d.vig, 6),
+            "f_estimate": None, "leverage": None,
+            "eligible": edge_core.is_eligible(d.p), "recommendation": "NO_DATA",
+            "budget_at_time": budget_total,
+        })
+
+    if rows:
+        store.edge_upsert_recommendation_log(season, week, rows)
+    summary["edge_recommendation"] = f"{len(rows)} games, budget {budget_total} ({standing.value})"
 
 
 def _apply_fantasypros(cfg: Config, season: int, week: int, summary: dict[str, Any]) -> None:
