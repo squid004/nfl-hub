@@ -10,6 +10,7 @@ from typing import Any
 from . import optimizer, store
 from .config import Config, get_config
 from .sources import (
+    actionnetwork,
     edge_bias,
     edge_core,
     edge_national,
@@ -69,6 +70,17 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.exception("odds refresh failed")
         summary["errors"].append(f"odds: {exc}")
+
+    # 2b. best price across real books (Action Network) — best-effort, unofficial page scrape
+    if cfg.odds.action_network:
+        try:
+            best_price, book_rows = actionnetwork.fetch_odds_detail(games)
+            store.upsert_best_price_odds(list(best_price.values()))
+            store.upsert_book_odds([row for rows in book_rows.values() for row in rows])
+            summary["best_price_odds"] = len(best_price)
+        except Exception as exc:  # noqa: BLE001 - unofficial scrape; never block the rest
+            log.warning("actionnetwork best-price scrape failed: %s", exc)
+            summary["best_price_odds"] = f"skipped ({exc})"
 
     # 3. fantasy snapshots
     for name, mod in (("yahoo", yahoo_fantasy), ("espn", espn_fantasy)):

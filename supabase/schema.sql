@@ -163,6 +163,44 @@ create table if not exists edge_recommendation_log (
   primary key (season, week, game_id)
 );
 
+-- Best price across real sportsbooks, scraped from actionnetwork.com/nfl/odds (no
+-- official API; see nflhub/sources/actionnetwork.py). One row per game, overwritten
+-- each refresh — no history kept, this is "what can I get right now."
+create table if not exists best_price_odds (
+  game_id           text primary key references game (game_id) on delete cascade,
+  week              int,
+  avg_spread_home   real,             -- mean home spread across all quoted real books
+  ml_home_book      text,
+  ml_home_price     int,
+  ml_away_book      text,
+  ml_away_price     int,
+  spread_home_book  text,
+  spread_home_line  real,
+  spread_home_price int,
+  spread_away_book  text,
+  spread_away_line  real,
+  spread_away_price int,
+  fetched_at        timestamptz default now()
+);
+create index if not exists best_price_odds_week_idx on best_price_odds (week);
+
+-- One row per (game, real sportsbook) — the full board behind best_price_odds, so the
+-- page can show every book's line, not just the winner.
+create table if not exists book_odds (
+  game_id           text references game (game_id) on delete cascade,
+  book              text,
+  week              int,
+  spread_home_line  real,
+  spread_home_price int,
+  spread_away_line  real,
+  spread_away_price int,
+  ml_home_price     int,
+  ml_away_price     int,
+  fetched_at        timestamptz default now(),
+  primary key (game_id, book)
+);
+create index if not exists book_odds_week_idx on book_odds (week);
+
 create table if not exists reminder_log (
   kind    text,
   key     text,
@@ -185,7 +223,7 @@ begin
     'kv','game','odds','roster_snapshot','news','pickem_pick','ats_pick',
     'survivor_pick','reminder_log','refresh_request','budget_snapshot',
     'edge_national_pct','edge_opponent_pick','edge_bias','edge_season_standing',
-    'edge_recommendation_log'
+    'edge_recommendation_log','best_price_odds','book_odds'
   ]
   loop
     execute format('alter table %I enable row level security', t);

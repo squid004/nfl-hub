@@ -105,6 +105,27 @@ def odds_for_week(week: int) -> dict[str, dict[str, Any]]:
     return {r["game_id"]: r for r in _get("odds", {"week": f"eq.{week}"})}
 
 
+def upsert_best_price_odds(rows: list[dict[str, Any]]) -> None:
+    if rows:
+        _upsert("best_price_odds", [{**r, "fetched_at": _now()} for r in rows], on_conflict="game_id")
+
+
+def best_price_odds_for_week(week: int) -> dict[str, dict[str, Any]]:
+    return {r["game_id"]: r for r in _get("best_price_odds", {"week": f"eq.{week}"})}
+
+
+def upsert_book_odds(rows: list[dict[str, Any]]) -> None:
+    if rows:
+        _upsert("book_odds", [{**r, "fetched_at": _now()} for r in rows], on_conflict="game_id,book")
+
+
+def book_odds_for_week(week: int) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in _get("book_odds", {"week": f"eq.{week}"}):
+        out.setdefault(r["game_id"], []).append(r)
+    return out
+
+
 # --- roster snapshots ---------------------------------------------------
 
 def save_roster_snapshot(league: str, week: int, payload: dict[str, Any]) -> None:

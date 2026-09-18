@@ -36,17 +36,17 @@ const App = {
       const [weekRaw, seasonRaw] = await Promise.all([DB.kv('week'), DB.kv('season')]);
       const week = parseInt(weekRaw || '1', 10);
       const season = parseInt(seasonRaw || '2025', 10);
-      const [games, odds, yRoster, eRoster, pPicks, aPicks, sPicks, refreshReq, lastRefresh, hist, bSnap,
+      const [games, odds, bestPrice, bookOdds, yRoster, eRoster, pPicks, aPicks, sPicks, refreshReq, lastRefresh, hist, bSnap,
              edgeLog, edgeBias, edgeStandings, edgeOpponentPicks, edgeSeasonLog, seasonGames] =
         await Promise.all([
-          DB.weekGames(week), DB.weekOdds(week),
+          DB.weekGames(week), DB.weekOdds(week), DB.bestPriceOdds(week), DB.bookOdds(week),
           DB.latestRoster('yahoo'), DB.latestRoster('espn'),
           DB.pickemPicks(week), DB.atsPicks(week), DB.survivorPicks(),
           DB.refreshRequest(), DB.kv('last_refresh'), DB.hist(), DB.budgetSnapshot(week),
           DB.edgeRecommendationLog(season, week), DB.edgeBiasAll(), DB.edgeStandings(season),
           DB.edgeOpponentPicks(season, week), DB.edgeRecommendationLogSeason(season), DB.seasonGames(season),
         ]);
-      const ctx = { week, season, games, odds, yRoster, eRoster, pPicks, aPicks, sPicks,
+      const ctx = { week, season, games, odds, bestPrice, bookOdds, yRoster, eRoster, pPicks, aPicks, sPicks,
                     refreshReq, lastRefresh, hist, bSnap,
                     edgeLog, edgeBias, edgeStandings, edgeOpponentPicks, edgeSeasonLog, seasonGames };
       this._ctx = ctx;

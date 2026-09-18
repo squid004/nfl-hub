@@ -37,6 +37,22 @@ const DB = {
     return map;
   },
 
+  async bestPriceOdds(week) {
+    const { data, error } = await this._c().from('best_price_odds').select('*').eq('week', week);
+    if (error) throw error;
+    const map = {};
+    (data || []).forEach(o => { map[o.game_id] = o; });
+    return map;
+  },
+
+  async bookOdds(week) {
+    const { data, error } = await this._c().from('book_odds').select('*').eq('week', week);
+    if (error) throw error;
+    const map = {};
+    (data || []).forEach(r => { (map[r.game_id] = map[r.game_id] || []).push(r); });
+    return map;
+  },
+
   async latestRoster(league) {
     const { data } = await this._c().from('roster_snapshot').select('*')
       .eq('league', league).order('captured_at', { ascending: false }).limit(1).maybeSingle();

@@ -59,6 +59,7 @@ class OddsCfg:
     provider: str
     api_key: str
     espn_game_odds: bool  # fetch per-game ESPN odds for DraftKings moneylines
+    action_network: bool  # scrape actionnetwork.com for best-price-across-books
 
 
 @dataclass
@@ -136,6 +137,7 @@ def get_config() -> Config:
             provider=os.environ.get("ODDS_PROVIDER", "espn").lower(),
             api_key=os.environ.get("ODDS_API_KEY", ""),
             espn_game_odds=_bool("ESPN_GAME_ODDS", True),
+            action_network=_bool("ACTIONNETWORK_ODDS", True),
         ),
         fantasypros=FantasyProsCfg(
             enabled=_bool("FANTASYPROS_ENABLED", True) and bool(os.environ.get("FANTASYPROS_API_KEY", "")),

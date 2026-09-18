@@ -1,6 +1,44 @@
 'use strict';
 
+// Deviation of one book's spread from the week's cross-book average, by total point
+// magnitude (not raw signed value — a book giving the favorite MORE points and a book
+// giving the underdog MORE points are the same "wider" line). Red = narrower than the
+// field, green = wider. Half-point noise gets no highlight.
+function spreadDeviationClass(bookHomeLine, avgHomeLine) {
+  if (bookHomeLine == null || avgHomeLine == null) return '';
+  const diff = Math.abs(bookHomeLine) - Math.abs(avgHomeLine);
+  if (diff <= -0.25) return 'line-narrow';
+  if (diff >= 0.25) return 'line-wide';
+  return '';
+}
+
+function bookCell(row, avgHomeLine) {
+  if (!row) return '<td class="muted">—</td>';
+  const cls = spreadDeviationClass(row.spread_home_line, avgHomeLine);
+  const spreadTxt = row.spread_home_line != null
+    ? `${signed(row.spread_home_line)} (${row.spread_home_price > 0 ? '+' : ''}${row.spread_home_price ?? '—'})`
+    : '—';
+  const mlTxt = (row.ml_away_price != null || row.ml_home_price != null)
+    ? `${row.ml_away_price ?? '—'} / ${row.ml_home_price ?? '—'}`
+    : '—';
+  return `<td class="bookcell ${cls}"><div>${spreadTxt}</div><div class="muted small">${mlTxt}</div></td>`;
+}
+
+// Best-price cell: "<line/price> · Book", or a plain "—" when nothing was found for
+// this game (already started / not yet posted / actionnetwork scrape skipped this run).
+function bestCell(line, price, book) {
+  if (price == null) return '<span class="muted">—</span>';
+  const num = line != null ? `${signed(line)} ` : '';
+  return `${num}${price > 0 ? '+' : ''}${price} <span class="muted">· ${book}</span>`;
+}
+
 const Odds = {
+  bookNames(ctx) {
+    const names = new Set();
+    Object.values(ctx.bookOdds || {}).forEach(rows => rows.forEach(r => names.add(r.book)));
+    return Array.from(names).sort();
+  },
+
   render(ctx) {
     const rows = ctx.games.map(g => {
       const o = ctx.odds[g.game_id] || {};
@@ -19,6 +57,25 @@ const Odds = {
       </tr>`;
     }).join('');
 
+    const bookNames = this.bookNames(ctx);
+    const shopRows = ctx.games.map(g => {
+      const bp = (ctx.bestPrice || {})[g.game_id] || {};
+      const byBook = {};
+      ((ctx.bookOdds || {})[g.game_id] || []).forEach(r => { byBook[r.book] = r; });
+      const bookCells = bookNames.map(name => bookCell(byBook[name], bp.avg_spread_home)).join('');
+      return `<tr>
+        <td class="muted">${fmtLocal(g.kickoff, false)}</td>
+        <td>${g.away} @ ${g.home}</td>
+        <td class="muted">${bp.avg_spread_home != null ? signed(bp.avg_spread_home) : '—'}</td>
+        ${bookCells}
+        <td>${bestCell(bp.spread_away_line, bp.spread_away_price, bp.spread_away_book)}<br>
+            ${bestCell(bp.spread_home_line, bp.spread_home_price, bp.spread_home_book)}</td>
+        <td>${bestCell(null, bp.ml_away_price, bp.ml_away_book)}<br>
+            ${bestCell(null, bp.ml_home_price, bp.ml_home_book)}</td>
+      </tr>`;
+    }).join('');
+    const bookHeaders = bookNames.map(n => `<th>${n}</th>`).join('');
+
     document.getElementById('odds').innerHTML = `
       <div class="panel">
         <h2>Odds board</h2>
@@ -26,6 +83,18 @@ const Odds = {
           <th class="num">Away ML</th><th class="num">Home ML</th>
           <th class="num">Away%</th><th class="num">Home%</th><th>Book</th></tr></thead>
           <tbody>${rows}</tbody></table>
+      </div>
+      <div class="panel">
+        <h2>Shop the line</h2>
+        <table><thead><tr><th>Kick</th><th>Matchup</th><th>Avg spread<br>(home)</th>
+          ${bookHeaders}
+          <th>Best spread<br>away / home</th><th>Best ML<br>away / home</th></tr></thead>
+          <tbody>${shopRows}</tbody></table>
+        <p class="tablefoot muted">Each book cell: home spread (price) on top, away/home
+          moneyline below. <span class="line-narrow">Red border</span> = narrower than this
+          week's average line across these books; <span class="line-wide">green border</span>
+          = wider. Sourced from actionnetwork.com (unofficial, best-effort — blank once a
+          game has kicked off, and only real sportsbooks count toward the average).</p>
       </div>`;
   },
 };
