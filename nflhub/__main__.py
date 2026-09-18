@@ -26,6 +26,8 @@ def _setup_logging(verbose: bool) -> None:
 def cmd_yahoo_auth(_args) -> int:
     import os
 
+    get_config()  # side effect: loads .env into os.environ (client id/secret aren't part
+    # of Config itself since only this one-time step needs them)
     cid, csec = os.environ.get("YAHOO_CLIENT_ID", ""), os.environ.get("YAHOO_CLIENT_SECRET", "")
     if not cid or not csec:
         print("Set YAHOO_CLIENT_ID and YAHOO_CLIENT_SECRET in .env first.", file=sys.stderr)
