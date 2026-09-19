@@ -37,20 +37,42 @@ const DB = {
     return map;
   },
 
+  // Enhancement-only reads: a missing table (schema.sql not yet re-run after a new
+  // feature) or a transient error here must never blank the whole page — every other
+  // section still has everything it needs. Swallow and degrade to "no data" instead of
+  // throwing, mirroring how refresh.py treats these same sources as soft-fail extras.
+  async _softMap(table, week, key = 'game_id') {
+    try {
+      const { data, error } = await this._c().from(table).select('*').eq('week', week);
+      if (error) throw error;
+      const map = {};
+      (data || []).forEach(r => { map[r[key]] = r; });
+      return map;
+    } catch (e) {
+      console.warn(`${table} unavailable:`, e.message || e);
+      return {};
+    }
+  },
+
   async bestPriceOdds(week) {
-    const { data, error } = await this._c().from('best_price_odds').select('*').eq('week', week);
-    if (error) throw error;
-    const map = {};
-    (data || []).forEach(o => { map[o.game_id] = o; });
-    return map;
+    return this._softMap('best_price_odds', week);
   },
 
   async bookOdds(week) {
-    const { data, error } = await this._c().from('book_odds').select('*').eq('week', week);
-    if (error) throw error;
-    const map = {};
-    (data || []).forEach(r => { (map[r.game_id] = map[r.game_id] || []).push(r); });
-    return map;
+    try {
+      const { data, error } = await this._c().from('book_odds').select('*').eq('week', week);
+      if (error) throw error;
+      const map = {};
+      (data || []).forEach(r => { (map[r.game_id] = map[r.game_id] || []).push(r); });
+      return map;
+    } catch (e) {
+      console.warn('book_odds unavailable:', e.message || e);
+      return {};
+    }
+  },
+
+  async elwayOdds(week) {
+    return this._softMap('elway_odds', week);
   },
 
   async latestRoster(league) {
@@ -185,14 +207,6 @@ const DB = {
 
   async edgeClearBiasOverride(team) {
     const { error } = await this._c().from('edge_bias').update({ overridden: false }).eq('team', team);
-    if (error) throw error;
-  },
-
-  async edgeInsertOpponentPicks(rows) {
-    if (!rows.length) return;
-    const payload = rows.map(r => ({ ...r, imported_at: new Date().toISOString() }));
-    const { error } = await this._c().from('edge_opponent_pick')
-      .upsert(payload, { onConflict: 'season,week,opponent,team_picked' });
     if (error) throw error;
   },
 

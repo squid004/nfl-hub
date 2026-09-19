@@ -20,9 +20,11 @@ const Pickem = {
     const { week, games, odds, hist } = ctx;
     const picks = ctx[M.picksKey] || {};
     const edgeLog = mode === 'ml' ? (ctx.edgeLog || {}) : {};
+    const elway = ctx.elway || {};
 
     const rows = games.map(g => {
       const o = odds[g.game_id] || {};
+      const el = elway[g.game_id] || {};
       const hasLine = o.spread != null;
       const favTeam = !hasLine ? null : (o.spread <= 0 ? g.home : g.away);
       const dogTeam = favTeam == null ? null : (favTeam === g.home ? g.away : g.home);
@@ -77,14 +79,20 @@ const Pickem = {
         }
       }
 
+      const elwaySpreadCell = mode === 'ats'
+        ? `<td class="num muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>` : '';
+
       return `<tr>
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
         <td>${g.away}${wchip(g.away)}</td>
         <td>${g.home}${wchip(g.home)}</td>
         <td class="muted">${favLabel}</td>
+        ${elwaySpreadCell}
         <td class="muted">${o.total ?? '—'}</td>
         <td class="num muted">${pct(o.implied_away)}</td>
         <td class="num muted">${pct(o.implied_home)}</td>
+        <td class="num muted">${pct(el.away_win_prob)}</td>
+        <td class="num muted">${pct(el.home_win_prob)}</td>
         ${suCell}${atsCell}${edgeCells}
         <td>${mine ? `<strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">—</span>'}</td>
         <td class="btns">${btn(g.away)} ${btn(g.home)}</td>
@@ -101,14 +109,21 @@ const Pickem = {
          <th class="num" title="(1-p)*f, gated off above p=0.65">Leverage</th>
          <th title="This week's fade/chalk call from the Edge panel below">Edge</th>`
       : '';
+    const elwaySpreadHeader = mode === 'ats'
+      ? `<th class="num" title="ELWAY's home-spread equivalent: away avg pts minus home avg pts. Compare against the Fav column's market line, not the sheet's own spread.">ELWAY Spread</th>`
+      : '';
     document.getElementById(M.id).innerHTML = `
       <div class="panel">
         <h2>${M.title} &mdash; ${made}/${games.length} made
           &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
         ${mode === 'ml' ? Edge.budgetBannerHtml(ctx) : ''}
         ${lean ? `<p class="lean">${esc(lean)}</p>` : ''}
-        <table><thead><tr><th>Kick</th><th>Away</th><th>Home</th><th>Fav</th><th>O/U</th>
+        <table><thead><tr><th>Kick</th><th>Away</th><th>Home</th><th>Fav</th>
+          ${elwaySpreadHeader}
+          <th>O/U</th>
           <th class="num">Away%</th><th class="num">Home%</th>
+          <th class="num" title="ELWAY's away win probability, from its avg-points model">ELWAY Away%</th>
+          <th class="num" title="ELWAY's home win probability, from its avg-points model">ELWAY Home%</th>
           <th class="num" title="Historical: favorite of this spread wins straight up">Fav SU</th>
           <th class="num" title="Historical: favorite of this spread covers">Fav ATS</th>
           ${edgeHeader}

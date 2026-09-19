@@ -93,6 +93,11 @@ class EdgeCfg:
 
 
 @dataclass
+class ElwayCfg:
+    sheet_id: str      # Google Sheet id with the home/away avg-points model, one row/game
+
+
+@dataclass
 class Config:
     timezone: str
     dashboard_url: str
@@ -104,6 +109,7 @@ class Config:
     ntfy: NtfyCfg
     reminders: RemindersCfg
     edge: EdgeCfg
+    elway: ElwayCfg
     raw: dict = field(repr=False, default_factory=dict)
 
 
@@ -162,5 +168,8 @@ def get_config() -> Config:
         edge=EdgeCfg(
             sheet_id=os.environ.get("EDGE_SHEET_ID", "").strip(),
             my_name=os.environ.get("EDGE_MY_NAME", "").strip(),
+        ),
+        elway=ElwayCfg(
+            sheet_id=os.environ.get("ELWAY_SHEET_ID", "").strip(),
         ),
     )

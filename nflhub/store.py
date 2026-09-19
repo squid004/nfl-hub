@@ -126,6 +126,15 @@ def book_odds_for_week(week: int) -> dict[str, list[dict[str, Any]]]:
     return out
 
 
+def upsert_elway_odds(rows: list[dict[str, Any]]) -> None:
+    if rows:
+        _upsert("elway_odds", [{**r, "fetched_at": _now()} for r in rows], on_conflict="game_id")
+
+
+def elway_odds_for_week(week: int) -> dict[str, dict[str, Any]]:
+    return {r["game_id"]: r for r in _get("elway_odds", {"week": f"eq.{week}"})}
+
+
 # --- roster snapshots ---------------------------------------------------
 
 def save_roster_snapshot(league: str, week: int, payload: dict[str, Any]) -> None:

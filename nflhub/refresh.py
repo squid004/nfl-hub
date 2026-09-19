@@ -15,6 +15,7 @@ from .sources import (
     edge_core,
     edge_national,
     edge_sheet,
+    elway,
     espn_fantasy,
     fantasypros,
     history,
@@ -81,6 +82,16 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001 - unofficial scrape; never block the rest
             log.warning("actionnetwork best-price scrape failed: %s", exc)
             summary["best_price_odds"] = f"skipped ({exc})"
+
+    # 2c. "ELWAY" avg-points model from a personal Google Sheet — best-effort, soft-fail
+    if cfg.elway.sheet_id:
+        try:
+            elway_rows = elway.fetch_week(cfg.elway.sheet_id, week, games)
+            store.upsert_elway_odds(list(elway_rows.values()))
+            summary["elway"] = len(elway_rows)
+        except Exception as exc:  # noqa: BLE001 - personal sheet; never block the rest
+            log.warning("elway sheet pull failed: %s", exc)
+            summary["elway"] = f"skipped ({exc})"
 
     # 3. fantasy snapshots
     for name, mod in (("yahoo", yahoo_fantasy), ("espn", espn_fantasy)):

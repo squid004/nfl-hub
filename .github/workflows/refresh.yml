@@ -57,6 +57,7 @@ jobs:
           QUIET_END: ${{ vars.QUIET_END }}
           EDGE_SHEET_ID: ${{ vars.EDGE_SHEET_ID }}
           EDGE_MY_NAME: ${{ vars.EDGE_MY_NAME }}
+          ELWAY_SHEET_ID: ${{ vars.ELWAY_SHEET_ID }}
         run: |
           python -m nflhub refresh
           python -m nflhub tick

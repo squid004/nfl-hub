@@ -8,39 +8,6 @@
 const EDGE_TEAMS = ['ARI', 'ATL', 'BAL', 'BUF', 'CAR', 'CHI', 'CIN', 'CLE', 'DAL', 'DEN',
   'DET', 'GB', 'HOU', 'IND', 'JAX', 'KC', 'LAC', 'LAR', 'LV', 'MIA', 'MIN', 'NE', 'NO',
   'NYG', 'NYJ', 'PHI', 'PIT', 'SEA', 'SF', 'TB', 'TEN', 'WSH'];
-const EDGE_TEAM_SET = new Set(EDGE_TEAMS);
-const EDGE_ALIASES = {
-  WAS: 'WSH', JAC: 'JAX', LA: 'LAR', STL: 'LAR', SD: 'LAC', OAK: 'LV',
-  GNB: 'GB', KAN: 'KC', NWE: 'NE', NOR: 'NO', SFO: 'SF', TAM: 'TB',
-};
-
-function normalizeEdgeTeam(raw) {
-  const code = (raw || '').trim().toUpperCase();
-  if (EDGE_TEAM_SET.has(code)) return code;
-  if (EDGE_ALIASES[code]) return EDGE_ALIASES[code];
-  return null;
-}
-
-// "Dave, KC" / "Sarah: BUF" / "Mike DET" -> {opponent, team} or null if unparseable.
-function parseOpponentLine(line) {
-  line = line.trim();
-  if (!line) return null;
-  let opponent, teamRaw;
-  const m = line.match(/^(.*?)[,:]\s*(\S+)$/);
-  if (m) {
-    opponent = m[1].trim();
-    teamRaw = m[2];
-  } else {
-    const parts = line.split(/\s+/);
-    if (parts.length < 2) return null;
-    teamRaw = parts[parts.length - 1];
-    opponent = parts.slice(0, -1).join(' ');
-  }
-  const team = normalizeEdgeTeam(teamRaw);
-  if (!opponent || !team) return null;
-  return { opponent, team };
-}
-
 function deviationBudget(bucket, poolSize) {
   if (bucket === 'LEADING') return 0;
   if (bucket === 'EARLY') return 1;
@@ -91,17 +58,11 @@ const Edge = {
     return `
       <div class="panel">
         <h2>Opponent picks &mdash; pool bias (week ${ctx.week})</h2>
-        <p class="muted">Paste this week's picks, one per line: <code>Opponent, TEAM</code>
-          (comma, colon, or a trailing team code all work). Learns each team's pool bias
-          vs. the national pick % automatically on the next refresh.</p>
-        <textarea id="edge-paste" rows="6" style="width:100%;font-family:inherit;"
-          placeholder="Dave, KC&#10;Sarah: BUF&#10;Mike DET"></textarea>
-        <div class="btns" style="margin-top:8px;">
-          <button data-act="edge-paste-submit">Load picks</button>
-          <span id="edge-paste-status" class="muted"></span>
-        </div>
+        <p class="muted">Pulled automatically from the pool's Google Sheet each refresh.
+          Learns each team's pool bias vs. the national pick % on the next refresh after
+          picks land here.</p>
         ${rows ? `<table style="margin-top:12px;"><thead><tr><th>Opponent</th><th>Pick</th><th></th></tr></thead>
-          <tbody>${rows}</tbody></table>` : '<p class="muted">No picks entered for this week yet.</p>'}
+          <tbody>${rows}</tbody></table>` : '<p class="muted">No picks pulled for this week yet.</p>'}
       </div>`;
   },
 
@@ -184,31 +145,6 @@ const Edge = {
           fade hit rate: <strong>${fadeRate != null ? fadeRate + '%' : '—'}</strong>
           (expect ~40-45% &mdash; well below that means the p estimates are drifting, not bad luck).</p>
       </div>`;
-  },
-
-  async submitPaste() {
-    const ta = document.getElementById('edge-paste');
-    const status = document.getElementById('edge-paste-status');
-    const lines = ta.value.split('\n');
-    const rows = [];
-    let errors = 0;
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      const parsed = parseOpponentLine(line);
-      if (!parsed) { errors++; continue; }
-      rows.push({
-        season: App._ctx.season, week: App._ctx.week,
-        opponent: parsed.opponent, team_picked: parsed.team,
-      });
-    }
-    try {
-      await DB.edgeInsertOpponentPicks(rows);
-      status.textContent = `loaded ${rows.length} pick(s)${errors ? `, ${errors} unparseable line(s)` : ''}`;
-      ta.value = '';
-      App.reload();
-    } catch (e) {
-      status.textContent = 'error: ' + e.message;
-    }
   },
 
   async deletePick(opponent, team) {

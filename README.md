@@ -53,7 +53,9 @@ Push this folder to a new repo, then in **Settings**:
   `DASHBOARD_URL` (your Pages URL), `REMINDER_OFFSETS` (`24,3,0.75`),
   `QUIET_START` (`23`), `QUIET_END` (`7`),
   `EDGE_SHEET_ID` (your pick'em pool's Google Sheet id, one "Week N" tab per week),
-  `EDGE_MY_NAME` (how your name appears in that sheet).
+  `EDGE_MY_NAME` (how your name appears in that sheet),
+  `ELWAY_SHEET_ID` (a personal avg-points model sheet; home/away avg pts + win prob,
+  one row per game per week), `ACTIONNETWORK_ODDS` (opt, default on).
 
 The FantasyPros key is the same one used by the `ff-draft-edge` project.
 
