@@ -1,8 +1,10 @@
 'use strict';
 
-// Two modes share this renderer:
-//   'ml'  -> Moneyline Pick'em: pick the outright winner
-//   'ats' -> Against the Spread: pick the side that covers
+// Two modes:
+//   'ml'  -> Moneyline Pick'em: pick the outright winner. Rendered as one card per game
+//            (richest data set: ELWAY, history, pool-leverage edge, plus a narrative).
+//   'ats' -> Against the Spread: pick the side that covers. Stays a table (no edge/leverage
+//            system exists for ATS, so a table is still easy to scan).
 const PICK_MODES = {
   ml: {
     id: 'pickem', picksKey: 'pPicks', act: 'pick', setter: 'setPickemPick',
@@ -14,12 +16,175 @@ const PICK_MODES = {
   },
 };
 
+// Same "least-safe favorite per spread bin" ranking used by History.renderBins's budget
+// table, replayed here just to tag which game_ids it flagged — so the per-game narrative
+// can say "the budget likes this dog" without duplicating the table itself.
+function computeFlaggedGameIds(ctx) {
+  const flagged = new Set();
+  const d = ctx.hist;
+  if (!d) return flagged;
+  const groups = {};
+  d.buckets.forEach(b => { groups[b] = []; });
+  for (const g of ctx.games) {
+    const o = ctx.odds[g.game_id];
+    if (!o || o.spread == null) continue;
+    const cell = History.lookup(d, Math.abs(o.spread), o.spread <= 0, ctx.week);
+    if (!cell || cell.su == null) continue;
+    groups[History.bucketLabel(Math.abs(o.spread))].push({ gameId: g.game_id, su: cell.su });
+  }
+  d.buckets.forEach(lab => {
+    const gs = groups[lab].slice().sort((a, b) => a.su - b.su); // weakest favorites first
+    const take = Math.round(gs.reduce((s, x) => s + (1 - x.su), 0));
+    gs.slice(0, take).forEach(x => flagged.add(x.gameId));
+  });
+  return flagged;
+}
+
+// Rule-based (not AI-generated) explanation: every clause traces to a real number already
+// on the card, so it's reproducible and never invents anything. Deliberately terse.
+function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLabel, flagged, edgeRec }) {
+  const parts = [`${favTeam} favored by ${marketMargin} over ${dogTeam}.`];
+
+  if (el && el.home_win_prob != null && el.away_win_prob != null) {
+    const elwayFav = el.home_win_prob > el.away_win_prob ? 'home' : 'away';
+    const elwayFavTeam = elwayFav === 'home' ? el._home : el._away;
+    const elwayProb = Math.max(el.home_win_prob, el.away_win_prob);
+    if (elwayFavTeam === favTeam) {
+      parts.push(`ELWAY agrees, projecting ${favTeam} by about ${Math.abs(el.spread_home).toFixed(1)}.`);
+    } else {
+      parts.push(`ELWAY disagrees — its avg-points model actually likes ${elwayFavTeam} `
+        + `(${Math.round(elwayProb * 100)}% win prob) against the market's lean toward ${favTeam}.`);
+    }
+  }
+
+  if (histCell && histCell.su != null) {
+    const suPct = Math.round(histCell.su * 100);
+    parts.push(suPct < 55
+      ? `Favorites this size (${bucketLabel}) have only won ${suPct}% of the time historically — a live spot for an upset.`
+      : `Favorites this size (${bucketLabel}) have won ${suPct}% of the time historically.`);
+  }
+
+  if (flagged) {
+    parts.push(`This week's upset-budget model flags ${dogTeam} as one of the better fade candidates in this bucket.`);
+  }
+
+  if (edgeRec && edgeRec.recommendation === 'FADE') {
+    const fPct = edgeRec.f_estimate != null ? Math.round(edgeRec.f_estimate * 100) : null;
+    parts.push(`Pool-leverage likes fading ${favTeam} here too — only ~${fPct}% of your pool is expected `
+      + `on ${dogTeam}, so it pays off if it hits (leverage ${edgeRec.leverage?.toFixed(2) ?? '—'}).`);
+  } else if (edgeRec && edgeRec.recommendation === 'CHALK') {
+    parts.push(`Pool-leverage says stick with the chalk here — not enough separation to justify fading ${favTeam}.`);
+  }
+
+  return parts.join(' ');
+}
+
 const Pickem = {
   render(ctx, mode = 'ml') {
+    if (mode === 'ml') this._renderCards(ctx);
+    else this._renderTable(ctx, mode);
+  },
+
+  _renderCards(ctx) {
+    const M = PICK_MODES.ml;
+    const { week, games, odds, hist } = ctx;
+    const picks = ctx[M.picksKey] || {};
+    const edgeLog = ctx.edgeLog || {};
+    const elway = ctx.elway || {};
+    const flaggedIds = computeFlaggedGameIds(ctx);
+
+    const cards = games.map(g => {
+      const o = odds[g.game_id] || {};
+      const elRaw = elway[g.game_id];
+      const el = elRaw ? { ...elRaw, _home: g.home, _away: g.away } : null;
+      const hasLine = o.spread != null;
+      const favTeam = !hasLine ? null : (o.spread <= 0 ? g.home : g.away);
+      const dogTeam = favTeam == null ? null : (favTeam === g.home ? g.away : g.home);
+      const favLabel = !hasLine ? '—' : (o.spread === 0 ? 'Pick’em' : `${favTeam} ${o.spread}`);
+      const mine = (picks[g.game_id] || {}).pick;
+      const mineIsDog = mine && dogTeam && mine === dogTeam;
+
+      let result = null;
+      if (g.state === 'post') {
+        result = g.home_score > g.away_score ? g.home
+          : g.away_score > g.home_score ? g.away : 'TIE';
+      }
+      const wchip = t => result === t ? ` <span class="chip good">${M.winChip}</span>` : '';
+      const stateChip = g.state === 'post' ? `<span class="muted">(${g.away_score}-${g.home_score} F)</span>`
+        : g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
+
+      const histCell = hist && hasLine ? History.lookup(hist, Math.abs(o.spread), o.spread <= 0, week) : null;
+      const bucketLabel = hasLine ? History.bucketLabel(Math.abs(o.spread)) : null;
+      const edgeRec = edgeLog[g.game_id];
+      const hasEdge = edgeRec && edgeRec.recommendation && edgeRec.recommendation !== 'NO_DATA';
+
+      const btn = team => `<button data-act="${M.act}" data-week="${week}" data-game="${g.game_id}"
+        data-team="${team}" data-spread="${hasLine ? o.spread : ''}"
+        class="${mine === team ? 'primary' : ''}">${team}</button>`;
+
+      const narrative = hasLine
+        ? buildNarrative({ favTeam, dogTeam, marketMargin: Math.abs(o.spread), el, histCell,
+                           bucketLabel, flagged: flaggedIds.has(g.game_id), edgeRec: hasEdge ? edgeRec : null })
+        : 'No market line yet for this game.';
+
+      const edgeChip = hasEdge
+        ? `<span class="chip ${edgeRec.recommendation === 'FADE' ? 'good' : ''}"
+             title="p=${(edgeRec.p_favorite * 100).toFixed(1)}%, f=${edgeRec.f_estimate != null ? Math.round(edgeRec.f_estimate * 100) + '%' : '—'}, leverage=${edgeRec.leverage != null ? edgeRec.leverage.toFixed(3) : '—'}">
+             ${edgeRec.recommendation}${edgeRec.recommendation === 'FADE' ? ' ' + edgeRec.underdog_team : ''}</span>`
+        : '<span class="muted">—</span>';
+
+      return `<div class="game-card">
+        <div class="game-card-head">
+          <span class="muted">${fmtLocal(g.kickoff, false)}</span>
+          <span class="matchup">${g.away}${wchip(g.away)} @ ${g.home}${wchip(g.home)}</span>
+          ${stateChip}
+          ${flaggedIds.has(g.game_id) ? `<span class="chip warn" title="Upset-budget flags this game's dog">budget dog</span>` : ''}
+        </div>
+        <div class="game-card-body">
+          <div class="stat-block">
+            <div class="stat-label">Market</div>
+            <div>${favLabel} &middot; O/U ${o.total ?? '—'}</div>
+            <div class="muted">${pct(o.implied_away)} / ${pct(o.implied_home)} &middot; ${o.book ?? '—'}</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">ELWAY</div>
+            <div>${el ? `${pct(el.away_win_prob)} / ${pct(el.home_win_prob)}` : '<span class="muted">—</span>'}</div>
+            <div class="muted">${el && el.spread_home != null ? `implied ${signed(el.spread_home)}` : ' '}</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">History</div>
+            <div>${histCell ? `Fav SU ${pct(histCell.su)} &middot; Fav ATS ${pct(histCell.ats)}` : '<span class="muted">—</span>'}</div>
+            <div class="muted">${bucketLabel ? `${bucketLabel} bucket` : ' '}</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">Pool edge</div>
+            <div>${edgeChip}</div>
+          </div>
+        </div>
+        <p class="game-card-narrative">${esc(narrative)}</p>
+        <div class="game-card-pick">
+          ${btn(g.away)} ${btn(g.home)}
+          <span class="game-card-mine">${mine ? `Your pick: <strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">No pick yet</span>'}</span>
+        </div>
+      </div>`;
+    }).join('');
+
+    const made = Object.keys(picks).length;
+    const lean = hist ? History.summaryLine(ctx, 'ml') : '';
+    document.getElementById(M.id).innerHTML = `
+      <div class="panel">
+        <h2>${M.title} &mdash; ${made}/${games.length} made
+          &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
+        ${Edge.budgetBannerHtml(ctx)}
+        ${lean ? `<p class="lean">${esc(lean)}</p>` : ''}
+        <div class="game-card-grid">${cards}</div>
+      </div>`;
+  },
+
+  _renderTable(ctx, mode) {
     const M = PICK_MODES[mode];
     const { week, games, odds, hist } = ctx;
     const picks = ctx[M.picksKey] || {};
-    const edgeLog = mode === 'ml' ? (ctx.edgeLog || {}) : {};
     const elway = ctx.elway || {};
 
     const rows = games.map(g => {
@@ -34,17 +199,11 @@ const Pickem = {
       const mine = (picks[g.game_id] || {}).pick;
       const mineIsDog = mine && dogTeam && mine === dogTeam;
 
-      // who "won" this row for the current mode
       let result = null;
-      if (g.state === 'post') {
-        if (mode === 'ml') {
-          result = g.home_score > g.away_score ? g.home
-            : g.away_score > g.home_score ? g.away : 'TIE';
-        } else if (hasLine) {
-          const favMargin = (o.spread <= 0 ? 1 : -1) * (g.home_score - g.away_score);
-          const edge = favMargin - Math.abs(o.spread);
-          result = Math.abs(edge) < 1e-9 ? 'PUSH' : (edge > 0 ? favTeam : dogTeam);
-        }
+      if (g.state === 'post' && hasLine) {
+        const favMargin = (o.spread <= 0 ? 1 : -1) * (g.home_score - g.away_score);
+        const edge = favMargin - Math.abs(o.spread);
+        result = Math.abs(edge) < 1e-9 ? 'PUSH' : (edge > 0 ? favTeam : dogTeam);
       }
       const wchip = t => result === t ? ` <span class="chip good">${M.winChip}</span>` : '';
 
@@ -61,39 +220,20 @@ const Pickem = {
 
       const btn = team => `<button data-act="${M.act}" data-week="${week}" data-game="${g.game_id}"
         data-team="${team}" data-spread="${hasLine ? o.spread : ''}"
-        class="${mine === team ? 'primary' : ''}">${team}${mode === 'ats' ? lineFor(team) : ''}</button>`;
-
-      let edgeCells = '';
-      if (mode === 'ml') {
-        const e = edgeLog[g.game_id];
-        if (e && e.recommendation && e.recommendation !== 'NO_DATA') {
-          const rec = e.recommendation;
-          const chipClass = rec === 'FADE' ? 'good' : rec === 'CHALK' ? '' : 'muted';
-          const fadeTeam = rec === 'FADE' ? e.underdog_team : e.favorite_team;
-          edgeCells = `
-            <td class="num muted">${pct(e.f_estimate)}</td>
-            <td class="num muted">${e.leverage != null ? e.leverage.toFixed(3) : '—'}</td>
-            <td><span class="chip ${chipClass}" title="${e.favorite_team} p=${(e.p_favorite * 100).toFixed(1)}%, f=${e.f_estimate != null ? (e.f_estimate * 100).toFixed(0) + '%' : '—'}">${rec}${rec === 'FADE' ? ' ' + fadeTeam : ''}</span></td>`;
-        } else {
-          edgeCells = '<td class="num muted">—</td><td class="num muted">—</td><td class="muted">—</td>';
-        }
-      }
-
-      const elwaySpreadCell = mode === 'ats'
-        ? `<td class="num muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>` : '';
+        class="${mine === team ? 'primary' : ''}">${team}${lineFor(team)}</button>`;
 
       return `<tr>
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
         <td>${g.away}${wchip(g.away)}</td>
         <td>${g.home}${wchip(g.home)}</td>
         <td class="muted">${favLabel}</td>
-        ${elwaySpreadCell}
+        <td class="num muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>
         <td class="muted">${o.total ?? '—'}</td>
         <td class="num muted">${pct(o.implied_away)}</td>
         <td class="num muted">${pct(o.implied_home)}</td>
         <td class="num muted">${pct(el.away_win_prob)}</td>
         <td class="num muted">${pct(el.home_win_prob)}</td>
-        ${suCell}${atsCell}${edgeCells}
+        ${suCell}${atsCell}
         <td>${mine ? `<strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">—</span>'}</td>
         <td class="btns">${btn(g.away)} ${btn(g.home)}</td>
       </tr>`;
@@ -101,35 +241,24 @@ const Pickem = {
 
     const made = Object.keys(picks).length;
     const lean = hist ? History.summaryLine(ctx, mode) : '';
-    const foot = mode === 'ml'
-      ? 'Fav SU / Fav ATS are historical rates for <em>any</em> favorite of that spread size in this part of the season — a low number is an upset lean. f/Leverage/Edge are your pool-specific lean, see the Edge panel below.'
-      : 'Pick the side that covers. Fav ATS is the historical cover rate for any favorite of that spread size — below ~50% leans dog. The line is snapshotted when you pick.';
-    const edgeHeader = mode === 'ml'
-      ? `<th class="num" title="Estimated fraction of your pool taking the favorite">f</th>
-         <th class="num" title="(1-p)*f, gated off above p=0.65">Leverage</th>
-         <th title="This week's fade/chalk call from the Edge panel below">Edge</th>`
-      : '';
-    const elwaySpreadHeader = mode === 'ats'
-      ? `<th class="num" title="ELWAY's home-spread equivalent: away avg pts minus home avg pts. Compare against the Fav column's market line, not the sheet's own spread.">ELWAY Spread</th>`
-      : '';
     document.getElementById(M.id).innerHTML = `
       <div class="panel">
         <h2>${M.title} &mdash; ${made}/${games.length} made
           &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
-        ${mode === 'ml' ? Edge.budgetBannerHtml(ctx) : ''}
         ${lean ? `<p class="lean">${esc(lean)}</p>` : ''}
         <table><thead><tr><th>Kick</th><th>Away</th><th>Home</th><th>Fav</th>
-          ${elwaySpreadHeader}
+          <th class="num" title="ELWAY's home-spread equivalent: away avg pts minus home avg pts. Compare against the Fav column's market line, not the sheet's own spread.">ELWAY Spread</th>
           <th>O/U</th>
           <th class="num">Away%</th><th class="num">Home%</th>
           <th class="num" title="ELWAY's away win probability, from its avg-points model">ELWAY Away%</th>
           <th class="num" title="ELWAY's home win probability, from its avg-points model">ELWAY Home%</th>
           <th class="num" title="Historical: favorite of this spread wins straight up">Fav SU</th>
           <th class="num" title="Historical: favorite of this spread covers">Fav ATS</th>
-          ${edgeHeader}
           <th>Pick</th><th></th></tr></thead>
           <tbody>${rows}</tbody></table>
-        <p class="tablefoot muted">Away%/Home% are this game's de-vigged market prices. ${foot}</p>
+        <p class="tablefoot muted">Away%/Home% are this game's de-vigged market prices.
+          Pick the side that covers. Fav ATS is the historical cover rate for any favorite
+          of that spread size — below ~50% leans dog. The line is snapshotted when you pick.</p>
       </div>`;
   },
 
