@@ -122,6 +122,16 @@ const Pickem = {
       const hasEdge = edgeRec && edgeRec.recommendation && edgeRec.recommendation !== 'NO_DATA';
       const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
 
+      // Which side to highlight as "the suggested pick": prefer the pool-specific
+      // leverage call (FADE/CHALK) when it actually has data this week, otherwise fall
+      // back to the upset-budget flag (same source as the "budget dog" chip above).
+      const suggestedIsDog = hasLine && (hasEdge ? edgeRec.recommendation === 'FADE' : !!(bucketRank && bucketRank.taken));
+      const suggestedTeam = hasLine ? (suggestedIsDog ? dogTeam : favTeam) : null;
+      const teamSpan = team => {
+        if (team !== suggestedTeam) return team;
+        return `<span class="${suggestedIsDog ? 'pick-dog' : 'pick-fav'}">${team}</span>`;
+      };
+
       const btn = team => `<button data-act="${M.act}" data-week="${week}" data-game="${g.game_id}"
         data-team="${team}" data-spread="${hasLine ? o.spread : ''}"
         class="${mine === team ? 'primary' : ''}">${team}</button>`;
@@ -140,7 +150,7 @@ const Pickem = {
       return `<div class="game-card">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
-          <span class="matchup">${g.away}${wchip(g.away)} @ ${g.home}${wchip(g.home)}</span>
+          <span class="matchup">${teamSpan(g.away)}${wchip(g.away)} @ ${teamSpan(g.home)}${wchip(g.home)}</span>
           ${stateChip}
           ${bucketLabel ? `<span class="chip" title="Spread bucket: ${bucketLabel}">${bucketLabel}</span>` : ''}
           ${bucketRank ? `<span class="chip${bucketRank.taken ? ' warn' : ''}" title="Rank ${bucketRank.rank} of ${bucketRank.n} in this spread bucket, by market spread + ELWAY-adjusted rank">${bucketRank.taken ? 'budget dog ' : 'bucket '}#${bucketRank.rank}/${bucketRank.n}</span>` : ''}
@@ -184,6 +194,10 @@ const Pickem = {
         ${Edge.budgetBannerHtml(ctx)}
         ${lean ? `<p class="lean">${esc(lean)}</p>` : ''}
         <div class="game-card-grid">${cards}</div>
+        <p class="tablefoot muted"><span class="pick-fav">Green</span> in the matchup =
+          the favorite is the suggested pick; <span class="pick-dog">yellow</span> = the
+          dog is — pool-leverage's FADE/CHALK call when it has data this week, otherwise
+          the upset-budget flag.</p>
       </div>`;
   },
 
