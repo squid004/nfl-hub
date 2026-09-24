@@ -170,7 +170,7 @@ const History = {
     let totN = 0, totPrimary = 0, totOther = 0, totPicked = 0, totYourDog = 0;
     const binStats = [];
     const flaggedIds = new Set();
-    const rankByGame = {}; // gameId -> { rank, n, taken } — every game in its bucket, not just flagged
+    const rankByGame = {}; // gameId -> { rank, n, taken, lab } — every game in its bucket, not just flagged
     const bins = d.buckets.map(lab => {
       const gs = groups[lab].slice().sort((a, b) => a.rankV - b.rankV); // most live dog (lowest fav prob) first
       const n = gs.length;
@@ -181,7 +181,7 @@ const History = {
         x.rank = i + 1;            // 1 = most live dog in this bucket, all games ranked
         x.taken = i < take;
         if (x.taken) flaggedIds.add(x.gameId);
-        rankByGame[x.gameId] = { rank: x.rank, n, taken: x.taken };
+        rankByGame[x.gameId] = { rank: x.rank, n, taken: x.taken, lab };
       });
       const pickedN = gs.filter(x => x.picked).length;
       const yourDog = gs.filter(x => x.picked && x.picked === x.dog).length;

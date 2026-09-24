@@ -103,7 +103,11 @@ const Pickem = {
         : g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
 
       const histCell = hist && hasLine ? History.lookup(hist, Math.abs(o.spread), o.spread <= 0, week) : null;
-      const bucketLabel = hasLine ? History.bucketLabel(Math.abs(o.spread)) : null;
+      const bucketRank = bucketRanks[g.game_id] || null;
+      // Prefer the bucket the ranking itself used (computeBudget prefers the cross-book
+      // average spread when available) over recomputing from o.spread alone — otherwise
+      // the badge could name a different bucket than the rank next to it was computed in.
+      const bucketLabel = bucketRank ? bucketRank.lab : (hasLine ? History.bucketLabel(Math.abs(o.spread)) : null);
       const edgeRec = edgeLog[g.game_id];
       const hasEdge = edgeRec && edgeRec.recommendation && edgeRec.recommendation !== 'NO_DATA';
 
@@ -111,7 +115,6 @@ const Pickem = {
         data-team="${team}" data-spread="${hasLine ? o.spread : ''}"
         class="${mine === team ? 'primary' : ''}">${team}</button>`;
 
-      const bucketRank = bucketRanks[g.game_id] || null;
       const narrative = hasLine
         ? buildNarrative({ favTeam, dogTeam, marketMargin: Math.abs(o.spread), el, histCell,
                            bucketLabel, bucketRank, edgeRec: hasEdge ? edgeRec : null })
@@ -128,6 +131,7 @@ const Pickem = {
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
           <span class="matchup">${g.away}${wchip(g.away)} @ ${g.home}${wchip(g.home)}</span>
           ${stateChip}
+          ${bucketLabel ? `<span class="chip" title="Spread bucket: ${bucketLabel}">${bucketLabel}</span>` : ''}
           ${bucketRank ? `<span class="chip${bucketRank.taken ? ' warn' : ''}" title="Rank ${bucketRank.rank} of ${bucketRank.n} in this spread bucket, by market spread + ELWAY-adjusted rank">${bucketRank.taken ? 'budget dog ' : 'bucket '}#${bucketRank.rank}/${bucketRank.n}</span>` : ''}
         </div>
         <div class="game-card-body">
