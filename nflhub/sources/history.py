@@ -45,6 +45,7 @@ TIMEOUT = 30
 MIN_SEASON = 2007
 SHRINK_K = 40  # pseudo-count pulling a bucket cell toward its all-weeks prior
 KEY_NUMBERS = (3.0, 7.0)  # NFL final-margin clustering: a field goal, a TD+XP
+ELWAY_BLEND_WEIGHT = 0.5  # how far the ranking blend moves from the market toward ELWAY
 
 # (lo, hi, label) on the absolute spread; 0.5-pt increments, so these tile the line cleanly.
 # Display/grouping only now (see module docstring) — ranking uses the smooth curve below.
@@ -339,6 +340,22 @@ def predict(dist: dict, abs_spread: float, home_fav: bool, week: int, field: str
     return round(min(0.995, max(0.005, p)), 4)
 
 
+def _predict_signed(dist: dict, home_fav_side: bool, signed_margin: float, week: int, field: str) -> Optional[float]:
+    """P(the team on `home_fav_side`, home if True else away, wins/covers), from a SIGNED
+    margin for that side (positive = favored by that many points; negative = actually the
+    worse side by that many, evaluated by flipping to the other side's curve at the
+    positive magnitude). Lets a ranking blend go past "toss-up" without a floor: unlike
+    clamping the magnitude at 0, which forces every game past that point to the same
+    value (the bug an ELWAY-vs-market blend hit in practice — three different games all
+    clamped to the identical toss-up number and got tie-broken by list order), this stays
+    strictly monotonic and keeps differentiating games no matter how large the blend gets.
+    """
+    if signed_margin >= 0:
+        return predict(dist, signed_margin, home_fav_side, week, field)
+    p_other = predict(dist, -signed_margin, not home_fav_side, week, field)
+    return None if p_other is None else round(1 - p_other, 4)
+
+
 def week_budget(
     dist: dict, week: int, games: list[dict], odds_map: dict[str, dict],
     elway_map: dict[str, dict] | None = None,
@@ -352,12 +369,18 @@ def week_budget(
     discrete spread buckets — that's just grouping for readability now. Both the "how many
     to take" count and which SPECIFIC game gets flagged come from the smooth curve
     (predict(), see its docstring): "how many" sums 1-predict() at the game's real market
-    spread; "which one" ranks games within a bucket by predict() evaluated at the market
-    spread nudged by how much ELWAY's avg-points model disagrees in the dog's favor (1
-    ELWAY point of disagreement == 1 point of market spread — an even trade with no
-    evidence yet to weight it otherwise; ELWAY currently just tracks the market closely,
-    see the week 2 retrospective, so revisit this weighting once it has a longer track
-    record). ELWAY only shifts the ranking, never the "how many" count.
+    spread. "Which one" ranks games within a bucket by predict() at an ELWAY-blended
+    margin instead: ELWAY_BLEND_WEIGHT of the way from the market's own favorite-margin
+    toward ELWAY's margin for that same team (0.5 = an even-handed blend, not a full
+    swap to ELWAY's number — its avg-points model has one week of track record so far,
+    closely tracking the market and wrong the one time it substantially disagreed; see
+    the week 2 retrospective, and revisit this weight once it has a longer record). The
+    blend is a signed margin with no floor — _predict_signed() lets it cross zero and
+    keep differentiating games past "toss-up," which matters in practice: an earlier
+    version clamped the magnitude at 0 instead, and multiple games whose blend crossed
+    zero all landed on the identical clamped value, silently re-tied and broken by list
+    order (exactly the arbitrary-order problem this ranking exists to avoid). ELWAY only
+    shifts the ranking, never the "how many" count.
     """
     elway_map = elway_map or {}
     out: dict[str, list[dict]] = {}
@@ -373,16 +396,15 @@ def week_budget(
             if v is None:
                 continue
 
-            # How much better ELWAY thinks the dog does than the market implies, in
-            # points (positive = ELWAY likes the dog more than the market does).
-            dog_edge = 0.0
+            # Blend the market favorite's margin toward ELWAY's margin for that same
+            # team (positive = favored by that many points; can go negative, meaning
+            # that team is now the modeled underdog).
+            eff_margin = abs(sp)
             el = elway_map.get(g["game_id"])
             if el and el.get("spread_home") is not None:
-                dog_is_home = not home_fav
-                market_dog_margin = -abs(sp)
-                elway_dog_margin = -el["spread_home"] if dog_is_home else el["spread_home"]
-                dog_edge = elway_dog_margin - market_dog_margin
-            rank_v = predict(dist, max(0.0, abs(sp) - dog_edge), home_fav, week, field)
+                elway_fav_margin = -el["spread_home"] if home_fav else el["spread_home"]
+                eff_margin = (1 - ELWAY_BLEND_WEIGHT) * abs(sp) + ELWAY_BLEND_WEIGHT * elway_fav_margin
+            rank_v = _predict_signed(dist, home_fav, eff_margin, week, field)
             if rank_v is None:
                 rank_v = v
 

@@ -69,6 +69,17 @@ const History = {
     return Math.min(0.995, Math.max(0.005, p));
   },
 
+  // P(the team on homeFavSide, home if true else away, wins/covers) from a SIGNED margin
+  // for that side (negative = actually the worse side by that many, evaluated by flipping
+  // to the other side's curve). Mirror of _predict_signed in nflhub/sources/history.py —
+  // see that docstring for why: a floor-clamped magnitude let an ELWAY/market blend
+  // collapse multiple different games to the identical toss-up value and re-tie them.
+  predictSigned(dist, homeFavSide, signedMargin, week, field) {
+    if (signedMargin >= 0) return this.predict(dist, signedMargin, homeFavSide, week, field);
+    const pOther = this.predict(dist, -signedMargin, !homeFavSide, week, field);
+    return pOther == null ? null : 1 - pOther;
+  },
+
   // Poisson-binomial mean/sd of favorite SU wins and ATS covers over this week's games.
   expected(games, odds, dist, week) {
     let suM = 0, suV = 0, atsM = 0, atsV = 0, k = 0;
@@ -141,15 +152,17 @@ const History = {
       const v = this.predict(d, Math.abs(sp), homeFav, ctx.week, F);
       if (v == null) continue;
 
-      let dogEdge = 0;
+      // Blend the market favorite's margin toward ELWAY's margin for that same team
+      // (positive = favored by that many; can go negative, meaning that team is now the
+      // modeled underdog). ELWAY_BLEND_WEIGHT=0.5: an even-handed blend, not a full swap
+      // to ELWAY's own number — see nflhub/sources/history.py week_budget for why.
+      let effMargin = Math.abs(sp);
       const el = elway[g.game_id];
       if (el && el.spread_home != null) {
-        const dogIsHome = !homeFav;
-        const marketDogMargin = -Math.abs(sp);
-        const elwayDogMargin = dogIsHome ? -el.spread_home : el.spread_home;
-        dogEdge = elwayDogMargin - marketDogMargin;
+        const elwayFavMargin = homeFav ? -el.spread_home : el.spread_home;
+        effMargin = 0.5 * Math.abs(sp) + 0.5 * elwayFavMargin;
       }
-      const rankV = this.predict(d, Math.max(0, Math.abs(sp) - dogEdge), homeFav, ctx.week, F) ?? v;
+      const rankV = this.predictSigned(d, homeFav, effMargin, ctx.week, F) ?? v;
 
       // Display bucket only: BUCKETS/bucketLabel assumes clean half-point spreads (true
       // for a single book's line, not necessarily for a cross-book average, e.g. 2.75).
