@@ -16,17 +16,17 @@ const PICK_MODES = {
   },
 };
 
-// Which games the budget model flags this week, for the per-game "budget dog" chip and
-// narrative — delegates to History.computeBudget so this can never disagree with the
-// Upset Budget table itself (same ranking, same data).
-function computeFlaggedGameIds(ctx) {
+// gameId -> { rank, n, taken } for every game in its spread bucket, for the per-game
+// "budget dog" chip and narrative — delegates to History.computeBudget so this can never
+// disagree with the Upset Budget table itself (same ranking, same data).
+function computeBucketRanks(ctx) {
   const budget = History.computeBudget(ctx, 'ml');
-  return budget ? budget.flaggedIds : new Set();
+  return budget ? budget.rankByGame : {};
 }
 
 // Rule-based (not AI-generated) explanation: every clause traces to a real number already
 // on the card, so it's reproducible and never invents anything. Deliberately terse.
-function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLabel, flagged, edgeRec }) {
+function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLabel, bucketRank, edgeRec }) {
   const parts = [`${favTeam} favored by ${marketMargin} over ${dogTeam}.`];
 
   if (el && el.home_win_prob != null && el.away_win_prob != null) {
@@ -48,8 +48,13 @@ function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLa
       : `Favorites this size (${bucketLabel}) have won ${suPct}% of the time historically.`);
   }
 
-  if (flagged) {
-    parts.push(`This week's upset-budget model flags ${dogTeam} as one of the better fade candidates in this bucket.`);
+  if (bucketRank) {
+    parts.push(bucketRank.n > 1
+      ? `Ranked #${bucketRank.rank} of ${bucketRank.n} live dogs in this bucket (by market spread, ELWAY-adjusted).`
+      : `Only dog in this bucket this week.`);
+    if (bucketRank.taken) {
+      parts.push(`This week's upset-budget model flags ${dogTeam} as one of its picks from this bucket.`);
+    }
   }
 
   if (edgeRec && edgeRec.recommendation === 'FADE') {
@@ -75,7 +80,7 @@ const Pickem = {
     const picks = ctx[M.picksKey] || {};
     const edgeLog = ctx.edgeLog || {};
     const elway = ctx.elway || {};
-    const flaggedIds = computeFlaggedGameIds(ctx);
+    const bucketRanks = computeBucketRanks(ctx);
 
     const cards = games.map(g => {
       const o = odds[g.game_id] || {};
@@ -106,9 +111,10 @@ const Pickem = {
         data-team="${team}" data-spread="${hasLine ? o.spread : ''}"
         class="${mine === team ? 'primary' : ''}">${team}</button>`;
 
+      const bucketRank = bucketRanks[g.game_id] || null;
       const narrative = hasLine
         ? buildNarrative({ favTeam, dogTeam, marketMargin: Math.abs(o.spread), el, histCell,
-                           bucketLabel, flagged: flaggedIds.has(g.game_id), edgeRec: hasEdge ? edgeRec : null })
+                           bucketLabel, bucketRank, edgeRec: hasEdge ? edgeRec : null })
         : 'No market line yet for this game.';
 
       const edgeChip = hasEdge
@@ -122,7 +128,7 @@ const Pickem = {
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
           <span class="matchup">${g.away}${wchip(g.away)} @ ${g.home}${wchip(g.home)}</span>
           ${stateChip}
-          ${flaggedIds.has(g.game_id) ? `<span class="chip warn" title="Upset-budget flags this game's dog">budget dog</span>` : ''}
+          ${bucketRank ? `<span class="chip${bucketRank.taken ? ' warn' : ''}" title="Rank ${bucketRank.rank} of ${bucketRank.n} in this spread bucket, by market spread + ELWAY-adjusted rank">${bucketRank.taken ? 'budget dog ' : 'bucket '}#${bucketRank.rank}/${bucketRank.n}</span>` : ''}
         </div>
         <div class="game-card-body">
           <div class="stat-block">

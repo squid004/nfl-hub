@@ -141,13 +141,19 @@ const History = {
     let totN = 0, totPrimary = 0, totOther = 0, totPicked = 0, totYourDog = 0;
     const binStats = [];
     const flaggedIds = new Set();
+    const rankByGame = {}; // gameId -> { rank, n, taken } — every game in its bucket, not just flagged
     const bins = d.buckets.map(lab => {
       const gs = groups[lab].slice().sort((a, b) => a.adjSpread - b.adjSpread); // most live dog first
       const n = gs.length;
       const primary = gs.reduce((s, x) => s + (1 - x[F]), 0);
       const other = gs.reduce((s, x) => s + (x[O] != null ? 1 - x[O] : 0), 0);
       const take = Math.round(primary);
-      gs.forEach((x, i) => { x.taken = i < take; if (x.taken) flaggedIds.add(x.gameId); });
+      gs.forEach((x, i) => {
+        x.rank = i + 1;            // 1 = most live dog in this bucket, all games ranked
+        x.taken = i < take;
+        if (x.taken) flaggedIds.add(x.gameId);
+        rankByGame[x.gameId] = { rank: x.rank, n, taken: x.taken };
+      });
       const pickedN = gs.filter(x => x.picked).length;
       const yourDog = gs.filter(x => x.picked && x.picked === x.dog).length;
       totN += n; totPrimary += primary; totOther += other;
@@ -156,7 +162,7 @@ const History = {
       return { lab, gs, n, primary, take };
     });
 
-    return { bins, binStats, totN, totPrimary, totOther, totPicked, totYourDog, flaggedIds };
+    return { bins, binStats, totN, totPrimary, totOther, totPicked, totYourDog, flaggedIds, rankByGame };
   },
 
   // "budget": this week's games grouped by spread bin, with how many dog picks to make.
@@ -170,11 +176,13 @@ const History = {
     const { bins, binStats, totN, totPrimary, totOther, totPicked, totYourDog } = budget;
 
     const rows = bins.map(({ lab, gs, n, primary, take }) => {
+      // Sorted by adjSpread already (most live first), so rank order = list order.
       const list = gs.map(x => {
         const dogHit = x.picked && x.picked === x.dog;
         return `<span class="dogpick${x.taken ? ' take' : ''}${dogHit ? ' on' : ''}" ` +
-          `title="${x.fav} favored — ${M.favVerb} ${Math.round(x[F] * 100)}% historically (market spread-adjusted rank)">` +
-          `${x.dog} ${x.dogHome ? 'H' : 'A'}${x.taken ? ' ✓' : ''}</span>`;
+          `title="${x.fav} favored — ${M.favVerb} ${Math.round(x[F] * 100)}% historically for this bucket; ` +
+          `#${x.rank} of ${n} in this bucket by market-spread + ELWAY-adjusted rank">` +
+          `#${x.rank} ${x.dog} ${x.dogHome ? 'H' : 'A'}${x.taken ? ' ✓' : ''}</span>`;
       }).join(' ');
       return `<tr>
         <td>${lab}</td>
