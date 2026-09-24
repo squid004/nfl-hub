@@ -45,11 +45,16 @@ const Odds = {
       const el = (ctx.elway || {})[g.game_id] || {};
       const state = g.state === 'post' ? `<span class="muted">(${g.away_score}-${g.home_score} F)</span>`
         : g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
+      const favTeam = o.spread != null ? (o.spread <= 0 ? g.home : g.away) : null;
+      const elwayFlip = elwayFullDisagree(el, g.home, g.away, favTeam);
+      const elwaySpreadCell = elwayFlip
+        ? `<td class="elway-flip" title="ELWAY's model favors the OTHER team entirely">${signed(el.spread_home)}</td>`
+        : `<td class="muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>`;
       return `<tr>
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
         <td>${g.away} @ ${g.home} ${state}</td>
         <td class="muted">${signed(o.spread)}</td>
-        <td class="muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>
+        ${elwaySpreadCell}
         <td class="muted">${o.total ?? '—'}</td>
         <td class="muted">${el.total ?? '—'}</td>
         <td class="num muted">${o.ml_away ?? '—'}</td>
@@ -95,7 +100,9 @@ const Odds = {
           <th>Book</th></tr></thead>
           <tbody>${rows}</tbody></table>
         <p class="tablefoot muted">ELWAY columns come from a personal avg-points model
-          (Google Sheet) — compare them against the paired market column, not each other.</p>
+          (Google Sheet) — compare them against the paired market column, not each other.
+          <span class="elway-flip">Highlighted</span> ELWAY Spread = ELWAY's model favors
+          the other team entirely, not just by a smaller or larger margin.</p>
       </div>
       <div class="panel">
         <h2>Shop the line</h2>

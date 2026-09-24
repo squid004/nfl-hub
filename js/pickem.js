@@ -24,6 +24,16 @@ function computeBucketRanks(ctx) {
   return budget ? budget.rankByGame : {};
 }
 
+// True when ELWAY's own favorite is the OTHER team entirely — a full side flip, not just
+// a smaller/larger margin in the same direction (which the narrative already covers via
+// "ELWAY agrees, projecting ... by about ..."). Shared by the ML cards, the ATS table, and
+// the Parlays odds board so the same games get flagged everywhere ELWAY is shown.
+function elwayFullDisagree(el, home, away, favTeam) {
+  if (!el || el.home_win_prob == null || el.away_win_prob == null || !favTeam) return false;
+  const elwayFavTeam = el.home_win_prob > el.away_win_prob ? home : away;
+  return elwayFavTeam !== favTeam;
+}
+
 // Rule-based (not AI-generated) explanation: every clause traces to a real number already
 // on the card, so it's reproducible and never invents anything. Deliberately terse.
 function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLabel, bucketRank, edgeRec }) {
@@ -110,6 +120,7 @@ const Pickem = {
       const bucketLabel = bucketRank ? bucketRank.lab : (hasLine ? History.bucketLabel(Math.abs(o.spread)) : null);
       const edgeRec = edgeLog[g.game_id];
       const hasEdge = edgeRec && edgeRec.recommendation && edgeRec.recommendation !== 'NO_DATA';
+      const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
 
       const btn = team => `<button data-act="${M.act}" data-week="${week}" data-game="${g.game_id}"
         data-team="${team}" data-spread="${hasLine ? o.spread : ''}"
@@ -133,6 +144,7 @@ const Pickem = {
           ${stateChip}
           ${bucketLabel ? `<span class="chip" title="Spread bucket: ${bucketLabel}">${bucketLabel}</span>` : ''}
           ${bucketRank ? `<span class="chip${bucketRank.taken ? ' warn' : ''}" title="Rank ${bucketRank.rank} of ${bucketRank.n} in this spread bucket, by market spread + ELWAY-adjusted rank">${bucketRank.taken ? 'budget dog ' : 'bucket '}#${bucketRank.rank}/${bucketRank.n}</span>` : ''}
+          ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
         </div>
         <div class="game-card-body">
           <div class="stat-block">
@@ -216,12 +228,17 @@ const Pickem = {
         data-team="${team}" data-spread="${hasLine ? o.spread : ''}"
         class="${mine === team ? 'primary' : ''}">${team}${lineFor(team)}</button>`;
 
+      const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
+      const elwaySpreadCell = elwayFlip
+        ? `<td class="num elway-flip" title="ELWAY's model favors the OTHER team entirely: ${signed(el.spread_home)}">${signed(el.spread_home)}</td>`
+        : `<td class="num muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>`;
+
       return `<tr>
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
         <td>${g.away}${wchip(g.away)}</td>
         <td>${g.home}${wchip(g.home)}</td>
         <td class="muted">${favLabel}</td>
-        <td class="num muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>
+        ${elwaySpreadCell}
         <td class="muted">${o.total ?? '—'}</td>
         <td class="num muted">${pct(o.implied_away)}</td>
         <td class="num muted">${pct(o.implied_home)}</td>
