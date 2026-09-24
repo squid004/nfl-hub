@@ -46,6 +46,29 @@ const History = {
     return (wk[side] && wk[side][lab]) || (wk.all && wk.all[lab]) || null;
   },
 
+  // P(favorite wins SU / covers) from the smooth curve at this exact spread, with the
+  // key-number correction at 3/7 applied. Mirror of predict() in nflhub/sources/history.py
+  // — see that docstring for why a smooth curve plus an explicit key-number bump, instead
+  // of either pure discrete buckets or a pure smooth curve alone.
+  predict(dist, absSpread, homeFav, week, field) {
+    if (!dist || !dist.curves) return null;
+    const wkb = this.weekBucket(week);
+    const side = homeFav ? 'home' : 'away';
+    const curves = dist.curves[wkb] || {};
+    const coef = (curves[side] && curves[side][field]) || (curves.all && curves.all[field]);
+    if (!coef) return null;
+    const [a, b] = coef;
+    let p = 1 / (1 + Math.exp(-(a + b * absSpread)));
+    for (const kn of [3, 7]) {
+      if (Math.abs(absSpread - kn) < 0.01) {
+        const adj = (((dist.key_adjustments || {})[wkb] || {})[side] || {})[field]?.[String(kn)];
+        if (adj != null) p += adj;
+        break;
+      }
+    }
+    return Math.min(0.995, Math.max(0.005, p));
+  },
+
   // Poisson-binomial mean/sd of favorite SU wins and ATS covers over this week's games.
   expected(games, odds, dist, week) {
     let suM = 0, suV = 0, atsM = 0, atsV = 0, k = 0;
@@ -88,16 +111,16 @@ const History = {
   },
 
   // Shared by renderBins (the Upset Budget table) and Pickem's per-game "budget dog"
-  // chip, so both always agree on which games are flagged. Bucket ASSIGNMENT and the
-  // "how many to take" count come from the shrunk historical rate for (week1/rest,
-  // home/away favorite, bucket) — every game with the favorite on the same side scores
-  // identically there, so which SPECIFIC games get flagged is ranked by an "adjusted
-  // spread" instead: the game's own market spread size (smaller = more live dog, the
-  // same logic that defines the buckets, just continuous), preferring the cross-book
-  // average (ctx.bestPrice) over the single-book line when available, nudged by how much
-  // ELWAY's avg-points model disagrees in the dog's favor (1 ELWAY point == 1 spread
-  // point — an even trade with no evidence yet to weight it otherwise). Server-side twin:
-  // nflhub/sources/history.py week_budget.
+  // chip, so both always agree on which games are flagged. Bucket ASSIGNMENT (which row of
+  // the table a game groups under) is discrete, for display only. Both the "how many to
+  // take" count and which SPECIFIC game gets flagged come from the smooth curve
+  // (this.predict(), see its comment) instead: "how many" sums 1-predict() at the game's
+  // real market spread (preferring the cross-book average, ctx.bestPrice, over the
+  // single-book line when available); "which one" ranks games within a bucket by
+  // predict() evaluated at the market spread nudged by how much ELWAY's avg-points model
+  // disagrees in the dog's favor (1 ELWAY point == 1 spread point — an even trade with no
+  // evidence yet to weight it otherwise). Server-side twin: nflhub/sources/history.py
+  // week_budget.
   computeBudget(ctx, mode = 'ml') {
     const M = HIST_MODES[mode];
     const d = ctx.hist;
@@ -115,8 +138,8 @@ const History = {
       const bp = bestPrice[g.game_id];
       const sp = (bp && bp.avg_spread_home != null) ? bp.avg_spread_home : o.spread;
       const homeFav = sp <= 0;
-      const cell = this.lookup(d, Math.abs(sp), homeFav, ctx.week);
-      if (!cell || cell[F] == null) continue;
+      const v = this.predict(d, Math.abs(sp), homeFav, ctx.week, F);
+      if (v == null) continue;
 
       let dogEdge = 0;
       const el = elway[g.game_id];
@@ -126,15 +149,21 @@ const History = {
         const elwayDogMargin = dogIsHome ? -el.spread_home : el.spread_home;
         dogEdge = elwayDogMargin - marketDogMargin;
       }
+      const rankV = this.predict(d, Math.max(0, Math.abs(sp) - dogEdge), homeFav, ctx.week, F) ?? v;
 
-      groups[this.bucketLabel(Math.abs(sp))].push({
+      // Display bucket only: BUCKETS/bucketLabel assumes clean half-point spreads (true
+      // for a single book's line, not necessarily for a cross-book average, e.g. 2.75).
+      const dispSpread = Math.round(Math.abs(sp) * 2) / 2;
+      const cell = this.lookup(d, dispSpread, homeFav, ctx.week);
+
+      groups[this.bucketLabel(dispSpread)].push({
         gameId: g.game_id,
         fav: homeFav ? g.home : g.away,
         dog: homeFav ? g.away : g.home,
         dogHome: !homeFav,
-        su: cell.su, ats: cell.ats,
+        su: cell ? cell.su : null, ats: cell ? cell.ats : null,
         picked: (picks[g.game_id] || {}).pick,
-        adjSpread: Math.abs(sp) - dogEdge,
+        v, rankV,
       });
     }
 
@@ -143,9 +172,9 @@ const History = {
     const flaggedIds = new Set();
     const rankByGame = {}; // gameId -> { rank, n, taken } — every game in its bucket, not just flagged
     const bins = d.buckets.map(lab => {
-      const gs = groups[lab].slice().sort((a, b) => a.adjSpread - b.adjSpread); // most live dog first
+      const gs = groups[lab].slice().sort((a, b) => a.rankV - b.rankV); // most live dog (lowest fav prob) first
       const n = gs.length;
-      const primary = gs.reduce((s, x) => s + (1 - x[F]), 0);
+      const primary = gs.reduce((s, x) => s + (1 - x.v), 0);
       const other = gs.reduce((s, x) => s + (x[O] != null ? 1 - x[O] : 0), 0);
       const take = Math.round(primary);
       gs.forEach((x, i) => {
@@ -176,11 +205,12 @@ const History = {
     const { bins, binStats, totN, totPrimary, totOther, totPicked, totYourDog } = budget;
 
     const rows = bins.map(({ lab, gs, n, primary, take }) => {
-      // Sorted by adjSpread already (most live first), so rank order = list order.
+      // Sorted by rankV already (most live first), so rank order = list order.
       const list = gs.map(x => {
         const dogHit = x.picked && x.picked === x.dog;
         return `<span class="dogpick${x.taken ? ' take' : ''}${dogHit ? ' on' : ''}" ` +
-          `title="${x.fav} favored — ${M.favVerb} ${Math.round(x[F] * 100)}% historically for this bucket; ` +
+          `title="${x.fav} favored — ${M.favVerb} ${Math.round(x.v * 100)}% by this exact spread's smooth curve ` +
+          `(bucket average ${x[F] != null ? Math.round(x[F] * 100) + '%' : '—'}); ` +
           `#${x.rank} of ${n} in this bucket by market-spread + ELWAY-adjusted rank">` +
           `#${x.rank} ${x.dog} ${x.dogHome ? 'H' : 'A'}${x.taken ? ' ✓' : ''}</span>`;
       }).join(' ');
@@ -236,9 +266,11 @@ const History = {
     host.innerHTML = `
       <div class="panel">
         <h2>${M.budgetTitle} by spread bin &mdash; Week ${ctx.week}</h2>
-        <p class="muted">This week's games grouped by the favorite's spread. <strong>${M.budgetVerb}</strong>
-          is the bin's historical ${M.dogWord} rate applied to this week's games, rounded.
-          The ✓ marks the least-safe favorites in each bin. Dogs tagged H (home) / A (away).</p>
+        <p class="muted">This week's games grouped by the favorite's spread for display —
+          <strong>${M.budgetVerb}</strong> sums each game's own ${M.dogWord} rate from a
+          smooth curve fit to spread size (not a shared bucket average), with a small
+          correction at key numbers 3/7 where NFL final margins cluster. The ✓ marks the
+          games it ranks most live within their bin, in order. Dogs tagged H (home) / A (away).</p>
         ${lockLine}
         <table><thead><tr><th>Spread bin</th><th class="num">Games</th>
           <th class="num">${M.budgetCol}</th><th class="num">${M.budgetVerb}</th><th>${M.fadeLabel}</th></tr></thead>

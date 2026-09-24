@@ -5,7 +5,20 @@ each week's spreads to answer "how many games should I expect to be upsets?":
 
 - per spread-size bucket x week-bucket (Week 1 vs Weeks 2+) x home/away favorite:
   P(favorite wins straight up) and P(favorite covers), shrunk toward the all-weeks rate
-  for that bucket so thin cells don't read as 0% / 100%.
+  for that bucket so thin cells don't read as 0% / 100%. Used for the descriptive History
+  panels (js/history.js render()) — grouping games into bins is still the clearest way to
+  *show* this trend, even though it's no longer how ranking decisions get made (below).
+- a smooth logistic curve P(favorite wins|covers) = sigmoid(a + b*abs_spread), fit per
+  (week1/rest, home/away favorite) via IRLS on the raw per-game data (pure Python, no
+  numpy — 2-parameter fit, closed-form per iteration). This is what week_budget() actually
+  uses now: the discrete buckets above treat a -3.5 and a -6.0 favorite as identical
+  (same bucket, same rate), which was never really true, it just wasn't captured. A single
+  continuous curve fixes that everywhere *except* one real effect: NFL final margins
+  cluster hard at 3 and 7 (a field goal, a touchdown+XP), so favorites laying exactly 3 or
+  7 cover at a measurably different rate than neighboring numbers — a smooth monotonic
+  curve can't represent that bump by construction. `key_adjustments` is a small, sample-
+  size-shrunk additive correction at exactly 3 and 7 so that real effect survives the move
+  to a continuous model instead of getting smoothed away.
 - pooled Week-1 vs Weeks-2+ summary (large n, matches published analyses).
 - a per-week series so the week-over-week trend is visible.
 
@@ -18,9 +31,10 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import math
 from collections import defaultdict
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 import requests
 
@@ -30,8 +44,10 @@ GAMES_CSV = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/game
 TIMEOUT = 30
 MIN_SEASON = 2007
 SHRINK_K = 40  # pseudo-count pulling a bucket cell toward its all-weeks prior
+KEY_NUMBERS = (3.0, 7.0)  # NFL final-margin clustering: a field goal, a TD+XP
 
 # (lo, hi, label) on the absolute spread; 0.5-pt increments, so these tile the line cleanly.
+# Display/grouping only now (see module docstring) — ranking uses the smooth curve below.
 BUCKETS = [(0.0, 2.5, "≤2.5"), (3.0, 3.0, "3"), (3.5, 6.0, "3.5–6"),
            (6.5, 9.5, "6.5–9.5"), (10.0, 99.0, "10+")]
 BUCKET_LABELS = [b[2] for b in BUCKETS]
@@ -52,6 +68,48 @@ def _rate(w: float, n: float) -> float | None:
     return round(w / n, 4) if n else None
 
 
+def _sigmoid(z: float) -> float:
+    # Numerically stable both directions.
+    if z >= 0:
+        return 1.0 / (1.0 + math.exp(-z))
+    ez = math.exp(z)
+    return ez / (1.0 + ez)
+
+
+def _fit_logistic(points: list[tuple[float, float]], iters: int = 25) -> Optional[tuple[float, float]]:
+    """1-predictor logistic regression p = sigmoid(a + b*x) via IRLS. `points` = [(x, y)],
+    y in {0,1}. Each iteration is a closed-form 2x2 weighted-least-squares solve (Cramer's
+    rule) on the IRLS working response — no matrix library needed for a single predictor.
+    Returns None if there's nothing to fit (e.g. an empty side/week split)."""
+    n = len(points)
+    if n < 10:
+        return None
+    a, b = 0.0, 0.0
+    for _ in range(iters):
+        Sw = Swx = Swxx = Swz = Swxz = 0.0
+        for x, y in points:
+            eta = a + b * x
+            p = _sigmoid(eta)
+            w = max(p * (1 - p), 1e-10)
+            z = eta + (y - p) / w
+            Sw += w; Swx += w * x; Swxx += w * x * x
+            Swz += w * z; Swxz += w * x * z
+        det = Sw * Swxx - Swx * Swx
+        if abs(det) < 1e-12:
+            break
+        new_a = (Swxx * Swz - Swx * Swxz) / det
+        new_b = (Sw * Swxz - Swx * Swz) / det
+        converged = abs(new_a - a) < 1e-9 and abs(new_b - b) < 1e-9
+        a, b = new_a, new_b
+        if converged:
+            break
+    return round(a, 6), round(b, 6)
+
+
+def _key_cell() -> dict[str, float]:
+    return {"su_w": 0.0, "su_n": 0.0, "ats_w": 0.0, "ats_n": 0.0}
+
+
 def fetch_games() -> list[dict[str, str]]:
     resp = requests.get(GAMES_CSV, timeout=TIMEOUT)
     resp.raise_for_status()
@@ -64,6 +122,11 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
     byweek: dict[int, dict] = defaultdict(_cell)   # week int -> all sides
     byweek_side: dict[tuple, dict] = defaultdict(_cell)  # (week, fav side) -> all bins
     pooled: dict[tuple, dict] = defaultdict(_cell) # (wk_bucket, side) -> big-n summary
+    # raw (abs_spread, outcome) pairs for the smooth curve fit, keyed (wk_bucket, side);
+    # "all" gets every game regardless of side, as a fallback for thin side-specific fits.
+    raw_su: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
+    raw_ats: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
+    key_data: dict[tuple, dict] = defaultdict(_key_cell)  # (wk_bucket, side, key_number)
     max_season = min_season
 
     for r in rows:
@@ -121,6 +184,21 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
             if ats is not None:
                 c["ats_w"] += ats; c["ats_n"] += 1
 
+        # smooth-curve fit inputs: every game feeds "all", plus its own side unless neutral
+        curve_keys = [(wkb, "all")]
+        if not neutral:
+            curve_keys.append((wkb, side))
+        for ck in curve_keys:
+            raw_su[ck].append((abs_s, su))
+            if ats is not None:
+                raw_ats[ck].append((abs_s, ats))
+            for kn in KEY_NUMBERS:
+                if abs(abs_s - kn) < 0.01:
+                    kc = key_data[(ck[0], ck[1], kn)]
+                    kc["su_w"] += su; kc["su_n"] += 1
+                    if ats is not None:
+                        kc["ats_w"] += ats; kc["ats_n"] += 1
+
         p = prior[lab]
         p["su_w"] += su; p["su_n"] += 1
         if ats is not None:
@@ -158,6 +236,33 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
             "ats": shrunk(c, lab, "ats"),
             "n": int(c["su_n"]),
         }
+
+    # smooth curve: p(field) = sigmoid(a + b*abs_spread), per (wk_bucket, side)
+    curves: dict[str, Any] = {"week1": {}, "rest": {}}
+    curve_coef: dict[tuple, dict[str, Optional[tuple[float, float]]]] = {}
+    for ck in set(raw_su) | set(raw_ats):
+        wkb, side = ck
+        coef = {"su": _fit_logistic(raw_su.get(ck, [])), "ats": _fit_logistic(raw_ats.get(ck, []))}
+        curve_coef[ck] = coef
+        curves[wkb][side] = {
+            field: (list(c) if c else None) for field, c in coef.items()
+        }
+
+    # key-number correction: shrink the raw empirical rate at exactly 3 / 7 toward the
+    # smooth curve's OWN prediction there (not the bucket prior — the curve already IS
+    # the model), so the adjustment is the part the curve structurally can't capture.
+    key_adjustments: dict[str, Any] = {"week1": {}, "rest": {}}
+    for (wkb, side, kn), kc in key_data.items():
+        coef = curve_coef.get((wkb, side)) or {}
+        out_side = key_adjustments[wkb].setdefault(side, {})
+        for field in ("su", "ats"):
+            ab = coef.get(field)
+            w, n = kc[f"{field}_w"], kc[f"{field}_n"]
+            if not ab or not n:
+                continue
+            predicted = _sigmoid(ab[0] + ab[1] * kn)
+            shrunk_rate = (w + SHRINK_K * predicted) / (n + SHRINK_K)
+            out_side.setdefault(field, {})[str(int(kn))] = round(shrunk_rate - predicted, 4)
 
     summary: dict[str, Any] = {}
     for wkb in ("week1", "rest"):
@@ -199,6 +304,8 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
         "shrink_k": SHRINK_K,
         "buckets": BUCKET_LABELS,
         "cells": cells,
+        "curves": curves,
+        "key_adjustments": key_adjustments,
         "summary": summary,
         "byweek": week_series,
     }
@@ -212,6 +319,26 @@ def _lookup(dist: dict, abs_spread: float, home_fav: bool, week: int) -> dict | 
     return wk.get(side, {}).get(lab) or wk.get("all", {}).get(lab)
 
 
+def predict(dist: dict, abs_spread: float, home_fav: bool, week: int, field: str) -> Optional[float]:
+    """P(favorite wins SU / covers) from the smooth curve at this exact spread, with the
+    key-number correction applied at 3 and 7. Mirror: History.predict in js/history.js."""
+    wkb = "week1" if week == 1 else "rest"
+    side = "home" if home_fav else "away"
+    curves = dist.get("curves") or {}
+    coef = (curves.get(wkb, {}).get(side, {}) or {}).get(field) \
+        or (curves.get(wkb, {}).get("all", {}) or {}).get(field)
+    if not coef:
+        return None
+    p = _sigmoid(coef[0] + coef[1] * abs_spread)
+    for kn in KEY_NUMBERS:
+        if abs(abs_spread - kn) < 0.01:
+            adj = (dist.get("key_adjustments") or {}).get(wkb, {}).get(side, {}).get(field, {}).get(str(int(kn)))
+            if adj is not None:
+                p += adj
+            break
+    return round(min(0.995, max(0.005, p)), 4)
+
+
 def week_budget(
     dist: dict, week: int, games: list[dict], odds_map: dict[str, dict],
     elway_map: dict[str, dict] | None = None,
@@ -221,19 +348,16 @@ def week_budget(
     Server-side twin of History.renderBins in js/history.js so the suggestion can be
     frozen into budget_snapshot for end-of-season analysis.
 
-    Bucket ASSIGNMENT and the "how many to take" count both come from the shrunk
-    historical rate for (week1/rest, home/away favorite, bucket) — unchanged. Which
-    SPECIFIC games within a bucket get flagged, though, used to be an unresolved tie:
-    every game with the favorite on the same side scores identically on that historical
-    rate (it doesn't look at the exact spread), so ties were broken by schedule order —
-    not by anything about the matchup. Ranking now uses an "adjusted spread" instead:
-    the game's own market spread size (smaller = more live dog, just extending the same
-    logic that defines the buckets themselves to a continuous scale), nudged by how much
-    ELWAY's avg-points model disagrees in the dog's favor when `elway_map` has this game
-    (1 ELWAY point of disagreement == 1 point of market spread — an even trade with no
+    Bucket ASSIGNMENT (which row of the table a game displays under) still comes from the
+    discrete spread buckets — that's just grouping for readability now. Both the "how many
+    to take" count and which SPECIFIC game gets flagged come from the smooth curve
+    (predict(), see its docstring): "how many" sums 1-predict() at the game's real market
+    spread; "which one" ranks games within a bucket by predict() evaluated at the market
+    spread nudged by how much ELWAY's avg-points model disagrees in the dog's favor (1
+    ELWAY point of disagreement == 1 point of market spread — an even trade with no
     evidence yet to weight it otherwise; ELWAY currently just tracks the market closely,
     see the week 2 retrospective, so revisit this weighting once it has a longer track
-    record).
+    record). ELWAY only shifts the ranking, never the "how many" count.
     """
     elway_map = elway_map or {}
     out: dict[str, list[dict]] = {}
@@ -245,8 +369,8 @@ def week_budget(
                 continue
             sp = float(o["spread"])
             home_fav = sp <= 0
-            cell = _lookup(dist, abs(sp), home_fav, week)
-            if not cell or cell.get(field) is None:
+            v = predict(dist, abs(sp), home_fav, week, field)
+            if v is None:
                 continue
 
             # How much better ELWAY thinks the dog does than the market implies, in
@@ -258,29 +382,41 @@ def week_budget(
                 market_dog_margin = -abs(sp)
                 elway_dog_margin = -el["spread_home"] if dog_is_home else el["spread_home"]
                 dog_edge = elway_dog_margin - market_dog_margin
+            rank_v = predict(dist, max(0.0, abs(sp) - dog_edge), home_fav, week, field)
+            if rank_v is None:
+                rank_v = v
 
-            by_bin[_bucket(abs(sp))].append({
+            # Display bucket only: BUCKETS assumes clean half-point spreads (true for a
+            # single book's line, not necessarily for a cross-book average like
+            # avg_spread_home, e.g. 2.75) — round to the nearest half-point so every
+            # spread lands in a bucket. predict() above already used the exact value.
+            disp_spread = round(abs(sp) * 2) / 2
+            lab = _bucket(disp_spread)
+            if lab is None:
+                continue
+            hist_cell = _lookup(dist, disp_spread, home_fav, week) or {}
+            by_bin[lab].append({
                 "game_id": g["game_id"],
                 "fav": g["home"] if home_fav else g["away"],
                 "dog": g["away"] if home_fav else g["home"],
                 "dog_home": not home_fav,
-                "hist_su": cell.get("su"),
-                "hist_ats": cell.get("ats"),
-                "_v": cell[field],
-                "_adj_spread": abs(sp) - dog_edge,
+                "hist_su": hist_cell.get("su"),
+                "hist_ats": hist_cell.get("ats"),
+                "_v": v,
+                "_rank_v": rank_v,
             })
         rows: list[dict] = []
         tot_n = 0
         tot_exp = 0.0
         for lab in BUCKET_LABELS:
-            gs = sorted(by_bin[lab], key=lambda x: x["_adj_spread"])  # most live dog first
+            gs = sorted(by_bin[lab], key=lambda x: x["_rank_v"])  # most live dog (lowest fav prob) first
             n = len(gs)
             exp = sum(1 - x["_v"] for x in gs)
             take = round(exp)
             for i, x in enumerate(gs):
                 x["flagged"] = i < take
                 x.pop("_v")
-                x.pop("_adj_spread")
+                x.pop("_rank_v")
             tot_n += n
             tot_exp += exp
             rows.append({
