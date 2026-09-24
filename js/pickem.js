@@ -16,28 +16,12 @@ const PICK_MODES = {
   },
 };
 
-// Same "least-safe favorite per spread bin" ranking used by History.renderBins's budget
-// table, replayed here just to tag which game_ids it flagged — so the per-game narrative
-// can say "the budget likes this dog" without duplicating the table itself.
+// Which games the budget model flags this week, for the per-game "budget dog" chip and
+// narrative — delegates to History.computeBudget so this can never disagree with the
+// Upset Budget table itself (same ranking, same data).
 function computeFlaggedGameIds(ctx) {
-  const flagged = new Set();
-  const d = ctx.hist;
-  if (!d) return flagged;
-  const groups = {};
-  d.buckets.forEach(b => { groups[b] = []; });
-  for (const g of ctx.games) {
-    const o = ctx.odds[g.game_id];
-    if (!o || o.spread == null) continue;
-    const cell = History.lookup(d, Math.abs(o.spread), o.spread <= 0, ctx.week);
-    if (!cell || cell.su == null) continue;
-    groups[History.bucketLabel(Math.abs(o.spread))].push({ gameId: g.game_id, su: cell.su });
-  }
-  d.buckets.forEach(lab => {
-    const gs = groups[lab].slice().sort((a, b) => a.su - b.su); // weakest favorites first
-    const take = Math.round(gs.reduce((s, x) => s + (1 - x.su), 0));
-    gs.slice(0, take).forEach(x => flagged.add(x.gameId));
-  });
-  return flagged;
+  const budget = History.computeBudget(ctx, 'ml');
+  return budget ? budget.flaggedIds : new Set();
 }
 
 // Rule-based (not AI-generated) explanation: every clause traces to a real number already

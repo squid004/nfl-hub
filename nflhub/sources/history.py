@@ -212,12 +212,30 @@ def _lookup(dist: dict, abs_spread: float, home_fav: bool, week: int) -> dict | 
     return wk.get(side, {}).get(lab) or wk.get("all", {}).get(lab)
 
 
-def week_budget(dist: dict, week: int, games: list[dict], odds_map: dict[str, dict]) -> dict[str, list[dict]]:
+def week_budget(
+    dist: dict, week: int, games: list[dict], odds_map: dict[str, dict],
+    elway_map: dict[str, dict] | None = None,
+) -> dict[str, list[dict]]:
     """Per spread-bin "take N dogs" suggestion for this week, for both modes.
 
     Server-side twin of History.renderBins in js/history.js so the suggestion can be
     frozen into budget_snapshot for end-of-season analysis.
+
+    Bucket ASSIGNMENT and the "how many to take" count both come from the shrunk
+    historical rate for (week1/rest, home/away favorite, bucket) — unchanged. Which
+    SPECIFIC games within a bucket get flagged, though, used to be an unresolved tie:
+    every game with the favorite on the same side scores identically on that historical
+    rate (it doesn't look at the exact spread), so ties were broken by schedule order —
+    not by anything about the matchup. Ranking now uses an "adjusted spread" instead:
+    the game's own market spread size (smaller = more live dog, just extending the same
+    logic that defines the buckets themselves to a continuous scale), nudged by how much
+    ELWAY's avg-points model disagrees in the dog's favor when `elway_map` has this game
+    (1 ELWAY point of disagreement == 1 point of market spread — an even trade with no
+    evidence yet to weight it otherwise; ELWAY currently just tracks the market closely,
+    see the week 2 retrospective, so revisit this weighting once it has a longer track
+    record).
     """
+    elway_map = elway_map or {}
     out: dict[str, list[dict]] = {}
     for mode, field in (("ml", "su"), ("ats", "ats")):
         by_bin: dict[str, list[dict]] = {lab: [] for lab in BUCKET_LABELS}
@@ -230,6 +248,17 @@ def week_budget(dist: dict, week: int, games: list[dict], odds_map: dict[str, di
             cell = _lookup(dist, abs(sp), home_fav, week)
             if not cell or cell.get(field) is None:
                 continue
+
+            # How much better ELWAY thinks the dog does than the market implies, in
+            # points (positive = ELWAY likes the dog more than the market does).
+            dog_edge = 0.0
+            el = elway_map.get(g["game_id"])
+            if el and el.get("spread_home") is not None:
+                dog_is_home = not home_fav
+                market_dog_margin = -abs(sp)
+                elway_dog_margin = -el["spread_home"] if dog_is_home else el["spread_home"]
+                dog_edge = elway_dog_margin - market_dog_margin
+
             by_bin[_bucket(abs(sp))].append({
                 "game_id": g["game_id"],
                 "fav": g["home"] if home_fav else g["away"],
@@ -238,18 +267,20 @@ def week_budget(dist: dict, week: int, games: list[dict], odds_map: dict[str, di
                 "hist_su": cell.get("su"),
                 "hist_ats": cell.get("ats"),
                 "_v": cell[field],
+                "_adj_spread": abs(sp) - dog_edge,
             })
         rows: list[dict] = []
         tot_n = 0
         tot_exp = 0.0
         for lab in BUCKET_LABELS:
-            gs = sorted(by_bin[lab], key=lambda x: x["_v"])  # weakest favorites first
+            gs = sorted(by_bin[lab], key=lambda x: x["_adj_spread"])  # most live dog first
             n = len(gs)
             exp = sum(1 - x["_v"] for x in gs)
             take = round(exp)
             for i, x in enumerate(gs):
                 x["flagged"] = i < take
                 x.pop("_v")
+                x.pop("_adj_spread")
             tot_n += n
             tot_exp += exp
             rows.append({

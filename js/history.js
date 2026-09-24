@@ -87,52 +87,94 @@ const History = {
       `${e.k} → ~${covers} dog covers (±${e.atsSd.toFixed(1)}).${tilt}`;
   },
 
-  // "budget": this week's games grouped by spread bin, with how many dog picks to make.
-  renderBins(ctx, mode = 'ml') {
+  // Shared by renderBins (the Upset Budget table) and Pickem's per-game "budget dog"
+  // chip, so both always agree on which games are flagged. Bucket ASSIGNMENT and the
+  // "how many to take" count come from the shrunk historical rate for (week1/rest,
+  // home/away favorite, bucket) — every game with the favorite on the same side scores
+  // identically there, so which SPECIFIC games get flagged is ranked by an "adjusted
+  // spread" instead: the game's own market spread size (smaller = more live dog, the
+  // same logic that defines the buckets, just continuous), preferring the cross-book
+  // average (ctx.bestPrice) over the single-book line when available, nudged by how much
+  // ELWAY's avg-points model disagrees in the dog's favor (1 ELWAY point == 1 spread
+  // point — an even trade with no evidence yet to weight it otherwise). Server-side twin:
+  // nflhub/sources/history.py week_budget.
+  computeBudget(ctx, mode = 'ml') {
     const M = HIST_MODES[mode];
-    const host = document.getElementById(M.upsetsId);
-    if (!host) return;
     const d = ctx.hist;
-    if (!d) { host.innerHTML = ''; return; }
+    if (!d) return null;
     const F = M.field, O = M.other;
     const picks = ctx[M.picksKey] || {};
+    const bestPrice = ctx.bestPrice || {};
+    const elway = ctx.elway || {};
 
     const groups = {};
     d.buckets.forEach(b => { groups[b] = []; });
     for (const g of ctx.games) {
       const o = ctx.odds[g.game_id];
       if (!o || o.spread == null) continue;
-      const homeFav = o.spread <= 0;
-      const cell = this.lookup(d, Math.abs(o.spread), homeFav, ctx.week);
+      const bp = bestPrice[g.game_id];
+      const sp = (bp && bp.avg_spread_home != null) ? bp.avg_spread_home : o.spread;
+      const homeFav = sp <= 0;
+      const cell = this.lookup(d, Math.abs(sp), homeFav, ctx.week);
       if (!cell || cell[F] == null) continue;
-      groups[this.bucketLabel(Math.abs(o.spread))].push({
+
+      let dogEdge = 0;
+      const el = elway[g.game_id];
+      if (el && el.spread_home != null) {
+        const dogIsHome = !homeFav;
+        const marketDogMargin = -Math.abs(sp);
+        const elwayDogMargin = dogIsHome ? -el.spread_home : el.spread_home;
+        dogEdge = elwayDogMargin - marketDogMargin;
+      }
+
+      groups[this.bucketLabel(Math.abs(sp))].push({
+        gameId: g.game_id,
         fav: homeFav ? g.home : g.away,
         dog: homeFav ? g.away : g.home,
         dogHome: !homeFav,
         su: cell.su, ats: cell.ats,
         picked: (picks[g.game_id] || {}).pick,
+        adjSpread: Math.abs(sp) - dogEdge,
       });
     }
 
     let totN = 0, totPrimary = 0, totOther = 0, totPicked = 0, totYourDog = 0;
     const binStats = [];
-    const rows = d.buckets.map(lab => {
-      const gs = groups[lab].slice().sort((a, b) => a[F] - b[F]); // weakest favorites first
+    const flaggedIds = new Set();
+    const bins = d.buckets.map(lab => {
+      const gs = groups[lab].slice().sort((a, b) => a.adjSpread - b.adjSpread); // most live dog first
       const n = gs.length;
       const primary = gs.reduce((s, x) => s + (1 - x[F]), 0);
       const other = gs.reduce((s, x) => s + (x[O] != null ? 1 - x[O] : 0), 0);
       const take = Math.round(primary);
+      gs.forEach((x, i) => { x.taken = i < take; if (x.taken) flaggedIds.add(x.gameId); });
       const pickedN = gs.filter(x => x.picked).length;
       const yourDog = gs.filter(x => x.picked && x.picked === x.dog).length;
       totN += n; totPrimary += primary; totOther += other;
       totPicked += pickedN; totYourDog += yourDog;
       binStats.push({ lab, n, take, pickedN, yourDog });
-      const list = gs.map((x, i) => {
-        const t = i < take;
+      return { lab, gs, n, primary, take };
+    });
+
+    return { bins, binStats, totN, totPrimary, totOther, totPicked, totYourDog, flaggedIds };
+  },
+
+  // "budget": this week's games grouped by spread bin, with how many dog picks to make.
+  renderBins(ctx, mode = 'ml') {
+    const M = HIST_MODES[mode];
+    const host = document.getElementById(M.upsetsId);
+    if (!host) return;
+    const budget = this.computeBudget(ctx, mode);
+    if (!budget) { host.innerHTML = ''; return; }
+    const F = M.field;
+    const { bins, binStats, totN, totPrimary, totOther, totPicked, totYourDog } = budget;
+
+    const rows = bins.map(({ lab, gs, n, primary, take }) => {
+      const list = gs.map(x => {
         const dogHit = x.picked && x.picked === x.dog;
-        return `<span class="dogpick${t ? ' take' : ''}${dogHit ? ' on' : ''}" ` +
-          `title="${x.fav} favored — ${M.favVerb} ${Math.round(x[F] * 100)}% historically">` +
-          `${x.dog} ${x.dogHome ? 'H' : 'A'}${t ? ' ✓' : ''}</span>`;
+        return `<span class="dogpick${x.taken ? ' take' : ''}${dogHit ? ' on' : ''}" ` +
+          `title="${x.fav} favored — ${M.favVerb} ${Math.round(x[F] * 100)}% historically (market spread-adjusted rank)">` +
+          `${x.dog} ${x.dogHome ? 'H' : 'A'}${x.taken ? ' ✓' : ''}</span>`;
       }).join(' ');
       return `<tr>
         <td>${lab}</td>

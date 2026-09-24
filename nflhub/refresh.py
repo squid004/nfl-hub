@@ -73,6 +73,7 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         summary["errors"].append(f"odds: {exc}")
 
     # 2b. best price across real books (Action Network) — best-effort, unofficial page scrape
+    best_price: dict[str, Any] = {}  # always defined: step 4c uses its avg_spread_home
     if cfg.odds.action_network:
         try:
             best_price, book_rows = actionnetwork.fetch_odds_detail(games)
@@ -84,6 +85,7 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
             summary["best_price_odds"] = f"skipped ({exc})"
 
     # 2c. "ELWAY" avg-points model from a personal Google Sheet — best-effort, soft-fail
+    elway_rows: dict[str, Any] = {}  # always defined: step 4c uses it for the budget ranking
     if cfg.elway.sheet_id:
         try:
             elway_rows = elway.fetch_week(cfg.elway.sheet_id, week, games)
@@ -169,7 +171,16 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
                 first = dt if first is None or dt < first else first
             locked = first is not None and first <= datetime.now(timezone.utc)
             if not locked or not store.has_budget_snapshot(week):
-                for mode, rows in history.week_budget(dist, week, games, wk_odds).items():
+                # Prefer the cross-book average spread (Action Network, several real
+                # books) over the single DK-via-ESPN line for bucket assignment — more
+                # robust to one book's stale/outlier number, especially near a bucket
+                # boundary. Falls back to the existing spread for any game Action
+                # Network didn't cover (already final, alias mismatch, etc).
+                budget_odds: dict[str, Any] = {}
+                for gid, o in wk_odds.items():
+                    avg_spread = best_price.get(gid, {}).get("avg_spread_home")
+                    budget_odds[gid] = {**o, "spread": avg_spread if avg_spread is not None else o.get("spread")}
+                for mode, rows in history.week_budget(dist, week, games, budget_odds, elway_rows).items():
                     store.upsert_budget_snapshot(week, mode, rows)
                 summary["budget_snapshot"] = "written"
             else:
