@@ -1,11 +1,21 @@
 """Home/away average-points model, pulled from a personal Google Sheet.
 
-Public read-only sheet (id configured via ELWAY_SHEET_ID), one row per game for the
-current week: home/away team, each side's average points, and each side's win
-probability. The sheet's own spread/total columns are intentionally ignored — nfl-hub
-derives its own spread (home avg pts vs away avg pts) and total (their sum) instead, so
-they can be compared against the real sportsbook lines rather than the sheet author's own
-line, per the "ELWAY" feature's purpose.
+Public read-only sheet (id configured via ELWAY_SHEET_ID), one row per game: home/away
+team, each side's average points, and each side's win probability. The sheet's own
+spread/total columns are intentionally ignored — nfl-hub derives its own spread (home avg
+pts vs away avg pts) and total (their sum) instead, so they can be compared against the
+real sportsbook lines rather than the sheet author's own line, per the "ELWAY" feature's
+purpose.
+
+The sheet started as one flat tab with a "Wk" column (filtered client-side). As of
+2026-09-24 the author switched to one tab per week ("Week 2", "Week 3", ...) — the same
+convention edge_sheet.py already handles for the pick'em pool sheet. Google's gviz
+endpoint has no way to ask "give me whatever tab is currently first" if a new tab gets
+added without becoming first in position, and silently returns the wrong week's data
+instead of erroring, so this checks for a "Week {week}" tab by name (via the same
+htmlview tab-list scrape edge_sheet.py uses) and prefers it; if no such tab exists yet it
+falls back to the original bare fetch + Wk-column filter, so it still works against the
+old flat layout or against a week that hasn't gotten its own tab yet.
 
 Soft-fails like every other scrape in this project: any problem raises ElwayUnavailable
 and refresh.py treats it as a non-fatal skip.
@@ -15,7 +25,9 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from typing import Any, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -49,8 +61,19 @@ def _num(cell: str) -> Optional[float]:
         return None
 
 
-def _csv_url(sheet_id: str) -> str:
-    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv"
+def _csv_url(sheet_id: str, tab: Optional[str] = None) -> str:
+    base = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv"
+    return f"{base}&sheet={quote(tab)}" if tab else base
+
+
+def _week_tab_exists(sheet_id: str, week: int) -> bool:
+    try:
+        resp = requests.get(f"https://docs.google.com/spreadsheets/d/{sheet_id}/htmlview", timeout=TIMEOUT)
+        resp.raise_for_status()
+    except requests.RequestException:
+        return False  # can't confirm a dedicated tab -> fall back to the bare fetch
+    pattern = re.compile(r'\{name:\s*"Week ' + str(week) + r'",\s*pageUrl:')
+    return pattern.search(resp.text) is not None
 
 
 def fetch_week(sheet_id: str, week: int, games: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -60,8 +83,9 @@ def fetch_week(sheet_id: str, week: int, games: list[dict[str, Any]]) -> dict[st
     """
     if not sheet_id:
         raise ElwayUnavailable("no sheet id configured")
+    tab = f"Week {week}" if _week_tab_exists(sheet_id, week) else None
     try:
-        resp = requests.get(_csv_url(sheet_id), timeout=TIMEOUT)
+        resp = requests.get(_csv_url(sheet_id, tab), timeout=TIMEOUT)
         resp.raise_for_status()
     except requests.RequestException as exc:
         raise ElwayUnavailable(f"sheet request failed: {exc}") from exc
