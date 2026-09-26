@@ -41,7 +41,6 @@ _KIND_META = {
     "yahoo_lineup": ("Yahoo lineup locks", "football", "high"),
     "espn_lineup": ("ESPN lineup locks", "football", "high"),
     "pickem": ("Pick'em picks due", "pencil2", "high"),
-    "survivor": ("Survivor pick due", "skull", "high"),
 }
 
 

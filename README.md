@@ -1,15 +1,14 @@
 # NFL Hub
 
-One page for your NFL season: both fantasy leagues (Yahoo + ESPN), CBS pick'em, Yahoo
-survivor, betting lines, and the lineup FantasyPros would start — plus ntfy phone reminders
-before every lineup lock and pick deadline.
+One page for your NFL season: both fantasy leagues (Yahoo + ESPN), CBS pick'em, and
+betting lines — plus ntfy phone reminders before every lineup lock and pick deadline.
 
 **Read + reminder only.** It never submits a lineup or a pick for you.
 
 ## How it's built
 
 - **Frontend:** static `index.html` + `js/*.js` on **GitHub Pages**. Reads Supabase live,
-  renders every panel client-side. Pick'em / survivor buttons write straight to Supabase.
+  renders every panel client-side. Pick'em buttons write straight to Supabase.
 - **Data store:** **Supabase** (Postgres). Anon key is committed (client-side use); every
   table's RLS policy is "anon all" — personal single-tenant tool.
 - **Updater:** a **GitHub Actions** cron job (`.github/workflows/refresh.yml`, every ~10 min
@@ -25,7 +24,6 @@ before every lineup lock and pick deadline.
 | Yahoo fantasy | Official OAuth2 API. Roster, matchup, opponent. (Lineup *write* is possible but out of scope.) |
 | ESPN fantasy | Unofficial `espn-api`. Private league needs `ESPN_S2` + `ESPN_SWID` cookies. |
 | CBS pick'em | No API. Slate derived from the NFL schedule; you record picks on the page. |
-| Yahoo survivor | No API. "Teams used" tracked from your recorded picks. |
 | Odds | Free ESPN scoreboard lines by default; SportsGameOdds / The Odds API optional. |
 | FantasyPros | Paid key. Weekly projections + ECR. **No league sync / lineup access** — the "optimal lineup" is computed locally in `nflhub/optimizer.py`. |
 
@@ -101,7 +99,7 @@ nflhub/                               the Actions job
   store.py      Supabase REST read/write
   config.py     env-only config
   refresh.py  deadlines.py  notify.py  optimizer.py  util.py
-  sources/  nfl_schedule  odds  fantasypros  espn_fantasy  yahoo_fantasy  pickem  survivor
+  sources/  nfl_schedule  odds  fantasypros  espn_fantasy  yahoo_fantasy  pickem
 .github/workflows/refresh.yml         cron + manual dispatch
 ```
 

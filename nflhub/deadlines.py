@@ -9,13 +9,13 @@ from zoneinfo import ZoneInfo
 
 from . import store
 from .config import Config
-from .sources import pickem, survivor
+from .sources import pickem
 from .util import fmt_local
 
 
 @dataclass
 class Deadline:
-    kind: str          # yahoo_lineup | espn_lineup | pickem | survivor
+    kind: str          # yahoo_lineup | espn_lineup | pickem
     label: str
     when: datetime     # timezone-aware UTC
     detail: str
@@ -46,7 +46,6 @@ def compute(cfg: Config, season: int, week: int) -> list[Deadline]:
 
     out: list[Deadline] = [
         Deadline("pickem", "Pick'em", first, f"Week {week} pick'em locks at first kickoff ({first_local})."),
-        Deadline("survivor", "Survivor", first, f"Week {week} survivor pick locks at first kickoff ({first_local})."),
     ]
 
     for league in ("yahoo", "espn"):
@@ -88,8 +87,6 @@ def _suppressed(kind: str, week: int) -> bool:
     if kind == "pickem":
         s = pickem.weekly_slate(week)
         return bool(s["total_games"]) and s["made"] >= s["total_games"]
-    if kind == "survivor":
-        return survivor.status(week)["this_week_pick"] is not None
     return False
 
 

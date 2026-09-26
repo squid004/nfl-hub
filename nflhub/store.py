@@ -167,7 +167,7 @@ def recent_news(limit: int = 25) -> list[dict[str, Any]]:
     return _get("news", {"order": "published.desc", "limit": limit})
 
 
-# --- pick'em & survivor ----------------------------------------------
+# --- pick'em -----------------------------------------------------------
 
 def record_pickem_pick(week: int, game_id: str, pick: str, confidence: Optional[int] = None) -> None:
     _upsert("pickem_pick", {
@@ -178,10 +178,6 @@ def record_pickem_pick(week: int, game_id: str, pick: str, confidence: Optional[
 
 def get_pickem_picks(week: int) -> dict[str, dict[str, Any]]:
     return {r["game_id"]: r for r in _get("pickem_pick", {"week": f"eq.{week}"})}
-
-
-def record_survivor_pick(week: int, team: str) -> None:
-    _upsert("survivor_pick", {"week": week, "team": team, "created_at": _now()}, on_conflict="week")
 
 
 # --- weekly budget snapshot (end-of-season analysis) ----------------------
@@ -201,10 +197,6 @@ def upsert_budget_snapshot(week: int, mode: str, rows: list[dict[str, Any]]) -> 
     ]
     if payload:
         _upsert("budget_snapshot", payload, on_conflict="week,mode,bin")
-
-
-def get_survivor_picks() -> dict[int, str]:
-    return {r["week"]: r["team"] for r in _get("survivor_pick", {"order": "week"})}
 
 
 # --- pickem-edge: national pick %, opponent picks, bias, standing, recs ----

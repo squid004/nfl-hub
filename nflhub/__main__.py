@@ -95,7 +95,7 @@ def cmd_notify(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="nflhub", description="NFL fantasy/pickem/survivor/odds hub job")
+    parser = argparse.ArgumentParser(prog="nflhub", description="NFL fantasy/pickem/odds hub job")
     parser.add_argument("-v", "--verbose", action="store_true")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("yahoo-auth", help="one-time Yahoo OAuth consent")

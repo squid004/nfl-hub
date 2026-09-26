@@ -8,8 +8,6 @@ const Deadlines = {
     const out = [
       { kind: 'pickem', label: 'Pick’em', when: first,
         detail: `Week ${week} pick'em locks at first kickoff.` },
-      { kind: 'survivor', label: 'Survivor', when: first,
-        detail: `Week ${week} survivor pick locks at first kickoff.` },
     ];
     for (const [lg, snap] of [['Yahoo', yRoster], ['ESPN', eRoster]]) {
       if (!snap || snap.week !== week) continue;

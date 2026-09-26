@@ -95,13 +95,6 @@ const DB = {
     return map;
   },
 
-  async survivorPicks() {
-    const { data } = await this._c().from('survivor_pick').select('*').order('week');
-    const map = {};
-    (data || []).forEach(p => { map[p.week] = p.team; });
-    return map;
-  },
-
   async news() {
     const { data } = await this._c().from('news').select('*').order('published', { ascending: false }).limit(20);
     return data || [];
@@ -176,12 +169,6 @@ const DB = {
                 spread_at_pick: spread == null ? null : Number(spread),
                 created_at: new Date().toISOString() },
               { onConflict: 'week,game_id' });
-    if (error) throw error;
-  },
-
-  async setSurvivorPick(week, team) {
-    const { error } = await this._c().from('survivor_pick')
-      .upsert({ week, team, created_at: new Date().toISOString() }, { onConflict: 'week' });
     if (error) throw error;
   },
 
