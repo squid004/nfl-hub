@@ -269,14 +269,14 @@ def _apply_edge(
     today = datetime.now(timezone.utc).date().isoformat()
     if store.kv_get("edge_national_date") != today:
         try:
-            rows = edge_national.fetch_week(normalize_team)
+            rows = edge_national.fetch_week(week, normalize_team)
             store.edge_bulk_set_national_pct(
                 season, week, [{"team": r.team, "pct": r.pct} for r in rows]
             )
             store.kv_set("edge_national_date", today)
             summary["edge_national"] = f"scraped {len(rows)} teams"
-        except edge_national.NflPickwatchUnavailable as exc:
-            log.warning("nflpickwatch scrape failed: %s", exc)
+        except edge_national.NationalPctUnavailable as exc:
+            log.warning("national pick%% scrape failed: %s", exc)
             summary["edge_national"] = f"scrape failed ({exc})"
 
     # recompute learned bias for every team with opponent picks (cheap; skips overridden)

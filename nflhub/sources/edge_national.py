@@ -1,31 +1,52 @@
-"""Best-effort national pick % scrape from nflpickwatch.com.
+"""National pick percentages from Yahoo's public Pick'em pick-distribution page.
 
-Ported from github.com/squid004/pickem-edge (src/pke/picks/nflpickwatch.py), based on the
-`thmsdrew/pypicks` scraper as prior art. SPEC.md section 3.2 calls this source "unreliable
-by design" — nflpickwatch is known to break scrapers, so every failure here raises
-NflPickwatchUnavailable and the caller (refresh.py) treats it as a soft failure: log it,
-leave whatever manual/previously-scraped rows already exist untouched, move on. A manual
-override always exists (js/edge.js) as the always-available fallback.
+Replaces nflpickwatch.com, which has been reliably 403-blocked from GitHub Actions IPs
+since week 1 this season with no sign of resolving. This endpoint needs no login, ignores
+its own `gid`/`type` query params (verified by comparing output across different `gid`
+values -- identical either way, so it's genuine Yahoo-wide data, not one group's picks),
+and supports arbitrary past weeks via `week=N` matching nfl-hub's own week numbering
+exactly. Found by the user via their own Yahoo pick'em pool's page.
+
+Soft-fails like every other scrape in this project: any problem raises
+NationalPctUnavailable and refresh.py treats it as a non-fatal skip.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Optional
 
 import requests
 
-_URL = "http://nflpickwatch.com/"
-_TAG_RE = re.compile(r"<[^>]+>")
-# "ABC@XYZ ... XYZ ... 68%" — two team codes joined by @, then a consensus team code,
-# then a percentage, within one line/row of the (HTML-tag-stripped) page text.
-_MATCHUP_RE = re.compile(
-    r"([A-Z]{2,3})\s*@\s*([A-Z]{2,3}).{0,40}?\b([A-Z]{2,3})\b.{0,20}?(\d{1,3})\s*%",
-    re.DOTALL,
+_URL = "https://football.fantasysports.yahoo.com/pickem/pickdistribution"
+TIMEOUT = 20
+
+# Yahoo's team-name strings (verified against 3 weeks / 48 games of real 2026 data --
+# covers all 32 teams). The two ambiguous cities disambiguate themselves with a
+# parenthetical abbreviation Yahoo already includes ("Los Angeles (LAC)").
+_NAME_TO_ABBR = {
+    "Arizona": "ARI", "Atlanta": "ATL", "Baltimore": "BAL", "Buffalo": "BUF",
+    "Carolina": "CAR", "Chicago": "CHI", "Cincinnati": "CIN", "Cleveland": "CLE",
+    "Dallas": "DAL", "Denver": "DEN", "Detroit": "DET", "Green Bay": "GB",
+    "Houston": "HOU", "Indianapolis": "IND", "Jacksonville": "JAX", "Kansas City": "KC",
+    "Las Vegas": "LV", "Los Angeles (LAC)": "LAC", "Los Angeles (LAR)": "LAR",
+    "Miami": "MIA", "Minnesota": "MIN", "New England": "NE", "New Orleans": "NO",
+    "New York (NYG)": "NYG", "New York (NYJ)": "NYJ", "Philadelphia": "PHI",
+    "Pittsburgh": "PIT", "San Francisco": "SF", "Seattle": "SEA", "Tampa Bay": "TB",
+    "Tennessee": "TEN", "Washington": "WSH",
+}
+
+_GAME_RE = re.compile(
+    r'<h4><span>[^<]+</span></h4>.*?'
+    r'class="team">@?\s*<a[^>]*>([^<]+)</a>.*?dd class="percent">(\d+)%</dd>\s*</dl>\s*'
+    r'<dl class="underdog[^"]*">.*?'
+    r'class="team">@?\s*<a[^>]*>([^<]+)</a>.*?dd class="percent">(\d+)%</dd>',
+    re.S,
 )
 
 
-class NflPickwatchUnavailable(RuntimeError):
+class NationalPctUnavailable(RuntimeError):
     """Raised on any request/parse failure. Treat as a soft failure, never let it
     propagate out of a refresh step."""
 
@@ -36,35 +57,30 @@ class NationalPickRow:
     pct: float
 
 
-def fetch_week(normalize_team) -> list[NationalPickRow]:
-    """`normalize_team(code) -> canonical abbr or raises KeyError/ValueError` is injected
-    so this module doesn't need its own team table (see edge_teams.normalize)."""
+def fetch_week(week: int, normalize_team) -> list[NationalPickRow]:
+    """`normalize_team(code) -> canonical abbr, raising ValueError on an unknown code` is
+    injected so this module doesn't need its own team table beyond the Yahoo-specific
+    full-name mapping above."""
     try:
-        resp = requests.get(_URL, params={"text": "1"}, timeout=30)
+        resp = requests.get(_URL, params={"gid": "", "type": "", "week": week}, timeout=TIMEOUT)
         resp.raise_for_status()
-        html = resp.text
     except requests.RequestException as exc:
-        raise NflPickwatchUnavailable(f"nflpickwatch request failed: {exc}") from exc
+        raise NationalPctUnavailable(f"yahoo pickdistribution request failed: {exc}") from exc
 
-    rows = _parse_consensus_lines(html, normalize_team)
-    if not rows:
-        raise NflPickwatchUnavailable(
-            "no consensus picks parsed from nflpickwatch response — page structure may "
-            "have changed; use the manual national-% entry instead"
-        )
-    return rows
-
-
-def _parse_consensus_lines(html: str, normalize_team) -> list[NationalPickRow]:
-    text = _TAG_RE.sub(" ", html)
     rows: list[NationalPickRow] = []
-    for team_a, team_b, consensus_team, pct_str in _MATCHUP_RE.findall(text):
-        try:
-            consensus = normalize_team(consensus_team)
-            other = normalize_team(team_b if consensus == normalize_team(team_a) else team_a)
-        except (KeyError, ValueError):
+    for fav_name, fav_pct, dog_name, dog_pct in _GAME_RE.findall(resp.text):
+        fav_abbr: Optional[str] = _NAME_TO_ABBR.get(fav_name)
+        dog_abbr: Optional[str] = _NAME_TO_ABBR.get(dog_name)
+        if not fav_abbr or not dog_abbr:
             continue
-        pct = float(pct_str) / 100.0
-        rows.append(NationalPickRow(team=consensus, pct=pct))
-        rows.append(NationalPickRow(team=other, pct=round(1.0 - pct, 4)))
+        try:
+            fav_abbr = normalize_team(fav_abbr)
+            dog_abbr = normalize_team(dog_abbr)
+        except ValueError:
+            continue
+        rows.append(NationalPickRow(team=fav_abbr, pct=round(float(fav_pct) / 100.0, 4)))
+        rows.append(NationalPickRow(team=dog_abbr, pct=round(float(dog_pct) / 100.0, 4)))
+
+    if not rows:
+        raise NationalPctUnavailable(f"no games parsed for week {week} — page structure may have changed")
     return rows
