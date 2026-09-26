@@ -1,14 +1,21 @@
 """Wires edge_core.compute_bias to the store. Ported from pickem-edge's bias/pipeline.py.
 
-Recomputes every team seen in edge_opponent_pick on each refresh (cheap: ~32 teams) rather
-than tracking which teams a given paste touched — simpler, no staleness bugs. A team with
-edge_bias.overridden=true is left alone until the user clears the override in the bias editor.
+Recomputes all 32 real teams on each refresh (cheap) rather than tracking which teams a
+given paste touched — simpler, no staleness bugs. A team with edge_bias.overridden=true is
+left alone until the user clears the override in the bias editor.
+
+Deliberately NOT scoped to just teams seen in edge_opponent_pick: a team nobody in the pool
+ever picks is a real, meaningful data point (the pool avoids it even more than the national
+rate would suggest), not an absence of one. opponent_pool_pct_by_week() already handles
+this correctly (0 picks / N opponents = a real 0% week), so the only fix needed was to
+actually ask about every team, not just the ones with at least one pick.
 """
 
 from __future__ import annotations
 
 from .. import store
 from .edge_core import compute_bias
+from .edge_teams import TEAMS
 
 
 def opponent_pool_pct_by_week(team: str) -> list[tuple[int, int, float]]:
@@ -55,6 +62,4 @@ def recompute_bias_for_teams(teams: set[str]) -> None:
 
 
 def recompute_all_bias() -> None:
-    picks = store.edge_all_opponent_picks()
-    teams = {p["team_picked"] for p in picks}
-    recompute_bias_for_teams(teams)
+    recompute_bias_for_teams(TEAMS)
