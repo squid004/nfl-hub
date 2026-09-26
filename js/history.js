@@ -154,13 +154,15 @@ const History = {
 
       // Blend the market favorite's margin toward ELWAY's margin for that same team
       // (positive = favored by that many; can go negative, meaning that team is now the
-      // modeled underdog). ELWAY_BLEND_WEIGHT=0.5: an even-handed blend, not a full swap
-      // to ELWAY's own number — see nflhub/sources/history.py week_budget for why.
+      // modeled underdog). 0.65 = more trust than an even split, since ELWAY is Nate
+      // Silver's Silver Bulletin NFL forecasting model, not an untested personal formula
+      // — see nflhub/sources/history.py week_budget's ELWAY_BLEND_WEIGHT for why 0.65
+      // and not full weight.
       let effMargin = Math.abs(sp);
       const el = elway[g.game_id];
       if (el && el.spread_home != null) {
         const elwayFavMargin = homeFav ? -el.spread_home : el.spread_home;
-        effMargin = 0.5 * Math.abs(sp) + 0.5 * elwayFavMargin;
+        effMargin = 0.35 * Math.abs(sp) + 0.65 * elwayFavMargin;
       }
       const rankV = this.predictSigned(d, homeFav, effMargin, ctx.week, F) ?? v;
 

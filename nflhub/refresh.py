@@ -84,7 +84,8 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
             log.warning("actionnetwork best-price scrape failed: %s", exc)
             summary["best_price_odds"] = f"skipped ({exc})"
 
-    # 2c. "ELWAY" avg-points model from a personal Google Sheet — best-effort, soft-fail
+    # 2c. ELWAY (Nate Silver's Silver Bulletin NFL model), transcribed weekly into a
+    # personal Google Sheet — best-effort, soft-fail
     elway_rows: dict[str, Any] = {}  # always defined: step 4c uses it for the budget ranking
     if cfg.elway.sheet_id:
         try:

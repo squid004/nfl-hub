@@ -1,11 +1,14 @@
-"""Home/away average-points model, pulled from a personal Google Sheet.
+"""ELWAY (Nate Silver's Silver Bulletin NFL forecasting model), transcribed weekly into a
+personal Google Sheet.
 
-Public read-only sheet (id configured via ELWAY_SHEET_ID), one row per game: home/away
-team, each side's average points, and each side's win probability. The sheet's own
-spread/total columns are intentionally ignored — nfl-hub derives its own spread (home avg
-pts vs away avg pts) and total (their sum) instead, so they can be compared against the
-real sportsbook lines rather than the sheet author's own line, per the "ELWAY" feature's
-purpose.
+ELWAY is a real, professionally maintained model -- team ratings plus its QBERT
+quarterback rating, built on every NFL game since 1920, refined for 2026 (see
+natesilver.net/i/176207317/2026-changes-to-elway-and-qbert). This module just reads the
+transcription: a public read-only sheet (id configured via ELWAY_SHEET_ID), one row per
+game: home/away team, each side's average points, and each side's win probability. The
+sheet's own spread/total columns are intentionally ignored — nfl-hub derives its own
+spread (home avg pts vs away avg pts) and total (their sum) instead, so they can be
+compared against the real sportsbook lines rather than restating ELWAY's own line.
 
 The sheet started as one flat tab with a "Wk" column (filtered client-side). As of
 2026-09-24 the author switched to one tab per week ("Week 2", "Week 3", ...) — the same

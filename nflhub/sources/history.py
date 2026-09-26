@@ -45,7 +45,7 @@ TIMEOUT = 30
 MIN_SEASON = 2007
 SHRINK_K = 40  # pseudo-count pulling a bucket cell toward its all-weeks prior
 KEY_NUMBERS = (3.0, 7.0)  # NFL final-margin clustering: a field goal, a TD+XP
-ELWAY_BLEND_WEIGHT = 0.5  # how far the ranking blend moves from the market toward ELWAY
+ELWAY_BLEND_WEIGHT = 0.65  # how far the ranking blend moves from the market toward ELWAY
 
 # (lo, hi, label) on the absolute spread; 0.5-pt increments, so these tile the line cleanly.
 # Display/grouping only now (see module docstring) — ranking uses the smooth curve below.
@@ -371,11 +371,12 @@ def week_budget(
     (predict(), see its docstring): "how many" sums 1-predict() at the game's real market
     spread. "Which one" ranks games within a bucket by predict() at an ELWAY-blended
     margin instead: ELWAY_BLEND_WEIGHT of the way from the market's own favorite-margin
-    toward ELWAY's margin for that same team (0.5 = an even-handed blend, not a full
-    swap to ELWAY's number — its avg-points model has one week of track record so far,
-    closely tracking the market and wrong the one time it substantially disagreed; see
-    the week 2 retrospective, and revisit this weight once it has a longer record). The
-    blend is a signed margin with no floor — _predict_signed() lets it cross zero and
+    toward ELWAY's margin for that same team (0.65 -- more trust than an even split,
+    since ELWAY is Nate Silver's Silver Bulletin NFL forecasting model (team ratings +
+    QBERT, refined for 2026: natesilver.net/i/176207317/2026-changes-to-elway-and-qbert),
+    not an untested personal formula, but still short of full weight since a live betting
+    market prices in more real-money information than any single outside model reliably
+    beats). The blend is a signed margin with no floor — _predict_signed() lets it cross zero and
     keep differentiating games past "toss-up," which matters in practice: an earlier
     version clamped the magnitude at 0 instead, and multiple games whose blend crossed
     zero all landed on the identical clamped value, silently re-tied and broken by list

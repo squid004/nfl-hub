@@ -201,11 +201,10 @@ create table if not exists book_odds (
 );
 create index if not exists book_odds_week_idx on book_odds (week);
 
--- "ELWAY" model: home/away average points + win prob, pulled from a personal Google
--- Sheet (nflhub/sources/elway.py). spread_home/total are DERIVED here (avg pts diff /
--- sum) — the sheet's own spread/total columns are intentionally not used, since the
--- point is comparing this model against the real sportsbook line, not the sheet
--- author's own line.
+-- ELWAY (Nate Silver's Silver Bulletin NFL forecasting model), transcribed weekly into a
+-- personal Google Sheet (nflhub/sources/elway.py). spread_home/total are DERIVED here
+-- (avg pts diff / sum) — the sheet's own spread/total columns are intentionally not used,
+-- since the point is comparing ELWAY against the real sportsbook line, not restating it.
 create table if not exists elway_odds (
   game_id        text primary key references game (game_id) on delete cascade,
   week           int,

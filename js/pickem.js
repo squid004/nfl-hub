@@ -197,7 +197,8 @@ const Pickem = {
         <p class="tablefoot muted"><span class="pick-fav">Green</span> in the matchup =
           the favorite is the suggested pick; <span class="pick-dog">yellow</span> = the
           dog is — pool-leverage's FADE/CHALK call when it has data this week, otherwise
-          the upset-budget flag.</p>
+          the upset-budget flag. ELWAY is Nate Silver's Silver Bulletin NFL forecasting
+          model, transcribed weekly into a Google Sheet — not a personal formula.</p>
       </div>`;
   },
 

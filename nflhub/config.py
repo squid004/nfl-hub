@@ -94,7 +94,7 @@ class EdgeCfg:
 
 @dataclass
 class ElwayCfg:
-    sheet_id: str      # Google Sheet id with the home/away avg-points model, one row/game
+    sheet_id: str      # Google Sheet id with ELWAY (Silver Bulletin's NFL model) transcribed weekly, one row/game
 
 
 @dataclass

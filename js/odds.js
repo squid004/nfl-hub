@@ -99,8 +99,9 @@ const Odds = {
           <th class="num" title="ELWAY's home win probability, from its avg-points model">ELWAY Home%</th>
           <th>Book</th></tr></thead>
           <tbody>${rows}</tbody></table>
-        <p class="tablefoot muted">ELWAY columns come from a personal avg-points model
-          (Google Sheet) — compare them against the paired market column, not each other.
+        <p class="tablefoot muted">ELWAY columns come from Nate Silver's Silver Bulletin
+          NFL forecasting model (transcribed weekly into a Google Sheet) — compare them
+          against the paired market column, not each other.
           <span class="elway-flip">Highlighted</span> ELWAY Spread = ELWAY's model favors
           the other team entirely, not just by a smaller or larger margin.</p>
       </div>
