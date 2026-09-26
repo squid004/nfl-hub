@@ -40,9 +40,11 @@ const Odds = {
   },
 
   render(ctx) {
+    const injuries = ctx.injuries || {};
     const rows = ctx.games.map(g => {
       const o = ctx.odds[g.game_id] || {};
       const el = (ctx.elway || {})[g.game_id] || {};
+      const move = lineMovement((ctx.spreadHist || {})[g.game_id]);
       const state = g.state === 'post' ? `<span class="muted">(${g.away_score}-${g.home_score} F)</span>`
         : g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
       const favTeam = o.spread != null ? (o.spread <= 0 ? g.home : g.away) : null;
@@ -52,8 +54,8 @@ const Odds = {
         : `<td class="muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>`;
       return `<tr>
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
-        <td>${g.away} @ ${g.home} ${state}</td>
-        <td class="muted">${signed(o.spread)}</td>
+        <td>${g.away}${qbChip(g.away, injuries)} @ ${g.home}${qbChip(g.home, injuries)} ${state}</td>
+        <td class="muted${move && move.steam ? ' warn' : ''}" title="${move ? `opened ${signed(move.open)}, now ${signed(move.cur)}` : ''}">${signed(o.spread)}</td>
         ${elwaySpreadCell}
         <td class="muted">${o.total ?? '—'}</td>
         <td class="muted">${el.total ?? '—'}</td>
@@ -75,7 +77,7 @@ const Odds = {
       const bookCells = bookNames.map(name => bookCell(byBook[name], bp.avg_spread_home)).join('');
       return `<tr>
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
-        <td>${g.away} @ ${g.home}</td>
+        <td>${g.away}${qbChip(g.away, injuries)} @ ${g.home}${qbChip(g.home, injuries)}</td>
         <td class="muted">${bp.avg_spread_home != null ? signed(bp.avg_spread_home) : '—'}</td>
         ${bookCells}
         <td>${bestCell(bp.spread_away_line, bp.spread_away_price, bp.spread_away_book)}<br>
@@ -103,7 +105,10 @@ const Odds = {
           NFL forecasting model (transcribed weekly into a Google Sheet) — compare them
           against the paired market column, not each other.
           <span class="elway-flip">Highlighted</span> ELWAY Spread = ELWAY's model favors
-          the other team entirely, not just by a smaller or larger margin.</p>
+          the other team entirely, not just by a smaller or larger margin. A
+          <span class="chip warn">QB</span> chip is that team's most severe QB-position
+          entry from ESPN's injury report. A highlighted (amber) Spread cell means the line
+          has moved &ge;1.5 points in one direction this week — hover for the open line.</p>
       </div>
       <div class="panel">
         <h2>Shop the line</h2>

@@ -135,8 +135,29 @@ def fetch_news() -> list[dict[str, Any]]:
     return out
 
 
+# This endpoint's team blocks carry only a numeric id + full displayName ("Arizona
+# Cardinals") -- no nested team.abbreviation like the scoreboard endpoint has -- so
+# fetch_injuries() needs its own name -> abbr map (same pattern as elway.py /
+# edge_national.py's team-name normalization; verified against a live pull of all 32
+# teams). Abbreviations match this app's convention (game.home/away): WSH not WAS, JAX
+# not JAC.
+_INJURY_TEAM_ABBR = {
+    "Arizona Cardinals": "ARI", "Atlanta Falcons": "ATL", "Baltimore Ravens": "BAL",
+    "Buffalo Bills": "BUF", "Carolina Panthers": "CAR", "Chicago Bears": "CHI",
+    "Cincinnati Bengals": "CIN", "Cleveland Browns": "CLE", "Dallas Cowboys": "DAL",
+    "Denver Broncos": "DEN", "Detroit Lions": "DET", "Green Bay Packers": "GB",
+    "Houston Texans": "HOU", "Indianapolis Colts": "IND", "Jacksonville Jaguars": "JAX",
+    "Kansas City Chiefs": "KC", "Las Vegas Raiders": "LV", "Los Angeles Chargers": "LAC",
+    "Los Angeles Rams": "LAR", "Miami Dolphins": "MIA", "Minnesota Vikings": "MIN",
+    "New England Patriots": "NE", "New Orleans Saints": "NO", "New York Giants": "NYG",
+    "New York Jets": "NYJ", "Philadelphia Eagles": "PHI", "Pittsburgh Steelers": "PIT",
+    "San Francisco 49ers": "SF", "Seattle Seahawks": "SEA", "Tampa Bay Buccaneers": "TB",
+    "Tennessee Titans": "TEN", "Washington Commanders": "WSH",
+}
+
+
 def fetch_injuries() -> dict[str, list[dict[str, Any]]]:
-    """Map of team abbreviation -> list of {player, status, detail}."""
+    """Map of team abbreviation -> list of {player, position, status, detail}."""
     try:
         data = _get("injuries")
     except requests.RequestException as exc:
@@ -144,12 +165,14 @@ def fetch_injuries() -> dict[str, list[dict[str, Any]]]:
         return {}
     out: dict[str, list[dict[str, Any]]] = {}
     for team_block in data.get("injuries", []):
-        abbr = (team_block.get("team", {}) or {}).get("abbreviation") or team_block.get("abbreviation", "")
+        abbr = _INJURY_TEAM_ABBR.get(team_block.get("displayName", ""), "")
         entries = []
         for inj in team_block.get("injuries", []):
+            athlete = inj.get("athlete", {}) or {}
             entries.append(
                 {
-                    "player": (inj.get("athlete", {}) or {}).get("displayName", ""),
+                    "player": athlete.get("displayName", ""),
+                    "position": (athlete.get("position", {}) or {}).get("abbreviation", ""),
                     "status": inj.get("status", ""),
                     "detail": inj.get("shortComment") or inj.get("longComment") or "",
                 }

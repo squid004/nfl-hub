@@ -96,6 +96,26 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
             log.warning("elway sheet pull failed: %s", exc)
             summary["elway"] = f"skipped ({exc})"
 
+    # 2d. spread-movement history — append a snapshot only when the line actually moved
+    # since the last one stored, so this is a log of real moves, not re-poll noise. Lets
+    # the page show "opened X, now Y" and flag a big one-directional move ("steam").
+    try:
+        game_ids = [g["game_id"] for g in games]
+        latest = store.spread_history_latest_for_games(game_ids)
+        new_rows = []
+        for gid, o in wk_odds.items():
+            sp = o.get("spread")
+            if sp is None:
+                continue
+            prev = latest.get(gid)
+            if prev is None or abs(prev["spread_home"] - sp) >= 0.5:
+                new_rows.append({"game_id": gid, "week": week, "spread_home": sp})
+        store.spread_history_insert(new_rows)
+        summary["spread_history"] = f"{len(new_rows)} new snapshot(s)"
+    except Exception as exc:  # noqa: BLE001 - best-effort analytics; don't fail the run
+        log.warning("spread history snapshot failed: %s", exc)
+        summary["spread_history"] = f"skipped ({exc})"
+
     # 3. fantasy snapshots
     for name, mod in (("yahoo", yahoo_fantasy), ("espn", espn_fantasy)):
         try:

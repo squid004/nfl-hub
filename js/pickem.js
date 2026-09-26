@@ -34,6 +34,36 @@ function elwayFullDisagree(el, home, away, favTeam) {
   return elwayFavTeam !== favTeam;
 }
 
+// Worst QB-position entry for a team from ESPN's injury report (kv 'injuries', written by
+// refresh.py), or null if that team's QB(s) are all "Active"/unlisted. Ranked so "Out"/"IR"
+// always outranks "Doubtful" outranks "Questionable" regardless of report order.
+const QB_SEVERITY = { Out: 3, 'Injured Reserve': 3, Doubtful: 2, Questionable: 1 };
+function qbFlag(team, injuries) {
+  const qbs = ((injuries || {})[team] || []).filter(i => i.position === 'QB' && QB_SEVERITY[i.status]
+    // "(coach's decision)" inactives are healthy roster scratches (e.g. emergency #3 QB),
+    // not real injuries -- ESPN's feed lumps them into the same report, which would
+    // otherwise red-flag a fine backup while saying nothing about the actual starter.
+    && !/coach'?s decision/i.test(i.detail || ''));
+  if (!qbs.length) return null;
+  return qbs.reduce((worst, i) => QB_SEVERITY[i.status] > QB_SEVERITY[worst.status] ? i : worst);
+}
+function qbChip(team, injuries) {
+  const qb = qbFlag(team, injuries);
+  if (!qb) return '';
+  const cls = QB_SEVERITY[qb.status] >= 3 ? 'bad' : 'warn';
+  return ` <span class="chip ${cls}" title="${esc(qb.detail || '')}">QB: ${esc(qb.player)} (${qb.status})</span>`;
+}
+
+// Net spread movement this week from spread_history (ascending list of {spread_home,
+// captured_at}), home-spread signed. "steam" = the line has moved >=1.5 pts net in one
+// direction since the week's first snapshot — a sharp-money signal distinct from ELWAY.
+function lineMovement(rows) {
+  if (!rows || rows.length < 2) return null;
+  const open = rows[0].spread_home, cur = rows[rows.length - 1].spread_home;
+  const deltaHome = cur - open;
+  return { open, cur, deltaHome, steam: Math.abs(deltaHome) >= 1.5 };
+}
+
 // Rule-based (not AI-generated) explanation: every clause traces to a real number already
 // on the card, so it's reproducible and never invents anything. Deliberately terse.
 function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLabel, bucketRank, edgeRec }) {
@@ -90,10 +120,13 @@ const Pickem = {
     const picks = ctx[M.picksKey] || {};
     const edgeLog = ctx.edgeLog || {};
     const elway = ctx.elway || {};
+    const injuries = ctx.injuries || {};
+    const spreadHist = ctx.spreadHist || {};
     const bucketRanks = computeBucketRanks(ctx);
 
     const cards = games.map(g => {
       const o = odds[g.game_id] || {};
+      const move = lineMovement(spreadHist[g.game_id]);
       const elRaw = elway[g.game_id];
       const el = elRaw ? { ...elRaw, _home: g.home, _away: g.away } : null;
       const hasLine = o.spread != null;
@@ -150,17 +183,19 @@ const Pickem = {
       return `<div class="game-card">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
-          <span class="matchup">${teamSpan(g.away)}${wchip(g.away)} @ ${teamSpan(g.home)}${wchip(g.home)}</span>
+          <span class="matchup">${teamSpan(g.away)}${wchip(g.away)}${qbChip(g.away, injuries)} @ ${teamSpan(g.home)}${wchip(g.home)}${qbChip(g.home, injuries)}</span>
           ${stateChip}
           ${bucketLabel ? `<span class="chip" title="Spread bucket: ${bucketLabel}">${bucketLabel}</span>` : ''}
           ${bucketRank ? `<span class="chip${bucketRank.taken ? ' warn' : ''}" title="Rank ${bucketRank.rank} of ${bucketRank.n} in this spread bucket, by market spread + ELWAY-adjusted rank">${bucketRank.taken ? 'budget dog ' : 'bucket '}#${bucketRank.rank}/${bucketRank.n}</span>` : ''}
           ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
+          ${move && move.steam ? `<span class="chip warn" title="Line opened ${signed(move.open)}, now ${signed(move.cur)} — a ${Math.abs(move.deltaHome).toFixed(1)}-point move this week">STEAM</span>` : ''}
         </div>
         <div class="game-card-body">
           <div class="stat-block">
             <div class="stat-label">Market</div>
             <div>${favLabel} &middot; O/U ${o.total ?? '—'}</div>
             <div class="muted">${pct(o.implied_away)} / ${pct(o.implied_home)} &middot; ${o.book ?? '—'}</div>
+            ${move ? `<div class="muted small">opened ${signed(move.open)}</div>` : ''}
           </div>
           <div class="stat-block">
             <div class="stat-label">ELWAY</div>
@@ -198,7 +233,11 @@ const Pickem = {
           the favorite is the suggested pick; <span class="pick-dog">yellow</span> = the
           dog is — pool-leverage's FADE/CHALK call when it has data this week, otherwise
           the upset-budget flag. ELWAY is Nate Silver's Silver Bulletin NFL forecasting
-          model, transcribed weekly into a Google Sheet — not a personal formula.</p>
+          model, transcribed weekly into a Google Sheet — not a personal formula. A
+          <span class="chip warn">QB</span> chip is that team's most severe QB-position
+          entry from ESPN's injury report (red = Out/IR); it doesn't know who the starter
+          is, so use the name. <span class="chip warn">STEAM</span> = the market spread
+          has moved &ge;1.5 points in one direction since this week's first snapshot.</p>
       </div>`;
   },
 
@@ -207,10 +246,13 @@ const Pickem = {
     const { week, games, odds, hist } = ctx;
     const picks = ctx[M.picksKey] || {};
     const elway = ctx.elway || {};
+    const injuries = ctx.injuries || {};
+    const spreadHist = ctx.spreadHist || {};
 
     const rows = games.map(g => {
       const o = odds[g.game_id] || {};
       const el = elway[g.game_id] || {};
+      const move = lineMovement(spreadHist[g.game_id]);
       const hasLine = o.spread != null;
       const favTeam = !hasLine ? null : (o.spread <= 0 ? g.home : g.away);
       const dogTeam = favTeam == null ? null : (favTeam === g.home ? g.away : g.home);
@@ -250,9 +292,9 @@ const Pickem = {
 
       return `<tr>
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
-        <td>${g.away}${wchip(g.away)}</td>
-        <td>${g.home}${wchip(g.home)}</td>
-        <td class="muted">${favLabel}</td>
+        <td>${g.away}${wchip(g.away)}${qbChip(g.away, injuries)}</td>
+        <td>${g.home}${wchip(g.home)}${qbChip(g.home, injuries)}</td>
+        <td class="muted${move && move.steam ? ' warn' : ''}" title="${move ? `opened ${signed(move.open)}, now ${signed(move.cur)}` : ''}">${favLabel}</td>
         ${elwaySpreadCell}
         <td class="muted">${o.total ?? '—'}</td>
         <td class="num muted">${pct(o.implied_away)}</td>
@@ -284,7 +326,11 @@ const Pickem = {
           <tbody>${rows}</tbody></table>
         <p class="tablefoot muted">Away%/Home% are this game's de-vigged market prices.
           Pick the side that covers. Fav ATS is the historical cover rate for any favorite
-          of that spread size — below ~50% leans dog. The line is snapshotted when you pick.</p>
+          of that spread size — below ~50% leans dog. The line is snapshotted when you pick.
+          A <span class="chip warn">QB</span> chip next to a team is its most severe
+          QB-position entry from ESPN's injury report. A highlighted (amber) Fav cell means
+          the line has moved &ge;1.5 points in one direction this week — hover for the
+          open/current line.</p>
       </div>`;
   },
 

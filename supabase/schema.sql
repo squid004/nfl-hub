@@ -216,6 +216,20 @@ create table if not exists elway_odds (
 );
 create index if not exists elway_odds_week_idx on elway_odds (week);
 
+-- Append-only spread snapshots, one row per (game, moment the line actually moved) —
+-- not one per refresh, so this stays a log of real moves rather than re-poll noise
+-- (see nflhub/refresh.py's dedup-by-delta check before inserting). Lets the page show
+-- "opened X, now Y" and flag a big one-directional move ("steam") as a signal distinct
+-- from ELWAY.
+create table if not exists spread_history (
+  game_id     text references game (game_id) on delete cascade,
+  week        int,
+  captured_at timestamptz not null default now(),
+  spread_home real not null,
+  primary key (game_id, captured_at)
+);
+create index if not exists spread_history_week_idx on spread_history (week);
+
 create table if not exists reminder_log (
   kind    text,
   key     text,
@@ -238,7 +252,7 @@ begin
     'kv','game','odds','roster_snapshot','news','pickem_pick','ats_pick',
     'survivor_pick','reminder_log','refresh_request','budget_snapshot',
     'edge_national_pct','edge_opponent_pick','edge_bias','edge_season_standing',
-    'edge_recommendation_log','best_price_odds','book_odds','elway_odds'
+    'edge_recommendation_log','best_price_odds','book_odds','elway_odds','spread_history'
   ]
   loop
     execute format('alter table %I enable row level security', t);

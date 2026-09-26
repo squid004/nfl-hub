@@ -135,6 +135,26 @@ def elway_odds_for_week(week: int) -> dict[str, dict[str, Any]]:
     return {r["game_id"]: r for r in _get("elway_odds", {"week": f"eq.{week}"})}
 
 
+# --- spread movement history ---------------------------------------------
+
+def spread_history_latest_for_games(game_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Most-recent snapshot per game_id, for diffing against this refresh's new spread."""
+    if not game_ids:
+        return {}
+    ids = ",".join(game_ids)
+    rows = _get("spread_history", {"game_id": f"in.({ids})", "order": "captured_at.asc"})
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:  # ascending order -> last write per key wins -> latest per game
+        out[r["game_id"]] = r
+    return out
+
+
+def spread_history_insert(rows: list[dict[str, Any]]) -> None:
+    """Append-only: no on_conflict, each (game_id, captured_at) is a new row."""
+    if rows:
+        _upsert("spread_history", [{**r, "captured_at": _now()} for r in rows])
+
+
 # --- roster snapshots ---------------------------------------------------
 
 def save_roster_snapshot(league: str, week: int, payload: dict[str, Any]) -> None:

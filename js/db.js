@@ -111,6 +111,28 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return null; }
   },
 
+  // team abbr -> [{player, position, status, detail}], written by nflhub.refresh (ESPN's
+  // league-wide injury report). Only ever read here for the QB flag — see pickem.js.
+  async injuries() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'injuries').maybeSingle();
+    if (!data) return {};
+    try { return JSON.parse(data.value); } catch { return {}; }
+  },
+
+  async spreadHistory(week) {
+    try {
+      const { data, error } = await this._c().from('spread_history').select('game_id,captured_at,spread_home')
+        .eq('week', week).order('captured_at', { ascending: true });
+      if (error) throw error;
+      const map = {};
+      (data || []).forEach(r => { (map[r.game_id] = map[r.game_id] || []).push(r); });
+      return map;
+    } catch (e) {
+      console.warn('spread_history unavailable:', e.message || e);
+      return {};
+    }
+  },
+
   // --- pickem-edge ---
   async edgeRecommendationLog(season, week) {
     const { data } = await this._c().from('edge_recommendation_log').select('*')
