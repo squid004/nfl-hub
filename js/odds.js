@@ -41,15 +41,19 @@ const Odds = {
 
   render(ctx) {
     const injuries = ctx.injuries || {};
+    const elwayQb1 = ctx.elwayQb1 || {};
     const rows = ctx.games.map(g => {
       const o = ctx.odds[g.game_id] || {};
       const el = (ctx.elway || {})[g.game_id] || {};
       const move = lineMovement((ctx.spreadHist || {})[g.game_id]);
+      const staleQb = elwayStaleQb(g.home, elwayQb1, injuries) || elwayStaleQb(g.away, elwayQb1, injuries);
       const state = g.state === 'post' ? `<span class="muted">(${g.away_score}-${g.home_score} F)</span>`
         : g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
       const favTeam = o.spread != null ? (o.spread <= 0 ? g.home : g.away) : null;
       const elwayFlip = elwayFullDisagree(el, g.home, g.away, favTeam);
-      const elwaySpreadCell = elwayFlip
+      const elwaySpreadCell = staleQb
+        ? `<td class="elway-stale" title="ELWAY's rating still assumes ${staleQb.assumedName} at QB1, but our injury report lists him ${staleQb.status}">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>`
+        : elwayFlip
         ? `<td class="elway-flip" title="ELWAY's model favors the OTHER team entirely">${signed(el.spread_home)}</td>`
         : `<td class="muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>`;
       return `<tr>
@@ -107,8 +111,10 @@ const Odds = {
           <span class="elway-flip">Highlighted</span> ELWAY Spread = ELWAY's model favors
           the other team entirely, not just by a smaller or larger margin. A
           <span class="chip warn">QB</span> chip is that team's most severe QB-position
-          entry from ESPN's injury report. A highlighted (amber) Spread cell means the line
-          has moved &ge;1.5 points in one direction this week — hover for the open line.</p>
+          entry from ESPN's injury report. An amber-highlighted Spread cell means the line
+          has moved &ge;1.5 points in one direction this week — hover for the open line.
+          A <span class="elway-stale">red</span> ELWAY Spread cell means ELWAY's weekly
+          sheet is still rating a team with a QB1 our live injury feed now shows hurt.</p>
       </div>
       <div class="panel">
         <h2>Shop the line</h2>

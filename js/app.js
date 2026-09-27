@@ -35,7 +35,7 @@ const App = {
       const week = parseInt(weekRaw || '1', 10);
       const season = parseInt(seasonRaw || '2025', 10);
       const [games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks, refreshReq, lastRefresh, hist, bSnap,
-             edgeLog, edgeBias, edgeStandings, edgeOpponentPicks, edgeSeasonLog, seasonGames, injuries, spreadHist] =
+             edgeLog, edgeBias, edgeStandings, edgeOpponentPicks, edgeSeasonLog, seasonGames, injuries, spreadHist, elwayQb1] =
         await Promise.all([
           DB.weekGames(week), DB.weekOdds(week), DB.bestPriceOdds(week), DB.bookOdds(week), DB.elwayOdds(week),
           DB.latestRoster('yahoo'), DB.latestRoster('espn'),
@@ -43,12 +43,12 @@ const App = {
           DB.refreshRequest(), DB.kv('last_refresh'), DB.hist(), DB.budgetSnapshot(week),
           DB.edgeRecommendationLog(season, week), DB.edgeBiasAll(), DB.edgeStandings(season),
           DB.edgeOpponentPicks(season, week), DB.edgeRecommendationLogSeason(season), DB.seasonGames(season),
-          DB.injuries(), DB.spreadHistory(week),
+          DB.injuries(), DB.spreadHistory(week), DB.elwayQb1(),
         ]);
       const ctx = { week, season, games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks,
                     refreshReq, lastRefresh, hist, bSnap,
                     edgeLog, edgeBias, edgeStandings, edgeOpponentPicks, edgeSeasonLog, seasonGames,
-                    injuries, spreadHist };
+                    injuries, spreadHist, elwayQb1 };
       this._ctx = ctx;
       Deadlines.render(ctx);
       Pickem.render(ctx, 'ml');

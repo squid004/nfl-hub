@@ -119,6 +119,14 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return {}; }
   },
 
+  // team abbr -> {name, qbert}, the QB ELWAY's "Current Rankings" tab currently evaluates
+  // that team with at QB1 (written by nflhub.refresh). See pickem.js's elwayStaleQb().
+  async elwayQb1() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'elway_qb1').maybeSingle();
+    if (!data) return {};
+    try { return JSON.parse(data.value); } catch { return {}; }
+  },
+
   async spreadHistory(week) {
     try {
       const { data, error } = await this._c().from('spread_history').select('game_id,captured_at,spread_home')

@@ -96,6 +96,18 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
             log.warning("elway sheet pull failed: %s", exc)
             summary["elway"] = f"skipped ({exc})"
 
+        # which QB ELWAY currently evaluates each team with at QB1 -- compared client-side
+        # against the live injury feed (step 4) to flag a starter ELWAY's weekly snapshot
+        # hasn't caught up to yet. Independent try/except: a broken "Current Rankings" tab
+        # shouldn't take down the per-game elway_odds pull above.
+        try:
+            qb1 = elway.fetch_qb1(cfg.elway.sheet_id)
+            store.kv_set("elway_qb1", json.dumps(qb1))
+            summary["elway_qb1"] = len(qb1)
+        except Exception as exc:  # noqa: BLE001 - personal sheet; never block the rest
+            log.warning("elway Current Rankings pull failed: %s", exc)
+            summary["elway_qb1"] = f"skipped ({exc})"
+
     # 2d. spread-movement history — append a snapshot only when the line actually moved
     # since the last one stored, so this is a log of real moves, not re-poll noise. Lets
     # the page show "opened X, now Y" and flag a big one-directional move ("steam").

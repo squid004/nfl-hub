@@ -54,6 +54,22 @@ function qbChip(team, injuries) {
   return ` <span class="chip ${cls}" title="${esc(qb.detail || '')}">QB: ${esc(qb.player)} (${qb.status})</span>`;
 }
 
+// True (with details) when ELWAY's "Current Rankings" tab is still evaluating `team` with
+// a QB1 who our own live injury feed now shows as Out/Doubtful/Questionable -- i.e. an
+// injury that broke after the user's last weekly sheet transcription, which ELWAY's own
+// depth-chart tracking can't self-correct for until next update. Matches by last name
+// (the sheet only gives a surname) against qbFlag's own worst-QB-entry pick, so this only
+// fires when the flagged player IS the QB ELWAY is actually using, not some other backup.
+function elwayStaleQb(team, elwayQb1, injuries) {
+  const assumed = (elwayQb1 || {})[team];
+  if (!assumed) return null;
+  const flagged = qbFlag(team, injuries);
+  if (!flagged) return null;
+  const flaggedLast = flagged.player.trim().split(/\s+/).pop().toLowerCase();
+  if (assumed.name.toLowerCase() !== flaggedLast) return null;
+  return { assumedName: assumed.name, status: flagged.status, detail: flagged.detail };
+}
+
 // Net spread movement this week from spread_history (ascending list of {spread_home,
 // captured_at}), home-spread signed. "steam" = the line has moved >=1.5 pts net in one
 // direction since the week's first snapshot — a sharp-money signal distinct from ELWAY.
@@ -122,11 +138,14 @@ const Pickem = {
     const elway = ctx.elway || {};
     const injuries = ctx.injuries || {};
     const spreadHist = ctx.spreadHist || {};
+    const elwayQb1 = ctx.elwayQb1 || {};
     const bucketRanks = computeBucketRanks(ctx);
 
     const cards = games.map(g => {
       const o = odds[g.game_id] || {};
       const move = lineMovement(spreadHist[g.game_id]);
+      const staleHome = elwayStaleQb(g.home, elwayQb1, injuries);
+      const staleAway = elwayStaleQb(g.away, elwayQb1, injuries);
       const elRaw = elway[g.game_id];
       const el = elRaw ? { ...elRaw, _home: g.home, _away: g.away } : null;
       const hasLine = o.spread != null;
@@ -189,6 +208,9 @@ const Pickem = {
           ${bucketRank ? `<span class="chip${bucketRank.taken ? ' warn' : ''}" title="Rank ${bucketRank.rank} of ${bucketRank.n} in this spread bucket, by market spread + ELWAY-adjusted rank">${bucketRank.taken ? 'budget dog ' : 'bucket '}#${bucketRank.rank}/${bucketRank.n}</span>` : ''}
           ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
           ${move && move.steam ? `<span class="chip warn" title="Line opened ${signed(move.open)}, now ${signed(move.cur)} — a ${Math.abs(move.deltaHome).toFixed(1)}-point move this week">STEAM</span>` : ''}
+          ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
+            `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
+          ).join('')}
         </div>
         <div class="game-card-body">
           <div class="stat-block">
@@ -237,7 +259,10 @@ const Pickem = {
           <span class="chip warn">QB</span> chip is that team's most severe QB-position
           entry from ESPN's injury report (red = Out/IR); it doesn't know who the starter
           is, so use the name. <span class="chip warn">STEAM</span> = the market spread
-          has moved &ge;1.5 points in one direction since this week's first snapshot.</p>
+          has moved &ge;1.5 points in one direction since this week's first snapshot.
+          <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
+          rating that team with a QB1 our live injury feed now shows hurt — a breaking-news
+          injury ELWAY's own depth-chart tracking hasn't caught up to yet.</p>
       </div>`;
   },
 
@@ -248,11 +273,13 @@ const Pickem = {
     const elway = ctx.elway || {};
     const injuries = ctx.injuries || {};
     const spreadHist = ctx.spreadHist || {};
+    const elwayQb1 = ctx.elwayQb1 || {};
 
     const rows = games.map(g => {
       const o = odds[g.game_id] || {};
       const el = elway[g.game_id] || {};
       const move = lineMovement(spreadHist[g.game_id]);
+      const staleQb = elwayStaleQb(g.home, elwayQb1, injuries) || elwayStaleQb(g.away, elwayQb1, injuries);
       const hasLine = o.spread != null;
       const favTeam = !hasLine ? null : (o.spread <= 0 ? g.home : g.away);
       const dogTeam = favTeam == null ? null : (favTeam === g.home ? g.away : g.home);
@@ -286,7 +313,9 @@ const Pickem = {
         class="${mine === team ? 'primary' : ''}">${team}${lineFor(team)}</button>`;
 
       const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
-      const elwaySpreadCell = elwayFlip
+      const elwaySpreadCell = staleQb
+        ? `<td class="num elway-stale" title="ELWAY's rating still assumes ${staleQb.assumedName} at QB1, but our injury report lists him ${staleQb.status}">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>`
+        : elwayFlip
         ? `<td class="num elway-flip" title="ELWAY's model favors the OTHER team entirely: ${signed(el.spread_home)}">${signed(el.spread_home)}</td>`
         : `<td class="num muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>`;
 
@@ -330,7 +359,9 @@ const Pickem = {
           A <span class="chip warn">QB</span> chip next to a team is its most severe
           QB-position entry from ESPN's injury report. A highlighted (amber) Fav cell means
           the line has moved &ge;1.5 points in one direction this week — hover for the
-          open/current line.</p>
+          open/current line. A <span class="elway-stale">red</span> ELWAY Spread cell means
+          ELWAY's weekly sheet is still rating a team with a QB1 our live injury feed now
+          shows hurt.</p>
       </div>`;
   },
 
