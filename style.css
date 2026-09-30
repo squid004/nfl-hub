@@ -79,6 +79,7 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 .game-card { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
 .game-card-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
 .game-card-head .matchup { font-weight:600; }
+.rank-badge { color:var(--dim); font-weight:700; font-size:.8em; }
 .game-card-body {
   display:grid; grid-template-columns:repeat(4, 1fr); gap:10px;
   padding:10px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line);
@@ -86,6 +87,10 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 @media (max-width:760px) { .game-card-body { grid-template-columns:1fr 1fr; } }
 .stat-block { font-size:.85rem; }
 .stat-label { color:var(--dim); font-size:11px; font-weight:600; text-transform:uppercase; margin-bottom:2px; }
+.game-card-matchup { padding-top:8px; }
+.mini-ratings { border-collapse:collapse; font-size:.78rem; margin-top:2px; }
+.mini-ratings th, .mini-ratings td { padding:1px 8px 1px 0; text-align:right; }
+.mini-ratings th:first-child, .mini-ratings td:first-child { text-align:left; font-weight:600; }
 .game-card-narrative { margin:10px 0; font-size:.88rem; color:var(--text); }
 .game-card-pick { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .game-card-mine { margin-left:auto; font-size:.85rem; }
@@ -103,6 +108,9 @@ button, select, input, textarea {
 button { cursor:pointer; }
 button:hover { border-color:var(--accent); }
 button.primary { background:var(--accent); color:#04121f; border-color:var(--accent); font-weight:600; }
+.sort-btn { background:transparent; border:none; padding:2px 4px; font-size:.78rem; font-weight:600; color:var(--dim); white-space:nowrap; }
+.sort-btn:hover { border:none; color:var(--text); }
+.sort-btn.active { color:var(--accent); }
 input:focus, textarea:focus, select:focus { outline:2px solid var(--accent); outline-offset:1px; }
 textarea { width:100%; resize:vertical; }
 .btns { display:flex; gap:6px; align-items:center; }

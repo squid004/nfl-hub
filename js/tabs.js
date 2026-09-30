@@ -2,7 +2,7 @@
 
 // Client-side tabs: show/hide <section data-tab="..."> groups. No routing library.
 const Tabs = {
-  NAMES: ['pickem', 'ats', 'parlays'],
+  NAMES: ['pickem', 'ats', 'parlays', 'power'],
   _store: 'nflhub.tab',
 
   init() {

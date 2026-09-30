@@ -106,9 +106,36 @@ function lineMovement(rows) {
   return { open, cur, deltaHome, steam: Math.abs(deltaHome) >= 1.5 };
 }
 
+// EPA ratings + rule-based mismatch callouts for one game, from the team_ratings kv blob
+// (nflhub/sources/team_ratings.py -- rush/pass offense+defense EPA/play, garbage time
+// excluded). Backtesting in that repo's research/ found this does NOT beat the closing
+// market spread, so it's shown as descriptive context alongside the market/ELWAY/history
+// blocks, not as its own prediction.
+function matchupFor(teamRatings, home, away) {
+  if (!teamRatings) return null;
+  return (teamRatings.matchups || {})[`${away}@${home}`] || null;
+}
+
+const RATING_COLS = [
+  ['rush_off_epa', 'R-Off', 'Rush offense EPA/play (garbage time excluded)'],
+  ['pass_off_epa', 'P-Off', 'Pass offense EPA/play (garbage time excluded)'],
+  ['rush_def_epa_allowed', 'R-Def', 'Rush defense EPA/play allowed (lower = better defense)'],
+  ['pass_def_epa_allowed', 'P-Def', 'Pass defense EPA/play allowed (lower = better defense)'],
+];
+
+function matchupTableHtml(matchup, home, away) {
+  if (!matchup) return '<div class="muted small">No rating data yet.</div>';
+  const row = (team, r) => `<tr><td>${team}</td>${RATING_COLS.map(([key]) =>
+    `<td class="num">${r && r[key] != null ? r[key].toFixed(2) : '—'}</td>`).join('')}</tr>`;
+  return `<table class="mini-ratings">
+    <thead><tr><th></th>${RATING_COLS.map(([, label, title]) => `<th class="num" title="${title}">${label}</th>`).join('')}</tr></thead>
+    <tbody>${row(away, matchup.away_ratings)}${row(home, matchup.home_ratings)}</tbody>
+  </table>`;
+}
+
 // Rule-based (not AI-generated) explanation: every clause traces to a real number already
 // on the card, so it's reproducible and never invents anything. Deliberately terse.
-function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLabel, bucketRank, edgeRec }) {
+function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLabel, bucketRank, edgeRec, matchupCallouts }) {
   const parts = [`${favTeam} favored by ${marketMargin} over ${dogTeam}.`];
 
   if (el && el.home_win_prob != null && el.away_win_prob != null) {
@@ -147,6 +174,10 @@ function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLa
     parts.push(`Pool-leverage says stick with the chalk here — not enough separation to justify fading ${favTeam}.`);
   }
 
+  if (matchupCallouts && matchupCallouts.length) {
+    parts.push(...matchupCallouts);
+  }
+
   return parts.join(' ');
 }
 
@@ -165,10 +196,16 @@ const Pickem = {
     const injuries = ctx.injuries || {};
     const spreadHist = ctx.spreadHist || {};
     const elwayQb1 = ctx.elwayQb1 || {};
+    const teamRatings = ctx.teamRatings || null;
+    const power = (teamRatings && teamRatings.power_rankings) || {};
     const bucketRanks = computeBucketRanks(ctx);
+    // College-football-poll-style "#N " prefix from the power ranking (data-driven composite
+    // of 8 stats -- see js/power.js / Power Rankings tab). Descriptive only.
+    const rankPrefix = team => power[team] ? `<span class="rank-badge" title="Power ranking #${power[team].rank} of ${Object.keys(power).length}">#${power[team].rank}</span> ` : '';
 
     const cards = games.map(g => {
       const o = odds[g.game_id] || {};
+      const matchup = matchupFor(teamRatings, g.home, g.away);
       const move = lineMovement(spreadHist[g.game_id]);
       const staleHome = elwayStaleQb(g.home, elwayQb1, injuries);
       const staleAway = elwayStaleQb(g.away, elwayQb1, injuries);
@@ -216,7 +253,8 @@ const Pickem = {
 
       const narrative = hasLine
         ? buildNarrative({ favTeam, dogTeam, marketMargin: Math.abs(o.spread), el, histCell,
-                           bucketLabel, bucketRank, edgeRec: hasEdge ? edgeRec : null })
+                           bucketLabel, bucketRank, edgeRec: hasEdge ? edgeRec : null,
+                           matchupCallouts: matchup ? matchup.callouts : null })
         : 'No market line yet for this game.';
 
       const edgeChip = hasEdge
@@ -228,7 +266,7 @@ const Pickem = {
       return `<div class="game-card">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
-          <span class="matchup">${teamSpan(g.away)}${wchip(g.away)}${qbChip(g.away, injuries)} @ ${teamSpan(g.home)}${wchip(g.home)}${qbChip(g.home, injuries)}</span>
+          <span class="matchup">${rankPrefix(g.away)}${teamSpan(g.away)}${wchip(g.away)}${qbChip(g.away, injuries, elwayQb1)} @ ${rankPrefix(g.home)}${teamSpan(g.home)}${wchip(g.home)}${qbChip(g.home, injuries, elwayQb1)}</span>
           ${stateChip}
           ${bucketLabel ? `<span class="chip" title="Spread bucket: ${bucketLabel}">${bucketLabel}</span>` : ''}
           ${bucketRank ? `<span class="chip${bucketRank.taken ? ' warn' : ''}" title="Rank ${bucketRank.rank} of ${bucketRank.n} in this spread bucket, by market spread + ELWAY-adjusted rank">${bucketRank.taken ? 'budget dog ' : 'bucket '}#${bucketRank.rank}/${bucketRank.n}</span>` : ''}
@@ -259,6 +297,10 @@ const Pickem = {
             <div class="stat-label">Pool edge</div>
             <div>${edgeChip}</div>
           </div>
+        </div>
+        <div class="game-card-matchup">
+          <div class="stat-label" title="Rush/pass offense and defense EPA/play, garbage time excluded. Descriptive context only -- backtesting found this does not beat the market spread.">Matchup (EPA/play)</div>
+          ${matchupTableHtml(matchup, g.home, g.away)}
         </div>
         <p class="game-card-narrative">${esc(narrative)}</p>
         <div class="game-card-pick">

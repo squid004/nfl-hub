@@ -4,3 +4,6 @@ yahoo_oauth>=2.0
 requests>=2.31
 python-dotenv>=1.0
 tzdata>=2024.1
+pandas>=2.2
+numpy>=1.26
+pyarrow>=14.0

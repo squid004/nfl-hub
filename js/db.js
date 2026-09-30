@@ -127,6 +127,15 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return {}; }
   },
 
+  // { teams: {TEAM: {rush_off_epa, pass_off_epa, rush_def_epa_allowed, pass_def_epa_allowed}},
+  //   matchups: {"AWAY@HOME": {home, away, home_ratings, away_ratings, callouts: [...]}} },
+  // written by nflhub.refresh (garbage-time-excluded EPA ratings; see nflhub/sources/team_ratings.py).
+  async teamRatings() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'team_ratings').maybeSingle();
+    if (!data) return null;
+    try { return JSON.parse(data.value); } catch { return null; }
+  },
+
   async spreadHistory(week) {
     try {
       const { data, error } = await this._c().from('spread_history').select('game_id,captured_at,spread_home')

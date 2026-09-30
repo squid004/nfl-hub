@@ -21,6 +21,7 @@ from .sources import (
     history,
     nfl_schedule,
     odds,
+    team_ratings,
     yahoo_fantasy,
 )
 from .sources.edge_teams import UnknownTeamError, normalize_team
@@ -184,6 +185,15 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.exception("history refresh failed")
         summary["errors"].append(f"history: {exc}")
+
+    # 4b2. per-team rush/pass offense+defense EPA ratings, garbage-time excluded (rebuilt
+    # once/day; descriptive context for pick decisions -- backtesting in research/ found it
+    # does not beat the closing market spread, so it's not used to auto-generate picks)
+    try:
+        summary["team_ratings"] = team_ratings.refresh(store)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("team_ratings refresh failed")
+        summary["errors"].append(f"team_ratings: {exc}")
 
     # 4c. freeze this week's "take N" suggestion until first kickoff (year-end analysis)
     try:

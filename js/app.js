@@ -16,6 +16,7 @@ const App = {
       if (b.dataset.act === 'edge-pick-del') Edge.deletePick(b.dataset.opponent, b.dataset.team);
       if (b.dataset.act === 'edge-bias-save') Edge.saveBiasOverride(b.dataset.team, b.dataset.n);
       if (b.dataset.act === 'edge-bias-clear') Edge.clearBiasOverride(b.dataset.team);
+      if (b.dataset.act === 'power-sort') Power.sortBy(b.dataset.col);
     });
     document.body.addEventListener('submit', e => {
       if (e.target.id === 'edge-standing-form') {
@@ -35,7 +36,8 @@ const App = {
       const week = parseInt(weekRaw || '1', 10);
       const season = parseInt(seasonRaw || '2025', 10);
       const [games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks, refreshReq, lastRefresh, hist, bSnap,
-             edgeLog, edgeBias, edgeStandings, edgeOpponentPicks, edgeSeasonLog, seasonGames, injuries, spreadHist, elwayQb1] =
+             edgeLog, edgeBias, edgeStandings, edgeOpponentPicks, edgeSeasonLog, seasonGames, injuries, spreadHist, elwayQb1,
+             teamRatings] =
         await Promise.all([
           DB.weekGames(week), DB.weekOdds(week), DB.bestPriceOdds(week), DB.bookOdds(week), DB.elwayOdds(week),
           DB.latestRoster('yahoo'), DB.latestRoster('espn'),
@@ -44,11 +46,12 @@ const App = {
           DB.edgeRecommendationLog(season, week), DB.edgeBiasAll(), DB.edgeStandings(season),
           DB.edgeOpponentPicks(season, week), DB.edgeRecommendationLogSeason(season), DB.seasonGames(season),
           DB.injuries(), DB.spreadHistory(week), DB.elwayQb1(),
+          DB.teamRatings(),
         ]);
       const ctx = { week, season, games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks,
                     refreshReq, lastRefresh, hist, bSnap,
                     edgeLog, edgeBias, edgeStandings, edgeOpponentPicks, edgeSeasonLog, seasonGames,
-                    injuries, spreadHist, elwayQb1 };
+                    injuries, spreadHist, elwayQb1, teamRatings };
       this._ctx = ctx;
       Deadlines.render(ctx);
       Pickem.render(ctx, 'ml');
@@ -59,6 +62,7 @@ const App = {
       History.render(ctx, 'ats');
       Edge.render(ctx);
       Odds.render(ctx);
+      Power.render(ctx);
       this.renderStatus(ctx);
     } catch (e) {
       document.getElementById('status').textContent = 'Error: ' + e.message;
