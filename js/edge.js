@@ -103,9 +103,12 @@ const Edge = {
     return `
       <div class="panel">
         <h2>Season standing (week ${ctx.week})</h2>
-        <p class="muted">Always manual — drives this week's deviation budget (how many
-          favorites to fade). Leading late, mirror the field; behind late, you need
-          separation, not parallel correct picks.</p>
+        <p class="muted">Auto-derived every refresh from the pool sheet (edge_core.derive_standing)
+          — drives this week's deviation budget (how many favorites to fade). Leading late,
+          mirror the field; behind late, you need separation, not parallel correct picks.
+          This form is a fallback only: it's overwritten on the next refresh whenever the
+          sheet can find your row, so it matters only if the sheet is unconfigured or your
+          name isn't matched that week.</p>
         <form id="edge-standing-form" class="btns" style="flex-wrap:wrap;gap:8px;">
           <select name="standing_bucket">
             ${opt('LEADING', 'Leading')}${opt('EARLY', 'Early season')}

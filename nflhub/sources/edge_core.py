@@ -100,6 +100,41 @@ def deviation_budget(standing: Standing, pool_size: int) -> int:
     return 4 if pool_size >= 30 else 3  # Standing.BEHIND
 
 
+# --- season standing (nfl-hub addition, NOT in pickem-edge's SPEC.md) --------
+# The original spec left Standing as a manual weekly call with no derivation rule. This
+# formula ties directly to deviation_budget's own stated rationale above ("behind late,
+# picks gained in parallel with the leader don't help") -- BEHIND specifically means the
+# gap can no longer be closed by matching the leader pick-for-pick; it requires the leader
+# to actually miss some.
+#
+# TODO (deliberately deferred, 2026-09-30): a SEPARATE "win this one week" budget/recommendation
+# is still open -- unlike the season-long case above, there's no formula here that follows
+# cleanly from first principles yet. Leverage_score() below is already a single-game
+# differentiation value and doesn't depend on season standing, so the two objectives can
+# already disagree on any given game; what's missing is how MANY leverage-ranked games to
+# act on when the sole goal is winning this week's mini-contest (pool_size probably matters
+# -- bigger pools need more differentiation for a realistic shot -- but "budget ~ pool_size/10"
+# was only ever a starting guess, not validated). When this gets picked back up, surface it
+# as a second, clearly-labeled recommendation alongside the season one rather than replacing it.
+
+REG_SEASON_WEEKS = 18
+
+
+def derive_standing(
+    my_correct_season: int, leader_correct_season: int, week: int,
+    *, early_weeks: int = 3, total_weeks: int = REG_SEASON_WEEKS,
+) -> Standing:
+    if week <= early_weeks:
+        return Standing.EARLY
+    gap = leader_correct_season - my_correct_season
+    if gap <= 0:
+        return Standing.LEADING
+    games_remaining = max(total_weeks - week, 0)
+    if gap >= games_remaining:
+        return Standing.BEHIND
+    return Standing.MIDDLE
+
+
 # --- recommendation (SPEC.md 2.5) --------------------------------------------
 
 class Recommendation(StrEnum):

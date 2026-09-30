@@ -273,7 +273,9 @@ def _apply_edge(
 ) -> None:
     """Leverage/fade recommendations for the straight moneyline pick'em pool, ported from
     github.com/squid004/pickem-edge. See SPEC.md there; nflhub/sources/edge_core.py has the
-    ported math and the "why" for each formula.
+    ported math and the "why" for each formula. The season standing bucket (LEADING/EARLY/
+    MIDDLE/BEHIND) is auto-derived every run from the sheet's correct-picks data
+    (edge_core.derive_standing) -- an nfl-hub addition, not part of the original spec.
     """
     # opponent picks + your own standing, pulled from your pool's Google Sheet ("Week N"
     # tab). Every run, so a correction in the sheet shows up within one refresh cycle; the
@@ -294,14 +296,14 @@ def _apply_edge(
                     None,
                 )
                 if mine:
-                    existing = store.edge_get_standing(season, week)
-                    bucket = existing["standing_bucket"] if existing else "MIDDLE"
+                    leader_correct = max((s.correct_season or 0) for s in sheet.standings)
+                    bucket = edge_core.derive_standing(mine.correct_season or 0, leader_correct, week)
                     store.edge_upsert_standing(
-                        season, week, bucket, sheet.pool_size,
+                        season, week, bucket.value, sheet.pool_size,
                         correct_picks=mine.correct_week, total_picks=mine.correct_season,
                         rank=mine.rank,
                     )
-                    summary["edge_standing_sync"] = f"rank {mine.rank}/{sheet.pool_size}"
+                    summary["edge_standing_sync"] = f"rank {mine.rank}/{sheet.pool_size}, standing {bucket.value}"
                 else:
                     summary["edge_standing_sync"] = f"'{cfg.edge.my_name}' not found in sheet"
         except edge_sheet.EdgeSheetUnavailable as exc:

@@ -135,7 +135,8 @@ create table if not exists edge_bias (
 create table if not exists edge_season_standing (
   season          int,
   week            int,
-  standing_bucket text not null,   -- LEADING | EARLY | MIDDLE | BEHIND (always manual)
+  standing_bucket text not null,   -- LEADING | EARLY | MIDDLE | BEHIND (auto-derived each
+                                    -- refresh from the sheet -- see edge_core.derive_standing)
   pool_size       int not null,
   correct_picks   int,
   total_picks     int,
