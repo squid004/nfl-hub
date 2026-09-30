@@ -5,3 +5,5 @@ __pycache__/
 .venv/
 venv/
 nflhub/web/
+research/cache/
+research/output/
