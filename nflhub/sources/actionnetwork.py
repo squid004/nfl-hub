@@ -2,11 +2,19 @@
 
 No official API. The page is server-rendered Next.js: the full per-book odds payload
 (spread/moneyline/total for DraftKings, FanDuel, BetMGM, etc.) is embedded as JSON in a
-`<script id="__NEXT_DATA__">` tag, so a plain GET with a browser User-Agent is enough — no
-headless browser, no JS execution, no Cloudflare fight (unlike the unofficial DraftKings
-endpoints, which do block CI IPs). This is undocumented internal page data, not a stable
-API, so it's treated the same as nflpickwatch/edge_national.py: best-effort, soft-fail,
-never raises out of refresh.py.
+`<script id="__NEXT_DATA__">` tag, so in principle a plain GET with a browser User-Agent is
+enough -- no headless browser, no JS execution needed to PARSE it.
+
+In practice (confirmed 2026-10-01): this now hits the exact problem the module originally
+claimed it avoided. Every run from GitHub Actions gets back an empty HTTP 202 (status=202,
+body length 0) -- a bot-mitigation challenge response, not an actual page -- while the same
+URL fetched from a residential IP returns a normal 200 with the tag intact. So Action Network
+now fights CI/datacenter IPs here too, same as the unofficial DraftKings endpoints. Not fixed
+by any change to the parsing logic below; would need a different IP (residential proxy) or a
+different data source entirely. Soft-fails like every other best-effort scrape in this
+project (nflpickwatch/edge_national.py): best_price_odds/book_odds just stay empty, the
+"Shop the line" panel renders with nothing to show, and refresh.py treats it as a non-fatal
+skip rather than failing the whole run.
 """
 
 from __future__ import annotations
@@ -53,16 +61,13 @@ def _fetch_next_data() -> dict[str, Any]:
         raise ActionNetworkUnavailable(f"fetch failed: {exc}") from exc
     m = _NEXT_DATA_RE.search(r.text)
     if not m:
-        # TEMP diagnostic (2026-10-01): confirmed the tag parses fine from a residential IP,
-        # so "page layout changed" is probably the wrong diagnosis -- more likely Action
-        # Network serves CI/datacenter IPs (e.g. GitHub Actions runners) a different page
-        # (bot-block/challenge), same problem already documented for the unofficial DK
-        # endpoints. This logs what the runner actually received so the next scheduled run
-        # confirms or rules that out; revert once known.
-        snippet = r.text[:300].replace("\n", " ")
+        # Confirmed 2026-10-01: this is Action Network's bot mitigation (empty 202 to CI
+        # IPs), not a layout change -- see module docstring. Keep status/length in the
+        # message since "fetch succeeded but got blocked" and "page genuinely changed"
+        # need different fixes if this ever needs revisiting.
         raise ActionNetworkUnavailable(
-            f"__NEXT_DATA__ not found (status={r.status_code}, len={len(r.text)}, "
-            f"snippet={snippet!r})"
+            f"__NEXT_DATA__ not found (status={r.status_code}, len={len(r.text)} -- "
+            "likely bot-mitigation on this IP, not a real layout change)"
         )
     try:
         return json.loads(m.group(1))
