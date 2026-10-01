@@ -25,6 +25,11 @@ fit quality. Notably, turnovers_def_forced optimizes to exactly 0.0 -- once the 
 are known, takeaways forced adds no information, it's not just weak on its own. Computed once
 offline, not refit daily -- see POWER_WEIGHTS/ORIENTATION below.
 
+Display: every UI surface shows `normalized_ratings()`/the `*_0_100` fields (min-max rescaled
+to 0-100 per stat across the current league, 100 = best in the NFL this season) rather than
+raw signed EPA -- see `_normalize_0_100`. Purely cosmetic: the model itself still fits on the
+raw/z-scored values above, this never feeds back into any calculation.
+
 Completed seasons' play-by-play is pre-aggregated once and committed as small parquet files
 in nflhub/data/team_ratings/ (~390KB total for 2007-2025) so this doesn't re-download and
 re-crunch ~350MB of historical play-by-play every run. Only the CURRENT season is fetched
@@ -333,6 +338,33 @@ def _rank_and_z(values: dict[str, float]) -> tuple[dict[str, float], dict[str, i
     return z, rank
 
 
+def _normalize_0_100(values: dict[str, float], orientation: int = 1) -> dict[str, float]:
+    """Min-max scale raw values to [0, 100] after applying `orientation`, so the result is
+    always "higher = better" and always positive -- e.g. a good (low) defense-allowed EPA and
+    a good (high) offense EPA both read as a high number, with no sign to interpret. Display
+    only: the underlying model keeps fitting on z-scores/raw EPA, this never feeds back in."""
+    oriented = {t: orientation * v for t, v in values.items()}
+    lo, hi = min(oriented.values()), max(oriented.values())
+    if hi == lo:
+        return {t: 50.0 for t in oriented}
+    return {t: round(100 * (v - lo) / (hi - lo), 1) for t, v in oriented.items()}
+
+
+def normalized_ratings(ratings: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
+    """Each of the 8 stats, per team, rescaled to [0, 100] across the current league (100 =
+    best in the NFL this season at that stat, 0 = worst) -- the display-friendly counterpart
+    to the raw EPA/points/turnover values `ratings` holds, for anywhere those get shown."""
+    out: dict[str, dict[str, float]] = defaultdict(dict)
+    for m in RATING_METRICS:
+        vals = {t: r[m] for t, r in ratings.items() if r.get(m) is not None}
+        if not vals:
+            continue
+        scaled = _normalize_0_100(vals, ORIENTATION[m])
+        for t, v in scaled.items():
+            out[t][m] = v
+    return out
+
+
 def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict]) -> dict[str, dict]:
     """For each upcoming game (already normalized home/away team codes), rule-based sentences
     for any offense-vs-opposing-defense pairing whose combined z-score clears
@@ -349,6 +381,7 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict])
         for t in vals:
             z.setdefault(t, {})[m] = zm[t]
             rank.setdefault(t, {})[m] = rankm[t]
+    ratings_0_100 = normalized_ratings(ratings)
 
     out: dict[str, dict] = {}
     for g in upcoming:
@@ -364,7 +397,7 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict])
                 combined = z[off_team][off_m] + z[def_team][def_m]
                 if abs(combined) < MISMATCH_Z_THRESHOLD:
                     continue
-                off_val, def_val = ratings[off_team][off_m], ratings[def_team][def_m]
+                off_disp, def_disp = ratings_0_100[off_team][off_m], ratings_0_100[def_team][def_m]
                 off_rank, def_rank = rank[off_team][off_m], rank[def_team][def_m]
                 favors_offense = combined > 0
                 # each side's descriptor reflects that team's OWN rank (good/bad), independent
@@ -377,9 +410,9 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict])
                     else f"{_ordinal(n_teams + 1 - def_rank)}-fewest allowed in the NFL"
                 verdict = "a lopsided matchup on paper" if favors_offense else "a tough matchup on paper"
                 callouts.append(
-                    f"{off_team}'s {phase} offense ({off_val:+.2f} EPA/play, {off_desc}) "
+                    f"{off_team}'s {phase} offense ({off_disp:.0f}/100, {off_desc}) "
                     f"{'faces' if favors_offense else 'runs into'} {def_team}'s {phase} defense "
-                    f"({def_val:+.2f} EPA/play allowed, {def_desc}) -- {verdict}."
+                    f"({def_disp:.0f}/100, {def_desc}) -- {verdict}."
                 )
         weather = None
         gameday = g.get("gameday")
@@ -396,6 +429,7 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict])
         out[f"{away}@{home}"] = {
             "home": home, "away": away,
             "home_ratings": ratings[home], "away_ratings": ratings[away],
+            "home_ratings_0_100": ratings_0_100.get(home), "away_ratings_0_100": ratings_0_100.get(away),
             "callouts": callouts,
             "predicted_home_points": predict_points(ratings[home], ratings[away], weather),
             "predicted_away_points": predict_points(ratings[away], ratings[home], weather),
@@ -407,7 +441,12 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict])
 def power_rankings(ratings: dict[str, dict[str, float]]) -> dict[str, dict]:
     """Composite score per team: sum of POWER_WEIGHTS[m] * ORIENTATION[m] * z-score(team, m)
     across all 8 stats, ranked 1 = best. Each z-score is cross-sectional (against the other 31
-    current teams), so this reflects current relative standing, not an absolute scale."""
+    current teams), so this reflects current relative standing, not an absolute scale.
+
+    `score`/`ratings` keep the raw signed values the model is actually fit on (z-score-weighted
+    sum, raw EPA/points/turnovers); `score_0_100`/`ratings_0_100` are the same information
+    min-max rescaled to a positive 0-100 range (100 = best in the NFL this season) purely for
+    display, so nothing with a +/- EPA sign to interpret ever has to reach the UI."""
     if len(ratings) < 4:
         return {}
     z: dict[str, dict[str, float]] = defaultdict(dict)
@@ -418,9 +457,14 @@ def power_rankings(ratings: dict[str, dict[str, float]]) -> dict[str, dict]:
             z[t][m] = v
 
     scores = {t: sum(POWER_WEIGHTS[m] * ORIENTATION[m] * zt.get(m, 0.0) for m in RATING_METRICS) for t, zt in z.items()}
+    scores_0_100 = _normalize_0_100(scores, orientation=1)  # scores are already oriented higher=better
+    ratings_0_100 = normalized_ratings(ratings)
     order = sorted(scores, key=lambda t: -scores[t])
     return {
-        t: {"rank": i + 1, "score": round(scores[t], 4), "ratings": ratings[t]}
+        t: {
+            "rank": i + 1, "score": round(scores[t], 4), "score_0_100": scores_0_100[t],
+            "ratings": ratings[t], "ratings_0_100": ratings_0_100.get(t, {}),
+        }
         for i, t in enumerate(order)
     }
 

@@ -7,26 +7,28 @@
 // page can't drift out of sync with whatever weights are actually running. Descriptive only
 // -- see the Moneyline Pick'em matchup blocks and research/ for the backtesting showing this
 // doesn't beat the market spread.
+//
+// Every stat column renders the 0-100 normalized value (*_0_100 fields, 100 = best in the NFL
+// this season), not raw signed EPA/points/turnovers -- same scale for every column, nothing
+// with a +/- sign to interpret. The underlying fit still runs on the raw values server-side.
 const POWER_COLS = [
   ['rank', 'Rank'],
   ['team', 'Team'],
   ['score', 'Power Score'],
-  ['rush_off_epa', 'Rush Off EPA'],
-  ['pass_off_epa', 'Pass Off EPA'],
-  ['rush_def_epa_allowed', 'Rush Def EPA (allowed)'],
-  ['pass_def_epa_allowed', 'Pass Def EPA (allowed)'],
+  ['rush_off_epa', 'Rush Offense'],
+  ['pass_off_epa', 'Pass Offense'],
+  ['rush_def_epa_allowed', 'Rush Defense'],
+  ['pass_def_epa_allowed', 'Pass Defense'],
   ['points_off', 'Points Scored'],
   ['points_def_allowed', 'Points Allowed'],
-  ['turnovers_off', 'Turnovers Committed'],
-  ['turnovers_def_forced', 'Turnovers Forced'],
+  ['turnovers_off', 'Turnover Avoidance'],
+  ['turnovers_def_forced', 'Takeaways Forced'],
 ];
 
 function fmtPowerVal(key, v) {
   if (v == null) return '—';
   if (key === 'team' || key === 'rank') return v;
-  if (key.startsWith('points')) return v.toFixed(1);
-  if (key.startsWith('turnovers')) return v.toFixed(2);
-  return v.toFixed(3); // EPA metrics + composite score
+  return v.toFixed(1); // every column is 0-100 normalized now, same scale throughout
 }
 
 const Power = {
@@ -44,7 +46,7 @@ const Power = {
     const teamRatings = ctx.teamRatings || {};
     const pr = teamRatings.power_rankings || {};
     const meta = teamRatings.power_ranking_meta || null;
-    const rows = Object.entries(pr).map(([team, info]) => ({ team, rank: info.rank, score: info.score, ...info.ratings }));
+    const rows = Object.entries(pr).map(([team, info]) => ({ team, rank: info.rank, score: info.score_0_100, ...info.ratings_0_100 }));
 
     if (!rows.length) {
       el.innerHTML = `<div class="panel"><h2>Power Rankings</h2><p class="muted">No rating data yet.</p></div>`;
@@ -78,6 +80,8 @@ const Power = {
       <div class="panel">
         <h2>Power Rankings</h2>
         <p class="muted small">${meta ? esc(meta.method) : 'Composite of 8 stats, garbage time excluded.'}
+          Every column is shown on a 0-100 scale (100 = best in the NFL this season), including
+          defensive/turnover stats, so higher is always better everywhere in the table.
           Click a column header to sort.</p>
         ${meta ? `<details class="power-methodology">
           <summary class="muted small">Weights used (click to expand)</summary>

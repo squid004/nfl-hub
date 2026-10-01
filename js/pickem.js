@@ -117,16 +117,16 @@ function matchupFor(teamRatings, home, away) {
 }
 
 const RATING_COLS = [
-  ['rush_off_epa', 'R-Off', 'Rush offense EPA/play (garbage time excluded)'],
-  ['pass_off_epa', 'P-Off', 'Pass offense EPA/play (garbage time excluded)'],
-  ['rush_def_epa_allowed', 'R-Def', 'Rush defense EPA/play allowed (lower = better defense)'],
-  ['pass_def_epa_allowed', 'P-Def', 'Pass defense EPA/play allowed (lower = better defense)'],
+  ['rush_off_epa', 'R-Off', 'Rush offense, 0-100 (100 = best in the NFL this season, garbage time excluded)'],
+  ['pass_off_epa', 'P-Off', 'Pass offense, 0-100 (100 = best in the NFL this season, garbage time excluded)'],
+  ['rush_def_epa_allowed', 'R-Def', 'Rush defense, 0-100 (100 = best/stingiest in the NFL this season)'],
+  ['pass_def_epa_allowed', 'P-Def', 'Pass defense, 0-100 (100 = best/stingiest in the NFL this season)'],
 ];
 
 function matchupTableHtml(matchup, home, away) {
   if (!matchup) return '<div class="muted small">No rating data yet.</div>';
   const row = (team, r) => `<tr><td>${team}</td>${RATING_COLS.map(([key]) =>
-    `<td class="num">${r && r[key] != null ? r[key].toFixed(2) : '—'}</td>`).join('')}</tr>`;
+    `<td class="num">${r && r[key] != null ? r[key].toFixed(0) : '—'}</td>`).join('')}</tr>`;
   const ap = matchup.predicted_away_points, hp = matchup.predicted_home_points;
   const wx = matchup.weather;
   const wxNote = wx
@@ -137,7 +137,7 @@ function matchupTableHtml(matchup, home, away) {
     : '';
   return `<table class="mini-ratings">
     <thead><tr><th></th>${RATING_COLS.map(([, label, title]) => `<th class="num" title="${title}">${label}</th>`).join('')}</tr></thead>
-    <tbody>${row(away, matchup.away_ratings)}${row(home, matchup.home_ratings)}</tbody>
+    <tbody>${row(away, matchup.away_ratings_0_100)}${row(home, matchup.home_ratings_0_100)}</tbody>
   </table>${proj}`;
 }
 
@@ -307,7 +307,7 @@ const Pickem = {
           </div>
         </div>
         <div class="game-card-matchup">
-          <div class="stat-label" title="Rush/pass offense and defense EPA/play, garbage time excluded, plus a projected score. Descriptive context only -- backtesting found neither beats the market spread.">Matchup (EPA/play) + Projected Score</div>
+          <div class="stat-label" title="Rush/pass offense and defense, 0-100 scale (100 = best in the NFL this season, garbage time excluded), plus a projected score. Descriptive context only -- backtesting found neither beats the market spread.">Matchup (0-100) + Projected Score</div>
           ${matchupTableHtml(matchup, g.home, g.away)}
         </div>
         <p class="game-card-narrative">${esc(narrative)}</p>
