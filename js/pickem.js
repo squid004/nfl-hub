@@ -133,12 +133,11 @@ function matchupFor(teamRatings, home, away) {
   return (teamRatings.matchups || {})[`${away}@${home}`] || null;
 }
 
-const RATING_COLS = [
-  ['rush_off_epa', 'R-Off', 'Rush offense, 0-100 (100 = best ever recorded in the 2007-present dataset, garbage time excluded)'],
-  ['pass_off_epa', 'P-Off', 'Pass offense, 0-100 (100 = best ever recorded in the 2007-present dataset, garbage time excluded)'],
-  ['rush_def_epa_allowed', 'R-Def', 'Rush defense, 0-100 (100 = best/stingiest ever recorded in the 2007-present dataset)'],
-  ['pass_def_epa_allowed', 'P-Def', 'Pass defense, 0-100 (100 = best/stingiest ever recorded in the 2007-present dataset)'],
-];
+// Phase -> [offense metric key, defense-allowed metric key]. Each matchup row pairs ONE
+// team's offense directly against the OTHER team's defense in the same cell, since that's
+// the actual matchup -- a table of each team's own 4 stats side by side (the old layout)
+// made you jump between rows/columns to compare the two numbers that actually face off.
+const PHASES = [['rush', 'Rush'], ['pass', 'Pass']];
 
 // Header chip only fires for weather bad enough to matter -- the projected score already
 // carries the weather adjustment (and says so) regardless, this is just the at-a-glance flag,
@@ -170,8 +169,17 @@ function forecastSummary(wx) {
 
 function matchupTableHtml(matchup, home, away) {
   if (!matchup) return '<div class="muted small">No rating data yet.</div>';
-  const row = (team, r) => `<tr><td>${team}</td>${RATING_COLS.map(([key]) =>
-    `<td class="num">${r && r[key] != null ? r[key].toFixed(0) : '—'}</td>`).join('')}</tr>`;
+  const hr = matchup.home_ratings_display || {};
+  const ar = matchup.away_ratings_display || {};
+  const fmt = v => v != null ? v.toFixed(0) : '—';
+  const cell = (offTeam, offR, phase, defTeam, defR) => {
+    const off = offR[`${phase}_off_epa`], def = defR[`${phase}_def_epa_allowed`];
+    return `<td class="num" title="${offTeam} ${phase} offense ${fmt(off)}/100 vs ${defTeam} ${phase} defense ${fmt(def)}/100 (both 0-100, 100 = best ever recorded in the 2007-present dataset)">${fmt(off)} vs ${fmt(def)}</td>`;
+  };
+  const row = (offTeam, offR, defTeam, defR) => `<tr>
+    <td>${offTeam} off &rarr; ${defTeam} def</td>
+    ${PHASES.map(([phase]) => cell(offTeam, offR, phase, defTeam, defR)).join('')}
+  </tr>`;
   const ap = matchup.predicted_away_points, hp = matchup.predicted_home_points;
   const wx = matchup.weather;
   const wxNote = wx ? ' (weather adjustment applied)' : '';
@@ -179,9 +187,9 @@ function matchupTableHtml(matchup, home, away) {
     ? `<div class="muted small" title="Non-negative L2-regularized regression on own offense vs. opponent defense (same 8 stats), walk-forward validated 2007-2025, plus a separate wind/rain/extreme-cold adjustment (also walk-forward validated, applied only for outdoor stadiums within the ~16-day forecast window) when available. Less accurate than the market spread at picking winners -- a second data point alongside the market/ELWAY lines, not a replacement.">Projected: ${away} ${ap.toFixed(1)} – ${home} ${hp.toFixed(1)}${wxNote}</div>`
     : '';
   const forecast = wx ? `<div class="muted small">Forecast: ${esc(forecastSummary(wx))}</div>` : '';
-  return `<table class="mini-ratings">
-    <thead><tr><th></th>${RATING_COLS.map(([, label, title]) => `<th class="num" title="${title}">${label}</th>`).join('')}</tr></thead>
-    <tbody>${row(away, matchup.away_ratings_display)}${row(home, matchup.home_ratings_display)}</tbody>
+  return `<table class="mini-ratings matchup-matrix">
+    <thead><tr><th></th>${PHASES.map(([, label]) => `<th class="num">${label} (off vs def)</th>`).join('')}</tr></thead>
+    <tbody>${row(away, ar, home, hr)}${row(home, hr, away, ar)}</tbody>
   </table>${forecast}${proj}`;
 }
 
@@ -193,35 +201,29 @@ function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLa
   if (el && el.home_win_prob != null && el.away_win_prob != null) {
     const elwayFav = el.home_win_prob > el.away_win_prob ? 'home' : 'away';
     const elwayFavTeam = elwayFav === 'home' ? el._home : el._away;
-    const elwayProb = Math.max(el.home_win_prob, el.away_win_prob);
     if (elwayFavTeam === favTeam) {
       parts.push(`ELWAY agrees, projecting ${favTeam} by about ${Math.abs(el.spread_home).toFixed(1)}.`);
     } else {
       parts.push(`ELWAY disagrees — its avg-points model actually likes ${elwayFavTeam} `
-        + `(${Math.round(elwayProb * 100)}% win prob) against the market's lean toward ${favTeam}.`);
+        + `against the market's lean toward ${favTeam}.`);
     }
   }
 
   if (histCell && histCell.su != null) {
     const suPct = Math.round(histCell.su * 100);
     parts.push(suPct < 55
-      ? `Favorites this size (${bucketLabel}) have only won ${suPct}% of the time historically — a live spot for an upset.`
-      : `Favorites this size (${bucketLabel}) have won ${suPct}% of the time historically.`);
+      ? `Favorites ${bucketLabel} have only won ${suPct}% of the time historically — a live spot for an upset.`
+      : `Favorites ${bucketLabel} have won ${suPct}% of the time historically.`);
   }
 
-  if (bucketRank) {
-    parts.push(bucketRank.n > 1
-      ? `Ranked #${bucketRank.rank} of ${bucketRank.n} live dogs in this bucket (by market spread, ELWAY-adjusted).`
-      : `Only dog in this bucket this week.`);
-    if (bucketRank.taken) {
-      parts.push(`This week's upset-budget model flags ${dogTeam} as one of its picks from this bucket.`);
-    }
+  if (bucketRank && bucketRank.taken) {
+    parts.push(`This week's upset-budget model flags ${dogTeam} as one of its picks from this bucket.`);
   }
 
   if (edgeRec && edgeRec.recommendation === 'FADE') {
     const fPct = edgeRec.f_estimate != null ? Math.round(edgeRec.f_estimate * 100) : null;
     parts.push(`Pool-leverage likes fading ${favTeam} here too — only ~${fPct}% of your pool is expected `
-      + `on ${dogTeam}, so it pays off if it hits (leverage ${edgeRec.leverage?.toFixed(2) ?? '—'}).`);
+      + `on ${dogTeam}, so it pays off if it hits.`);
   } else if (edgeRec && edgeRec.recommendation === 'CHALK') {
     parts.push(`Pool-leverage says stick with the chalk here — not enough separation to justify fading ${favTeam}.`);
   }
@@ -355,7 +357,7 @@ const Pickem = {
           <span class="game-card-mine">${mine ? `Your pick: <strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">No pick yet</span>'}</span>
         </div>
         <details class="game-card-details">
-          <summary>Why? (full explanation, EPA matchup, forecast)</summary>
+          <summary>Details</summary>
           <p class="game-card-narrative">${esc(narrative)}</p>
           <div class="game-card-matchup">
             <div class="stat-label" title="Rush/pass offense and defense, 0-100 scale (100 = best ever recorded in the 2007-present dataset, garbage time excluded), plus a projected score and full forecast. Descriptive context only -- backtesting found neither beats the market spread.">Matchup (0-100) + Projected Score + Forecast</div>
@@ -397,7 +399,7 @@ const Pickem = {
             for outdoor stadiums within ~16 days out) is bad enough to matter for scoring —
             &ge;20mph wind, &ge;10mm precip, any snow, or sub-20&deg;F highs. Milder forecasts
             don't get a chip, but still silently adjust the projected score (and say so) in
-            each card's "Why?" section, where the full forecast always shows when available.</p>
+            each card's "Details" section, where the full forecast always shows when available.</p>
         </details>
       </div>`;
   },

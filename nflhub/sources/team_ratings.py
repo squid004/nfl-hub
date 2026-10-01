@@ -491,6 +491,15 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict],
             rank.setdefault(t, {})[m] = rankm[t]
     ratings_display = display_ratings(ratings, historical_bounds)
 
+    # Rank by the already-ORIENTED display value (1 = best), not the raw _rank_and_z rank
+    # above (which ranks offense and defense-allowed in opposite directions) -- this way a
+    # callout's "(Nth)" always means the same thing, no "worst"/"fewest allowed" branching.
+    display_rank: dict[str, dict[str, int]] = {}
+    for m in RATING_METRICS:
+        vals = {t: r[m] for t, r in ratings_display.items() if m in r}
+        for i, t in enumerate(sorted(vals, key=lambda t: -vals[t])):
+            display_rank.setdefault(t, {})[m] = i + 1
+
     out: dict[str, dict] = {}
     for g in upcoming:
         home, away = g.get("home_team"), g.get("away_team")
@@ -505,22 +514,13 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict],
                 combined = z[off_team][off_m] + z[def_team][def_m]
                 if abs(combined) < MISMATCH_Z_THRESHOLD:
                     continue
-                off_disp, def_disp = ratings_display[off_team][off_m], ratings_display[def_team][def_m]
-                off_rank, def_rank = rank[off_team][off_m], rank[def_team][def_m]
+                off_rank, def_rank = display_rank[off_team][off_m], display_rank[def_team][def_m]
                 favors_offense = combined > 0
-                # each side's descriptor reflects that team's OWN rank (good/bad), independent
-                # of which way the combined matchup leans -- otherwise a genuinely good offense
-                # facing an elite defense could get mislabeled "worst" just because the pairing
-                # nets out unfavorable for it.
-                off_desc = f"{_ordinal(off_rank)} in the NFL" if z[off_team][off_m] >= 0 \
-                    else f"{_ordinal(n_teams + 1 - off_rank)}-worst in the NFL"
-                def_desc = f"{_ordinal(def_rank)}-most allowed in the NFL" if z[def_team][def_m] >= 0 \
-                    else f"{_ordinal(n_teams + 1 - def_rank)}-fewest allowed in the NFL"
                 verdict = "a lopsided matchup on paper" if favors_offense else "a tough matchup on paper"
                 callouts.append(
-                    f"{off_team}'s {phase} offense ({off_disp:.0f}/100, {off_desc}) "
+                    f"{off_team}'s {phase} offense ({_ordinal(off_rank)}) "
                     f"{'faces' if favors_offense else 'runs into'} {def_team}'s {phase} defense "
-                    f"({def_disp:.0f}/100, {def_desc}) -- {verdict}."
+                    f"({_ordinal(def_rank)}) -- {verdict}."
                 )
         weather = None
         gameday = g.get("gameday")
