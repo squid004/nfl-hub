@@ -13,7 +13,7 @@
 // see team_ratings.py compute_ratings' historical_bounds), so a weak season's "best" team
 // doesn't read as an inflated 100. Points/turnovers are directly countable already, so those
 // columns show the plain per-game average for the window being evaluated, not a 0-100 score.
-const EPA_0_100_COLS = new Set(['score', 'rush_off_epa', 'pass_off_epa', 'rush_def_epa_allowed', 'pass_def_epa_allowed']);
+const EPA_0_100_COLS = new Set(['score', 'sos', 'rush_off_epa', 'pass_off_epa', 'rush_def_epa_allowed', 'pass_def_epa_allowed']);
 const POWER_COLS = [
   ['rank', 'Rank'],
   ['team', 'Team'],
@@ -26,6 +26,7 @@ const POWER_COLS = [
   ['points_def_allowed', 'Points Allowed/G'],
   ['turnovers_off', 'Turnovers/G'],
   ['turnovers_def_forced', 'Takeaways/G'],
+  ['sos', 'SOS', 'Strength of schedule: an EWMA-weighted average of opponents’ own Power Score AT THE TIME each game was played (older games count less, same decay as every other rating here), on the same 0-100 scale as Power Score. 100 = toughest schedule ever recorded, 0 = easiest. Descriptive only -- not folded into Power Score itself.'],
 ];
 
 function fmtPowerVal(key, v) {
@@ -51,7 +52,7 @@ const Power = {
     const teamRatings = ctx.teamRatings || {};
     const pr = teamRatings.power_rankings || {};
     const meta = teamRatings.power_ranking_meta || null;
-    const rows = Object.entries(pr).map(([team, info]) => ({ team, rank: info.rank, score: info.score_display, ...info.ratings_display }));
+    const rows = Object.entries(pr).map(([team, info]) => ({ team, rank: info.rank, score: info.score_display, sos: info.sos_display, ...info.ratings_display }));
 
     if (!rows.length) {
       el.innerHTML = `<div class="panel"><h2>Power Rankings</h2><p class="muted">No rating data yet.</p></div>`;
@@ -64,10 +65,10 @@ const Power = {
       return dir * ((a[col] ?? 0) - (b[col] ?? 0)) || a.team.localeCompare(b.team);
     });
 
-    const header = POWER_COLS.map(([key, label]) => {
+    const header = POWER_COLS.map(([key, label, title]) => {
       const active = col === key;
       const arrow = active ? (dir === 1 ? ' ▲' : ' ▼') : '';
-      return `<th class="num"><button data-act="power-sort" data-col="${key}" class="sort-btn${active ? ' active' : ''}">${label}${arrow}</button></th>`;
+      return `<th class="num"${title ? ` title="${esc(title)}"` : ''}><button data-act="power-sort" data-col="${key}" class="sort-btn${active ? ' active' : ''}">${label}${arrow}</button></th>`;
     }).join('');
 
     const body = rows.map(r => `<tr>${POWER_COLS.map(([key]) =>
@@ -85,11 +86,11 @@ const Power = {
       <div class="panel">
         <h2>Power Rankings</h2>
         <p class="muted small">${meta ? esc(meta.method) : 'Composite of 8 stats, garbage time excluded.'}
-          Power Score and the 4 EPA columns are shown on a 0-100 scale anchored to the best/worst
-          ever recorded across the full 2007-present dataset (not just this season's 32 teams),
-          so higher is always better and a weak season's best team won't look inflated. Points
-          and turnover columns show the actual per-game average for the window evaluated.
-          Click a column header to sort.</p>
+          Power Score, SOS, and the 4 EPA columns are shown on a 0-100 scale anchored to the
+          best/worst ever recorded across the full 2007-present dataset (not just this season's
+          32 teams), so higher is always better and a weak season's best team won't look
+          inflated. Points and turnover columns show the actual per-game average for the window
+          evaluated. Click a column header to sort.</p>
         ${meta ? `<details class="power-methodology">
           <summary class="muted small">Weights used (click to expand)</summary>
           <ul class="power-weights">${weightsList}</ul>

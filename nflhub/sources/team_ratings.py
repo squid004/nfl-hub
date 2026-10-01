@@ -10,6 +10,12 @@ spread at predicting winners (see research/output/ and the AUC comparisons in
 research/edge_signal_test*.py). They're stored as descriptive context for pool decisions and
 as inputs to the power ranking below, not a betting model.
 
+Strength of schedule (`sos` in compute_ratings' output): an EWMA-weighted average of each
+opponent's OWN composite power score at the time that specific game was played, with the same
+decay/season-carryover as every other rating here -- older opponents count for less, exactly
+like older games do for a team's own ratings. Purely descriptive, not folded into the
+composite score itself.
+
 Power ranking: a single composite score per team, `POWER_WEIGHTS[m] * ORIENTATION[m] *
 z-score(team, m)` summed across all 8 stats. Weights come from ONE joint model across all 8
 stats at once (not 8 independent single-stat fits, which is what an earlier version did) --
@@ -283,6 +289,7 @@ def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict
     running_mean = {"rush_off_epa": _RunningMean(), "pass_off_epa": _RunningMean()}
 
     running_mean.update({"points_off": _RunningMean(), "turnovers_off": _RunningMean()})
+    running_mean["opp_composite"] = _RunningMean()  # league-average opponent strength, for SOS's own season-boundary carryover
 
     def league_mean(metric: str) -> float:
         base = metric.replace("_def_epa_allowed", "_off_epa") \
@@ -290,9 +297,11 @@ def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict
         return running_mean[base].mean
 
     rating: dict[str, dict] = defaultdict(lambda: {m: None for m in RATING_METRICS})
+    sos: dict[str, float | None] = defaultdict(lambda: None)
     last_season: dict[str, int] = {}
     epa_bounds = {m: [float("inf"), float("-inf")] for m in EPA_DISPLAY_METRICS}
     composite_bounds = [float("inf"), float("-inf")]
+    sos_bounds = [float("inf"), float("-inf")]
 
     for gid, teams in sorted(by_game.items()):
         g = games_by_id.get(gid)
@@ -326,7 +335,41 @@ def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict
                     if r is not None:
                         lm = league_mean(m)
                         rating[team][m] = lm + CARRYOVER * (r - lm)
+                if sos[team] is not None:
+                    lm = running_mean["opp_composite"].mean
+                    sos[team] = lm + CARRYOVER * (sos[team] - lm)
             last_season[team] = season
+
+        # Cross-sectional composite-score snapshot of the league as it stood right BEFORE this
+        # game (i.e. not yet touched by either team's result today) -- used to (a) feed each
+        # team's strength-of-schedule average with its opponent's strength AT THE TIME they
+        # played, with no lookahead, and (b) track the most extreme composite score ever
+        # observed, for the fixed historical display scale (see module docstring).
+        complete = {t: r for t, r in rating.items() if all(r[m] is not None for m in RATING_METRICS)}
+        pre_home_score = pre_away_score = None
+        if len(complete) >= MIN_TEAMS_FOR_HISTORICAL_SNAPSHOT:
+            z_snap: dict[str, dict[str, float]] = defaultdict(dict)
+            for m in RATING_METRICS:
+                zm, _ = _rank_and_z({t: r[m] for t, r in complete.items()})
+                for t, v in zm.items():
+                    z_snap[t][m] = v
+            composite_snap = {t: sum(POWER_WEIGHTS[m] * ORIENTATION[m] * zt.get(m, 0.0) for m in RATING_METRICS)
+                               for t, zt in z_snap.items()}
+            for score in composite_snap.values():
+                if score < composite_bounds[0]: composite_bounds[0] = score
+                if score > composite_bounds[1]: composite_bounds[1] = score
+            pre_home_score, pre_away_score = composite_snap.get(home), composite_snap.get(away)
+
+        if pre_away_score is not None:
+            sos[home] = pre_away_score if sos[home] is None else (1 - EWMA_ALPHA) * sos[home] + EWMA_ALPHA * pre_away_score
+            running_mean["opp_composite"].update(pre_away_score)
+        if pre_home_score is not None:
+            sos[away] = pre_home_score if sos[away] is None else (1 - EWMA_ALPHA) * sos[away] + EWMA_ALPHA * pre_home_score
+            running_mean["opp_composite"].update(pre_home_score)
+        for team in (home, away):
+            if sos[team] is not None:
+                if sos[team] < sos_bounds[0]: sos_bounds[0] = sos[team]
+                if sos[team] > sos_bounds[1]: sos_bounds[1] = sos[team]
 
         for m in ("rush_off_epa", "pass_off_epa", "points_off", "turnovers_off"):
             running_mean[m].update(home_raw[m])
@@ -341,27 +384,16 @@ def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict
                     if oriented < b[0]: b[0] = oriented
                     if oriented > b[1]: b[1] = oriented
 
-        # Point-in-time snapshot of the whole league right after this game, to track the most
-        # extreme composite power score ever seen -- same z-score + weight formula as
-        # power_rankings(), just replayed at every step of history instead of only today.
-        complete = {t: r for t, r in rating.items() if all(r[m] is not None for m in RATING_METRICS)}
-        if len(complete) >= MIN_TEAMS_FOR_HISTORICAL_SNAPSHOT:
-            z_snap: dict[str, dict[str, float]] = defaultdict(dict)
-            for m in RATING_METRICS:
-                zm, _ = _rank_and_z({t: r[m] for t, r in complete.items()})
-                for t, v in zm.items():
-                    z_snap[t][m] = v
-            for t, zt in z_snap.items():
-                score = sum(POWER_WEIGHTS[m] * ORIENTATION[m] * zt.get(m, 0.0) for m in RATING_METRICS)
-                if score < composite_bounds[0]: composite_bounds[0] = score
-                if score > composite_bounds[1]: composite_bounds[1] = score
-
     ratings_out = {
-        team: {m: (round(v, 4) if v is not None else None) for m, v in r.items()}
+        team: {
+            **{m: (round(v, 4) if v is not None else None) for m, v in r.items()},
+            "sos": round(sos[team], 4) if sos[team] is not None else None,
+        }
         for team, r in rating.items()
     }
     historical_bounds = {m: tuple(b) for m, b in epa_bounds.items()}
     historical_bounds["composite"] = tuple(composite_bounds)
+    historical_bounds["sos"] = tuple(sos_bounds)
     return ratings_out, historical_bounds
 
 
@@ -390,8 +422,8 @@ def _normalize_fixed(value: float, lo: float, hi: float) -> float:
     as a misleadingly inflated 100. Clipped defensively, though in practice `value` is always
     one of the snapshots `lo`/`hi` were themselves computed from (see compute_ratings), so it
     should never actually fall outside [lo, hi]."""
-    if hi == lo:
-        return 50.0
+    if not (np.isfinite(lo) and np.isfinite(hi)) or hi == lo:
+        return 50.0  # no (or degenerate) historical range yet -- e.g. too little data to ever hit MIN_TEAMS_FOR_HISTORICAL_SNAPSHOT
     return round(max(0.0, min(100.0, 100 * (value - lo) / (hi - lo))), 1)
 
 
@@ -498,7 +530,14 @@ def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict
     version: the composite score and the 4 EPA stats rescaled to [0, 100] against the most
     extreme value ever seen across the full dataset (`historical_bounds`), so a mediocre
     season's best team doesn't read as an inflated 100; points/turnovers are left as their own
-    raw per-game average (see display_ratings)."""
+    raw per-game average (see display_ratings).
+
+    `sos`/`sos_display`: strength of schedule -- an EWMA-weighted average of opponents' own
+    composite scores AT THE TIME each game was played (so a team that's since gotten better or
+    worse doesn't retroactively change how tough it was to play them back then), same decay/
+    season-carryover as every other rating here, computed once in compute_ratings' single
+    historical replay and just passed through on `ratings[t]["sos"]`. Descriptive only -- not
+    folded into the composite score weighting above."""
     if len(ratings) < 4:
         return {}
     z: dict[str, dict[str, float]] = defaultdict(dict)
@@ -512,11 +551,14 @@ def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict
     composite_lo, composite_hi = historical_bounds["composite"]
     scores_display = {t: _normalize_fixed(s, composite_lo, composite_hi) for t, s in scores.items()}
     ratings_display = display_ratings(ratings, historical_bounds)
+    sos_lo, sos_hi = historical_bounds["sos"]
     order = sorted(scores, key=lambda t: -scores[t])
     return {
         t: {
             "rank": i + 1, "score": round(scores[t], 4), "score_display": scores_display[t],
             "ratings": ratings[t], "ratings_display": ratings_display.get(t, {}),
+            "sos": ratings[t].get("sos"),
+            "sos_display": _normalize_fixed(ratings[t]["sos"], sos_lo, sos_hi) if ratings[t].get("sos") is not None else None,
         }
         for i, t in enumerate(order)
     }
