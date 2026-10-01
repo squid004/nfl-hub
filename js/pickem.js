@@ -127,10 +127,18 @@ function matchupTableHtml(matchup, home, away) {
   if (!matchup) return '<div class="muted small">No rating data yet.</div>';
   const row = (team, r) => `<tr><td>${team}</td>${RATING_COLS.map(([key]) =>
     `<td class="num">${r && r[key] != null ? r[key].toFixed(2) : '—'}</td>`).join('')}</tr>`;
+  const ap = matchup.predicted_away_points, hp = matchup.predicted_home_points;
+  const wx = matchup.weather;
+  const wxNote = wx
+    ? ` (forecast: ${Math.round(wx.wind_mph)}mph wind${wx.precip_mm > 0 ? `, ${wx.precip_mm.toFixed(1)}mm precip` : ''}${wx.cold_flag ? ', <20°F' : ''} — adjustment applied)`
+    : '';
+  const proj = (ap != null && hp != null)
+    ? `<div class="muted small" title="Non-negative L2-regularized regression on own offense vs. opponent defense (same 8 stats), walk-forward validated 2007-2025, plus a separate wind/rain/extreme-cold adjustment (also walk-forward validated, applied only for outdoor stadiums within the ~16-day forecast window) when available. Less accurate than the market spread at picking winners -- a second data point alongside the market/ELWAY lines, not a replacement.">Projected: ${away} ${ap.toFixed(1)} – ${home} ${hp.toFixed(1)}${wxNote}</div>`
+    : '';
   return `<table class="mini-ratings">
     <thead><tr><th></th>${RATING_COLS.map(([, label, title]) => `<th class="num" title="${title}">${label}</th>`).join('')}</tr></thead>
     <tbody>${row(away, matchup.away_ratings)}${row(home, matchup.home_ratings)}</tbody>
-  </table>`;
+  </table>${proj}`;
 }
 
 // Rule-based (not AI-generated) explanation: every clause traces to a real number already
@@ -299,7 +307,7 @@ const Pickem = {
           </div>
         </div>
         <div class="game-card-matchup">
-          <div class="stat-label" title="Rush/pass offense and defense EPA/play, garbage time excluded. Descriptive context only -- backtesting found this does not beat the market spread.">Matchup (EPA/play)</div>
+          <div class="stat-label" title="Rush/pass offense and defense EPA/play, garbage time excluded, plus a projected score. Descriptive context only -- backtesting found neither beats the market spread.">Matchup (EPA/play) + Projected Score</div>
           ${matchupTableHtml(matchup, g.home, g.away)}
         </div>
         <p class="game-card-narrative">${esc(narrative)}</p>

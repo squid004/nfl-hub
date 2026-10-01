@@ -10,13 +10,20 @@ spread at predicting winners (see research/output/ and the AUC comparisons in
 research/edge_signal_test*.py). They're stored as descriptive context for pool decisions and
 as inputs to the power ranking below, not a betting model.
 
-Power ranking: a single composite score per team, `POWER_WEIGHTS[m] * z-score(team, m)`
-summed across all 8 stats. Weights are each stat's OWN standalone standardized logistic-
-regression coefficient against historical game outcomes (research/edge_signal_test_v7_*.py) --
-deliberately univariate per stat rather than one joint multi-stat regression, because a joint
-fit produced sign-flipped, counter-intuitive weights for the weaker/collinear stats (e.g.
-turnovers committed coming out positively-weighted) due to multicollinearity between EPA,
-points, and turnovers. Computed once offline, not refit daily -- see POWER_WEIGHTS below.
+Power ranking: a single composite score per team, `POWER_WEIGHTS[m] * ORIENTATION[m] *
+z-score(team, m)` summed across all 8 stats. Weights come from ONE joint model across all 8
+stats at once (not 8 independent single-stat fits, which is what an earlier version did) --
+specifically an L2-regularized logistic regression against historical home_win, with
+coefficients constrained >= 0 after each stat is oriented so higher-is-always-better
+(ORIENTATION flips the sign of allowed/committed stats first). The non-negativity constraint
+is the fix for a real failure mode: an unconstrained joint fit sign-flipped weak/collinear
+stats (turnovers committed came out positively weighted) because points, EPA, and turnovers
+overlap heavily -- non-negative coefficients can only shrink a redundant stat toward zero,
+never flip its sign. Regularization strength (L2=0.3) was chosen by walk-forward validation
+(research/edge_signal_test_v8_power_weights.py, 2007-2025, out-of-sample AUC), not in-sample
+fit quality. Notably, turnovers_def_forced optimizes to exactly 0.0 -- once the other 7 stats
+are known, takeaways forced adds no information, it's not just weak on its own. Computed once
+offline, not refit daily -- see POWER_WEIGHTS/ORIENTATION below.
 
 Completed seasons' play-by-play is pre-aggregated once and committed as small parquet files
 in nflhub/data/team_ratings/ (~390KB total for 2007-2025) so this doesn't re-download and
@@ -58,19 +65,140 @@ PBP_COLS = ["game_id", "season", "week", "season_type", "posteam", "defteam", "p
             "epa", "wp", "interception", "fumble_lost"]
 MISMATCH_Z_THRESHOLD = 1.5  # combined (offense z + opposing defense-allowed z) needed to flag a callout
 
-# Each stat's own standalone standardized logistic-regression weight vs. historical home_win
-# (research/edge_signal_test_v7_points_turnovers.py, 4436 games, 2007-2025). Recompute that
-# script and update these if you want to refresh the weighting; not refit automatically.
-POWER_WEIGHTS = {
-    "rush_off_epa": 0.3379,
-    "pass_off_epa": 0.5902,
-    "rush_def_epa_allowed": -0.3110,
-    "pass_def_epa_allowed": -0.3178,
-    "points_off": 0.5950,
-    "points_def_allowed": -0.3893,
-    "turnovers_off": -0.1905,
-    "turnovers_def_forced": 0.1062,
+# +1 if higher is already better, -1 if the raw stat needs flipping to be "higher=better"
+# before weighting (allowed/committed stats).
+ORIENTATION = {
+    "rush_off_epa": 1, "pass_off_epa": 1, "rush_def_epa_allowed": -1, "pass_def_epa_allowed": -1,
+    "points_off": 1, "points_def_allowed": -1, "turnovers_off": -1, "turnovers_def_forced": 1,
 }
+
+# Non-negative joint logistic-regression weights vs. historical home_win, L2=0.3, walk-forward
+# validated (research/edge_signal_test_v8_power_weights.py, 4436 games, 2007-2025). Apply as
+# POWER_WEIGHTS[m] * ORIENTATION[m] * z-score -- these are all >= 0 by construction (see
+# module docstring). Recompute that script and update these if you want to refresh the fit;
+# not refit automatically.
+POWER_WEIGHTS = {
+    "rush_off_epa": 0.0772,
+    "pass_off_epa": 0.1543,
+    "rush_def_epa_allowed": 0.0791,
+    "pass_def_epa_allowed": 0.0600,
+    "points_off": 0.1603,
+    "points_def_allowed": 0.1021,
+    "turnovers_off": 0.0195,
+    "turnovers_def_forced": 0.0000,
+}
+
+# Points prediction: predicted_points(team) = POINTS_INTERCEPT + sum(POINTS_WEIGHTS[k] * value),
+# where `value` is the TEAM's own rating for an "own_*" key and the OPPONENT's rating for an
+# "opp_*" key (own offense vs opponent defense). Non-negative L2-regularized (L2=0.01) linear
+# regression on actual points scored, walk-forward validated (research/edge_signal_test_v9_*.py,
+# 8872 team-game rows, 2007-2025): MAE 7.62 points/team-game (vs. 8.02 for a naive
+# league-average guess), but the derived spread (home pred - away pred) is LESS accurate than
+# the market's own spread at picking winners (0.686 AUC vs 0.726) -- same pattern as everything
+# else in this project, shown as a second data point alongside the market/ELWAY lines, not a
+# replacement. turnovers zeroed out here too (same redundancy finding as the power ranking, in
+# a completely different model). Computed once offline, not refit daily.
+POINTS_INTERCEPT = 7.21333
+POINTS_WEIGHTS = {
+    "own_rush_off_epa": 2.472559,
+    "own_pass_off_epa": 6.259427,
+    "own_points_off": 0.371737,
+    "own_turnovers_off": -0.000000,
+    "opp_rush_def_epa_allowed": 2.470530,
+    "opp_pass_def_epa_allowed": 0.666745,
+    "opp_points_def_allowed": 0.317523,
+    "opp_turnovers_def_forced": -0.000000,
+}
+
+
+def predict_points(own: dict[str, float], opp: dict[str, float], weather: dict[str, float] | None = None) -> float | None:
+    """Predicted points for a team with rating dict `own`, facing a team with rating dict
+    `opp`. Returns None if either side is missing a needed rating. `weather`, if given, adds
+    the WEATHER_ADJUSTMENT correction (see below) on top -- omit it (or pass None) for a dome
+    game or when no forecast is available; the base prediction is unbiased either way since it
+    was fit across all games, indoor and outdoor."""
+    total = POINTS_INTERCEPT
+    for key, w in POINTS_WEIGHTS.items():
+        side, metric = key.split("_", 1)
+        val = (own if side == "own" else opp).get(metric)
+        if val is None:
+            return None
+        total += w * val
+    if weather is not None:
+        total += WEATHER_ADJUSTMENT_INTERCEPT
+        for key, w in WEATHER_ADJUSTMENT_WEIGHTS.items():
+            val = weather.get(key)
+            if val is not None:
+                total += w * val
+    return round(total, 2)
+
+
+# Stadium coordinates for teams that are UNAMBIGUOUSLY, permanently outdoor as of the current
+# roof (verified against 2022+ games.csv roof values -- each of these showed ONLY 'outdoors',
+# never 'dome'/'closed'/'open'). Deliberately excludes: fixed domes (DET/LV/LAR/LAC/MIN/NO --
+# current venue), and retractable-roof teams (ARI/ATL/DAL/HOU/IND) whose roof is closed most
+# of the time and can't be known in advance for a future game -- auto-applying an outdoor
+# weather adjustment to those would be wrong more often than right. BUF shows one historical
+# 'dome' entry (the 2014 Bills-Jets game relocated to Ford Field for a blizzard) -- a one-off
+# anomaly, not current reality, so it's kept. research/weather_scoring_analysis.py has the
+# broader historical coordinate set used for backtesting (includes eras like LA's 2016-2019
+# outdoor Coliseum stint), which is intentionally wider than this live-application set.
+STADIUM_COORDS = {
+    "BAL": (39.2780, -76.6227), "BUF": (42.7738, -78.7870), "CAR": (35.2258, -80.8528),
+    "CHI": (41.8623, -87.6167), "CIN": (39.0954, -84.5160), "CLE": (41.5061, -81.6995),
+    "DEN": (39.7439, -105.0201), "GB": (44.5013, -88.0622), "JAX": (30.3239, -81.6373),
+    "KC": (39.0489, -94.4839), "MIA": (25.9580, -80.2389), "NE": (42.0909, -71.2643),
+    "NYG": (40.8135, -74.0745), "NYJ": (40.8135, -74.0745), "PHI": (39.9008, -75.1675),
+    "PIT": (40.4468, -80.0158), "SEA": (47.5952, -122.3316), "SF": (37.4032, -121.9698),
+    "TB": (27.9759, -82.5033), "TEN": (36.1665, -86.7713), "WSH": (38.9076, -76.8645),
+}
+
+FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+
+# Weather ADJUSTMENT on top of predict_points()'s base prediction -- fit as a separate
+# residual regression (actual_points - base_prediction) ~ wind/precip/cold, NOT refit jointly
+# with the 8 team-rating weights above, specifically so "no weather data" cleanly means
+# "adjustment = 0" with zero risk of implicitly assuming calm/dry conditions for a game we
+# simply don't have a forecast for yet. Non-negative L2-regularized (L2=0.01), walk-forward
+# validated (research/edge_signal_test_v10_weather.py, 5926 team-game rows, 2007-2025):
+# reduces points MAE 7.647 -> 7.603 out-of-sample -- a real but modest improvement (~0.6%).
+# cold_flag = 1.0 if forecast high temp < 20F else 0.0. Computed once offline, not refit daily.
+WEATHER_ADJUSTMENT_INTERCEPT = 1.6502
+WEATHER_ADJUSTMENT_WEIGHTS = {
+    "wind_mph": -0.165478,
+    "precip_mm": -0.051583,
+    "cold_flag": -3.021398,
+}
+
+
+def fetch_forecast_weather(team: str, date_str: str) -> dict[str, float] | None:
+    """Live forecast wind_mph/precip_mm/cold_flag for `team`'s stadium on `date_str`
+    (YYYY-MM-DD), or None if the team has no outdoor stadium, the date is outside the
+    forecast's reliable range (~16 days), or the request fails for any reason (soft-fail,
+    matching every other best-effort external source in this project)."""
+    coords = STADIUM_COORDS.get(team)
+    if not coords:
+        return None
+    try:
+        resp = requests.get(FORECAST_URL, params={
+            "latitude": coords[0], "longitude": coords[1],
+            "daily": "temperature_2m_max,precipitation_sum,windspeed_10m_max",
+            "timezone": "America/New_York", "forecast_days": 16,
+        }, timeout=TIMEOUT)
+        resp.raise_for_status()
+        daily = resp.json()["daily"]
+        if date_str not in daily["time"]:
+            return None
+        i = daily["time"].index(date_str)
+        temp_f = daily["temperature_2m_max"][i] * 9 / 5 + 32
+        return {
+            "wind_mph": daily["windspeed_10m_max"][i] * 0.621371,
+            "precip_mm": daily["precipitation_sum"][i],
+            "cold_flag": 1.0 if temp_f < 20 else 0.0,
+        }
+    except Exception as exc:  # noqa: BLE001 - best-effort; never block the rest of the refresh
+        log.warning("forecast fetch failed for %s on %s: %s", team, date_str, exc)
+        return None
 
 
 def _phase_stats_for_season(season: int, current_season: int) -> pd.DataFrame:
@@ -253,18 +381,33 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict])
                     f"{'faces' if favors_offense else 'runs into'} {def_team}'s {phase} defense "
                     f"({def_val:+.2f} EPA/play allowed, {def_desc}) -- {verdict}."
                 )
+        weather = None
+        gameday = g.get("gameday")
+        # skip the forecast fetch entirely for games outside its ~16-day reliable window --
+        # `upcoming` covers the rest of the season, and most of those calls would just come
+        # back empty; no point making 100+ live HTTP requests every refresh for that.
+        if gameday and home in STADIUM_COORDS:
+            try:
+                days_out = (date.fromisoformat(gameday) - date.today()).days
+            except ValueError:
+                days_out = None
+            if days_out is not None and 0 <= days_out <= 15:
+                weather = fetch_forecast_weather(home, gameday)
         out[f"{away}@{home}"] = {
             "home": home, "away": away,
             "home_ratings": ratings[home], "away_ratings": ratings[away],
             "callouts": callouts,
+            "predicted_home_points": predict_points(ratings[home], ratings[away], weather),
+            "predicted_away_points": predict_points(ratings[away], ratings[home], weather),
+            "weather": weather,
         }
     return out
 
 
 def power_rankings(ratings: dict[str, dict[str, float]]) -> dict[str, dict]:
-    """Composite score per team: sum of POWER_WEIGHTS[m] * z-score(team, m) across all 8
-    stats, ranked 1 = best. Each z-score is cross-sectional (against the other 31 current
-    teams), so this reflects current relative standing, not an absolute scale."""
+    """Composite score per team: sum of POWER_WEIGHTS[m] * ORIENTATION[m] * z-score(team, m)
+    across all 8 stats, ranked 1 = best. Each z-score is cross-sectional (against the other 31
+    current teams), so this reflects current relative standing, not an absolute scale."""
     if len(ratings) < 4:
         return {}
     z: dict[str, dict[str, float]] = defaultdict(dict)
@@ -274,7 +417,7 @@ def power_rankings(ratings: dict[str, dict[str, float]]) -> dict[str, dict]:
         for t, v in zm.items():
             z[t][m] = v
 
-    scores = {t: sum(POWER_WEIGHTS[m] * zt.get(m, 0.0) for m in RATING_METRICS) for t, zt in z.items()}
+    scores = {t: sum(POWER_WEIGHTS[m] * ORIENTATION[m] * zt.get(m, 0.0) for m in RATING_METRICS) for t, zt in z.items()}
     order = sorted(scores, key=lambda t: -scores[t])
     return {
         t: {"rank": i + 1, "score": round(scores[t], 4), "ratings": ratings[t]}
@@ -316,7 +459,8 @@ def refresh(store, force: bool = False) -> str:
     upcoming = []
     for r in upcoming_raw:
         try:
-            upcoming.append({"home_team": normalize_team(r["home_team"]), "away_team": normalize_team(r["away_team"])})
+            upcoming.append({"home_team": normalize_team(r["home_team"]), "away_team": normalize_team(r["away_team"]),
+                              "gameday": r.get("gameday")})
         except UnknownTeamError:
             continue
     matchups = matchup_callouts(ratings, upcoming)
@@ -329,6 +473,14 @@ def refresh(store, force: bool = False) -> str:
         "teams": ratings,
         "matchups": matchups,
         "power_rankings": power,
+        "power_ranking_meta": {
+            "method": "L2-regularized (L2=0.3) logistic regression, coefficients constrained "
+                      ">= 0, jointly fit across all 8 stats at once against real game outcomes "
+                      "(2007-2025, 4436 games), chosen by walk-forward out-of-sample validation "
+                      "-- not an in-sample fit. Does not beat the closing market spread at "
+                      "predicting winners; shown as descriptive context only.",
+            "weights": {m: round(POWER_WEIGHTS[m] * ORIENTATION[m], 4) for m in RATING_METRICS},
+        },
     }))
     store.kv_set("team_ratings_date", today)
     return f"built ({len(ratings)} teams, {len(matchups)} upcoming matchups, through {current_season} wk {current_week})"
