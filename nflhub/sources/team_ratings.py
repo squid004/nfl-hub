@@ -198,18 +198,38 @@ WEATHER_ADJUSTMENT_WEIGHTS = {
 }
 
 
+# WMO weather codes (Open-Meteo's `weathercode` daily value) -> a short display string.
+# Not exhaustive -- just enough to label the common cases; an unmapped code is simply omitted.
+_WEATHER_CODE_DESC = {
+    0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
+    45: "fog", 48: "freezing fog",
+    51: "light drizzle", 53: "drizzle", 55: "heavy drizzle",
+    56: "light freezing drizzle", 57: "freezing drizzle",
+    61: "light rain", 63: "rain", 65: "heavy rain",
+    66: "light freezing rain", 67: "freezing rain",
+    71: "light snow", 73: "snow", 75: "heavy snow", 77: "snow grains",
+    80: "light showers", 81: "showers", 82: "heavy showers",
+    85: "light snow showers", 86: "snow showers",
+    95: "thunderstorm", 96: "thunderstorm w/ hail", 99: "severe thunderstorm w/ hail",
+}
+
+
 def fetch_forecast_weather(team: str, date_str: str) -> dict[str, float] | None:
-    """Live forecast wind_mph/precip_mm/cold_flag for `team`'s stadium on `date_str`
-    (YYYY-MM-DD), or None if the team has no outdoor stadium, the date is outside the
-    forecast's reliable range (~16 days), or the request fails for any reason (soft-fail,
-    matching every other best-effort external source in this project)."""
+    """Live forecast for `team`'s stadium on `date_str` (YYYY-MM-DD), or None if the team has
+    no outdoor stadium, the date is outside the forecast's reliable range (~16 days), or the
+    request fails for any reason (soft-fail, matching every other best-effort external source
+    in this project). `wind_mph`/`precip_mm`/`cold_flag` are the exact inputs predict_points'
+    weather adjustment is fit on -- don't change their units/meaning. Everything else
+    (temp_hi_f/temp_lo_f/snow_in/precip_chance/conditions) is display-only, for the full
+    forecast shown in the matchup card's details -- predict_points never reads them."""
     coords = STADIUM_COORDS.get(team)
     if not coords:
         return None
     try:
         resp = requests.get(FORECAST_URL, params={
             "latitude": coords[0], "longitude": coords[1],
-            "daily": "temperature_2m_max,precipitation_sum,windspeed_10m_max",
+            "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum,snowfall_sum,"
+                     "precipitation_probability_max,windspeed_10m_max,weathercode",
             "timezone": "America/New_York", "forecast_days": 16,
         }, timeout=TIMEOUT)
         resp.raise_for_status()
@@ -217,11 +237,18 @@ def fetch_forecast_weather(team: str, date_str: str) -> dict[str, float] | None:
         if date_str not in daily["time"]:
             return None
         i = daily["time"].index(date_str)
-        temp_f = daily["temperature_2m_max"][i] * 9 / 5 + 32
+        temp_hi_f = daily["temperature_2m_max"][i] * 9 / 5 + 32
+        temp_lo_f = daily["temperature_2m_min"][i] * 9 / 5 + 32
+        code = (daily.get("weathercode") or [None] * (i + 1))[i]
         return {
             "wind_mph": daily["windspeed_10m_max"][i] * 0.621371,
             "precip_mm": daily["precipitation_sum"][i],
-            "cold_flag": 1.0 if temp_f < 20 else 0.0,
+            "cold_flag": 1.0 if temp_hi_f < 20 else 0.0,
+            "temp_hi_f": round(temp_hi_f, 1),
+            "temp_lo_f": round(temp_lo_f, 1),
+            "snow_in": round((daily.get("snowfall_sum") or [0] * (i + 1))[i] * 0.393701, 2),
+            "precip_chance": (daily.get("precipitation_probability_max") or [None] * (i + 1))[i],
+            "conditions": _WEATHER_CODE_DESC.get(code),
         }
     except Exception as exc:  # noqa: BLE001 - best-effort; never block the rest of the refresh
         log.warning("forecast fetch failed for %s on %s: %s", team, date_str, exc)

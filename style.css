@@ -92,6 +92,9 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 .mini-ratings th, .mini-ratings td { padding:1px 8px 1px 0; text-align:right; }
 .mini-ratings th:first-child, .mini-ratings td:first-child { text-align:left; font-weight:600; }
 .game-card-narrative { margin:10px 0; font-size:.88rem; color:var(--text); }
+.game-card-details { margin-top:8px; }
+.game-card-details summary { font-size:.8rem; color:var(--dim); cursor:pointer; }
+.game-card-details summary:hover { color:var(--text); }
 .game-card-pick { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .game-card-mine { margin-left:auto; font-size:.85rem; }
 .line-narrow { color:var(--bad); }

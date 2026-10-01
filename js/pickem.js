@@ -34,6 +34,16 @@ function elwayFullDisagree(el, home, away, favTeam) {
   return elwayFavTeam !== favTeam;
 }
 
+// Just ELWAY's favorite + its win probability — the two-number "away% / home%" display told
+// you nothing extra once you already know who's favored (they're complements), so collapse to
+// one, same idea as the Market block's own single `favLabel`.
+function elwayFavLabel(el, home, away) {
+  if (!el || el.home_win_prob == null || el.away_win_prob == null) return null;
+  const team = el.home_win_prob > el.away_win_prob ? home : away;
+  const p = Math.max(el.home_win_prob, el.away_win_prob);
+  return { team, pct: p };
+}
+
 // Worst QB-position entry for a team from ESPN's injury report (kv 'injuries', written by
 // refresh.py), or null if that team's QB(s) are all "Active"/unlisted. Ranked so "Out"/"IR"
 // always outranks "Doubtful" outranks "Questionable" regardless of report order.
@@ -123,22 +133,53 @@ const RATING_COLS = [
   ['pass_def_epa_allowed', 'P-Def', 'Pass defense, 0-100 (100 = best/stingiest ever recorded in the 2007-present dataset)'],
 ];
 
+// Simple glance-able severity so the header chip doesn't require reading numbers to parse --
+// thresholds match the buckets this project's own weather research already established
+// (research/weather_scoring_analysis.py / edge_signal_test_v10_weather.py).
+function weatherSeverity(wx) {
+  if (!wx) return null;
+  if (wx.wind_mph >= 20 || wx.precip_mm >= 10 || wx.cold_flag || wx.snow_in > 0) return 'bad';
+  if (wx.wind_mph >= 10 || wx.precip_mm >= 2 || wx.temp_hi_f < 32) return 'moderate';
+  return null;
+}
+
+function weatherChip(wx) {
+  const sev = weatherSeverity(wx);
+  if (!sev) return '';
+  const cls = sev === 'bad' ? 'bad' : 'warn';
+  const label = sev === 'bad' ? 'bad weather' : 'weather';
+  return ` <span class="chip ${cls}" title="${esc(forecastSummary(wx))}">${label}</span>`;
+}
+
+// Full forecast for the card's details layer -- everything fetch_forecast_weather() returns,
+// not just the 3 fields the points-prediction adjustment actually uses.
+function forecastSummary(wx) {
+  if (!wx) return '';
+  const parts = [];
+  if (wx.conditions) parts.push(wx.conditions);
+  if (wx.temp_hi_f != null) parts.push(`${Math.round(wx.temp_lo_f)}–${Math.round(wx.temp_hi_f)}°F`);
+  parts.push(`${Math.round(wx.wind_mph)}mph wind`);
+  if (wx.precip_mm > 0) parts.push(`${(wx.precip_mm / 25.4).toFixed(2)}in precip${wx.precip_chance != null ? ` (${wx.precip_chance}% chance)` : ''}`);
+  else if (wx.precip_chance) parts.push(`${wx.precip_chance}% chance of precip`);
+  if (wx.snow_in > 0) parts.push(`${wx.snow_in}in snow`);
+  return parts.join(', ');
+}
+
 function matchupTableHtml(matchup, home, away) {
   if (!matchup) return '<div class="muted small">No rating data yet.</div>';
   const row = (team, r) => `<tr><td>${team}</td>${RATING_COLS.map(([key]) =>
     `<td class="num">${r && r[key] != null ? r[key].toFixed(0) : '—'}</td>`).join('')}</tr>`;
   const ap = matchup.predicted_away_points, hp = matchup.predicted_home_points;
   const wx = matchup.weather;
-  const wxNote = wx
-    ? ` (forecast: ${Math.round(wx.wind_mph)}mph wind${wx.precip_mm > 0 ? `, ${wx.precip_mm.toFixed(1)}mm precip` : ''}${wx.cold_flag ? ', <20°F' : ''} — adjustment applied)`
-    : '';
+  const wxNote = wx ? ' (weather adjustment applied)' : '';
   const proj = (ap != null && hp != null)
     ? `<div class="muted small" title="Non-negative L2-regularized regression on own offense vs. opponent defense (same 8 stats), walk-forward validated 2007-2025, plus a separate wind/rain/extreme-cold adjustment (also walk-forward validated, applied only for outdoor stadiums within the ~16-day forecast window) when available. Less accurate than the market spread at picking winners -- a second data point alongside the market/ELWAY lines, not a replacement.">Projected: ${away} ${ap.toFixed(1)} – ${home} ${hp.toFixed(1)}${wxNote}</div>`
     : '';
+  const forecast = wx ? `<div class="muted small">Forecast: ${esc(forecastSummary(wx))}</div>` : '';
   return `<table class="mini-ratings">
     <thead><tr><th></th>${RATING_COLS.map(([, label, title]) => `<th class="num" title="${title}">${label}</th>`).join('')}</tr></thead>
     <tbody>${row(away, matchup.away_ratings_display)}${row(home, matchup.home_ratings_display)}</tbody>
-  </table>${proj}`;
+  </table>${forecast}${proj}`;
 }
 
 // Rule-based (not AI-generated) explanation: every clause traces to a real number already
@@ -219,6 +260,7 @@ const Pickem = {
       const staleAway = elwayStaleQb(g.away, elwayQb1, injuries);
       const elRaw = elway[g.game_id];
       const el = elRaw ? { ...elRaw, _home: g.home, _away: g.away } : null;
+      const elwayFav = elwayFavLabel(el, g.home, g.away);
       const hasLine = o.spread != null;
       const favTeam = !hasLine ? null : (o.spread <= 0 ? g.home : g.away);
       const dogTeam = favTeam == null ? null : (favTeam === g.home ? g.away : g.home);
@@ -283,6 +325,7 @@ const Pickem = {
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
             `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
           ).join('')}
+          ${matchup ? weatherChip(matchup.weather) : ''}
         </div>
         <div class="game-card-body">
           <div class="stat-block">
@@ -293,12 +336,12 @@ const Pickem = {
           </div>
           <div class="stat-block">
             <div class="stat-label">ELWAY</div>
-            <div>${el ? `${pct(el.away_win_prob)} / ${pct(el.home_win_prob)}` : '<span class="muted">—</span>'}</div>
+            <div>${elwayFav ? `${elwayFav.team} ${pct(elwayFav.pct)}` : '<span class="muted">—</span>'}</div>
             <div class="muted">${el && el.spread_home != null ? `implied ${signed(el.spread_home)}` : ' '}</div>
           </div>
           <div class="stat-block">
             <div class="stat-label">History</div>
-            <div>${histCell ? `Fav SU ${pct(histCell.su)} &middot; Fav ATS ${pct(histCell.ats)}` : '<span class="muted">—</span>'}</div>
+            <div>${histCell ? `Fav SU ${pct(histCell.su)}` : '<span class="muted">—</span>'}</div>
             <div class="muted">${bucketLabel ? `${bucketLabel} bucket` : ' '}</div>
           </div>
           <div class="stat-block">
@@ -306,15 +349,18 @@ const Pickem = {
             <div>${edgeChip}</div>
           </div>
         </div>
-        <div class="game-card-matchup">
-          <div class="stat-label" title="Rush/pass offense and defense, 0-100 scale (100 = best in the NFL this season, garbage time excluded), plus a projected score. Descriptive context only -- backtesting found neither beats the market spread.">Matchup (0-100) + Projected Score</div>
-          ${matchupTableHtml(matchup, g.home, g.away)}
-        </div>
-        <p class="game-card-narrative">${esc(narrative)}</p>
         <div class="game-card-pick">
           ${btn(g.away)} ${btn(g.home)}
           <span class="game-card-mine">${mine ? `Your pick: <strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">No pick yet</span>'}</span>
         </div>
+        <details class="game-card-details">
+          <summary>Why? (full explanation, EPA matchup, forecast)</summary>
+          <p class="game-card-narrative">${esc(narrative)}</p>
+          <div class="game-card-matchup">
+            <div class="stat-label" title="Rush/pass offense and defense, 0-100 scale (100 = best ever recorded in the 2007-present dataset, garbage time excluded), plus a projected score and full forecast. Descriptive context only -- backtesting found neither beats the market spread.">Matchup (0-100) + Projected Score + Forecast</div>
+            ${matchupTableHtml(matchup, g.home, g.away)}
+          </div>
+        </details>
       </div>`;
     }).join('');
 
@@ -327,20 +373,29 @@ const Pickem = {
         ${Edge.budgetBannerHtml(ctx)}
         ${lean ? `<p class="lean">${esc(lean)}</p>` : ''}
         <div class="game-card-grid">${cards}</div>
-        <p class="tablefoot muted"><span class="pick-fav">Green</span> in the matchup =
-          the favorite is the suggested pick; <span class="pick-dog">yellow</span> = the
-          dog is — pool-leverage's FADE/CHALK call when it has data this week, otherwise
-          the upset-budget flag. ELWAY is Nate Silver's Silver Bulletin NFL forecasting
-          model, transcribed weekly into a Google Sheet — not a personal formula. A
-          <span class="chip warn">QB</span> chip only shows if ELWAY's assumed starter is
-          the one flagged (red = Out/IR) — a healthy starter suppresses any backup's injury;
-          if the starter IS hurt, another flagged QB for that team shows too (the presumptive
-          next man up). Falls back to showing the single worst QB entry when we don't know
-          who the starter is. <span class="chip warn">STEAM</span> = the market spread
-          has moved &ge;1.5 points in one direction since this week's first snapshot.
-          <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
-          rating that team with a QB1 our live injury feed now shows hurt — a breaking-news
-          injury ELWAY's own depth-chart tracking hasn't caught up to yet.</p>
+        <details>
+          <summary class="muted small">Chip legend</summary>
+          <p class="tablefoot muted"><span class="pick-fav">Green</span> in the matchup =
+            the favorite is the suggested pick; <span class="pick-dog">yellow</span> = the
+            dog is — pool-leverage's FADE/CHALK call when it has data this week, otherwise
+            the upset-budget flag. ELWAY is Nate Silver's Silver Bulletin NFL forecasting
+            model, transcribed weekly into a Google Sheet — not a personal formula. A
+            <span class="chip warn">QB</span> chip only shows if ELWAY's assumed starter is
+            the one flagged (red = Out/IR) — a healthy starter suppresses any backup's injury;
+            if the starter IS hurt, another flagged QB for that team shows too (the presumptive
+            next man up). Falls back to showing the single worst QB entry when we don't know
+            who the starter is. <span class="chip warn">STEAM</span> = the market spread
+            has moved &ge;1.5 points in one direction since this week's first snapshot.
+            <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
+            rating that team with a QB1 our live injury feed now shows hurt — a breaking-news
+            injury ELWAY's own depth-chart tracking hasn't caught up to yet.
+            <span class="chip warn">weather</span>/<span class="chip bad">bad weather</span> =
+            live forecast at kickoff (only shown for outdoor stadiums within ~16 days out) is
+            moderate or bad for scoring — &ge;10mph wind, &ge;2mm precip, or sub-freezing highs
+            for "weather"; &ge;20mph wind, &ge;10mm precip, any snow, or sub-20&deg;F highs for
+            "bad weather." Hover the chip for the exact forecast; the full forecast is also in
+            each card's "Why?" section.</p>
+        </details>
       </div>`;
   },
 
@@ -406,8 +461,6 @@ const Pickem = {
         <td class="muted">${o.total ?? '—'}</td>
         <td class="num muted">${pct(o.implied_away)}</td>
         <td class="num muted">${pct(o.implied_home)}</td>
-        <td class="num muted">${pct(el.away_win_prob)}</td>
-        <td class="num muted">${pct(el.home_win_prob)}</td>
         ${suCell}${atsCell}
         <td>${mine ? `<strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">—</span>'}</td>
         <td class="btns">${btn(g.away)} ${btn(g.home)}</td>
@@ -425,22 +478,23 @@ const Pickem = {
           <th class="num" title="ELWAY's home-spread equivalent: away avg pts minus home avg pts. Compare against the Fav column's market line, not the sheet's own spread.">ELWAY Spread</th>
           <th>O/U</th>
           <th class="num">Away%</th><th class="num">Home%</th>
-          <th class="num" title="ELWAY's away win probability, from its avg-points model">ELWAY Away%</th>
-          <th class="num" title="ELWAY's home win probability, from its avg-points model">ELWAY Home%</th>
           <th class="num" title="Historical: favorite of this spread wins straight up">Fav SU</th>
           <th class="num" title="Historical: favorite of this spread covers">Fav ATS</th>
           <th>Pick</th><th></th></tr></thead>
           <tbody>${rows}</tbody></table>
-        <p class="tablefoot muted">Away%/Home% are this game's de-vigged market prices.
-          Pick the side that covers. Fav ATS is the historical cover rate for any favorite
-          of that spread size — below ~50% leans dog. The line is snapshotted when you pick.
-          A <span class="chip warn">QB</span> chip next to a team only shows if the starter
-          (per ELWAY's assumed QB1) is the one flagged injured, plus any other flagged QB if
-          so. A highlighted (amber) Fav cell means
-          the line has moved &ge;1.5 points in one direction this week — hover for the
-          open/current line. A <span class="elway-stale">red</span> ELWAY Spread cell means
-          ELWAY's weekly sheet is still rating a team with a QB1 our live injury feed now
-          shows hurt.</p>
+        <details>
+          <summary class="muted small">Legend</summary>
+          <p class="tablefoot muted">Away%/Home% are this game's de-vigged market prices.
+            Pick the side that covers. Fav ATS is the historical cover rate for any favorite
+            of that spread size — below ~50% leans dog. The line is snapshotted when you pick.
+            A <span class="chip warn">QB</span> chip next to a team only shows if the starter
+            (per ELWAY's assumed QB1) is the one flagged injured, plus any other flagged QB if
+            so. A highlighted (amber) Fav cell means
+            the line has moved &ge;1.5 points in one direction this week — hover for the
+            open/current line. A <span class="elway-stale">red</span> ELWAY Spread cell means
+            ELWAY's weekly sheet is still rating a team with a QB1 our live injury feed now
+            shows hurt.</p>
+        </details>
       </div>`;
   },
 
