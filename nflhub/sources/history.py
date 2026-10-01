@@ -3,24 +3,44 @@
 Produces a small blob (stored in kv as `hist_distribution`) that the dashboard joins to
 each week's spreads to answer "how many games should I expect to be upsets?":
 
-- per spread-size bucket x week-bucket (Week 1 vs Weeks 2+) x home/away favorite:
-  P(favorite wins straight up) and P(favorite covers), shrunk toward the all-weeks rate
-  for that bucket so thin cells don't read as 0% / 100%. Used for the descriptive History
-  panels (js/history.js render()) — grouping games into bins is still the clearest way to
-  *show* this trend, even though it's no longer how ranking decisions get made (below).
+- per spread-size bucket x home/away favorite: P(favorite wins straight up) and P(favorite
+  covers), shrunk toward the all-games rate for that bucket so thin cells don't read as
+  0% / 100%. Used for the descriptive History panels (js/history.js render()) — grouping
+  games into bins is still the clearest way to *show* this trend, even though it's no longer
+  how ranking decisions get made (below).
 - a smooth logistic curve P(favorite wins|covers) = sigmoid(a + b*abs_spread), fit per
-  (week1/rest, home/away favorite) via IRLS on the raw per-game data (pure Python, no
-  numpy — 2-parameter fit, closed-form per iteration). This is what week_budget() actually
-  uses now: the discrete buckets above treat a -3.5 and a -6.0 favorite as identical
-  (same bucket, same rate), which was never really true, it just wasn't captured. A single
-  continuous curve fixes that everywhere *except* one real effect: NFL final margins
-  cluster hard at 3 and 7 (a field goal, a touchdown+XP), so favorites laying exactly 3 or
-  7 cover at a measurably different rate than neighboring numbers — a smooth monotonic
-  curve can't represent that bump by construction. `key_adjustments` is a small, sample-
-  size-shrunk additive correction at exactly 3 and 7 so that real effect survives the move
-  to a continuous model instead of getting smoothed away.
-- pooled Week-1 vs Weeks-2+ summary (large n, matches published analyses).
-- a per-week series so the week-over-week trend is visible.
+  home/away favorite via IRLS on the raw per-game data (pure Python, no numpy — 2-parameter
+  fit, closed-form per iteration). This is what week_budget() actually uses now: the
+  discrete buckets above treat a -3.5 and a -6.0 favorite as identical (same bucket, same
+  rate), which was never really true, it just wasn't captured. A single continuous curve
+  fixes that everywhere *except* one real effect: NFL final margins cluster hard at 3 and 7
+  (a field goal, a touchdown+XP), so favorites laying exactly 3 or 7 cover at a measurably
+  different rate than neighboring numbers — a smooth monotonic curve can't represent that
+  bump by construction. `key_adjustments` is a small, sample-size-shrunk additive correction
+  at exactly 3 and 7 so that real effect survives the move to a continuous model instead of
+  getting smoothed away.
+- one pooled summary across the whole season (large n, no week-of-season split).
+
+One constant estimate regardless of week, by design, not by omission: this used to split
+Week 1 from "the rest," and a later investigation (prompted by the week-over-week table
+showing some weeks visibly more upset-heavy than others, e.g. week 10 vs week 17) tested
+replacing that with a season-finale split instead. Both were checked against replication on
+an independent half of the data (2007-2016 vs. 2017-2025) before being added to production,
+same standard as every other model in this project:
+  - Week 1 vs. rest (SU): full sample z=-0.78, first half z=-0.33, second half z=-0.79 —
+    never significant anywhere, despite "Week 1 underperforms" being the direction every
+    slice points. Also true for ATS (|z| < 0.4 everywhere).
+  - Season finale vs. rest (SU, finale = each season's actual last REG week — 17 through
+    2020, 18 from 2021 on, not hardcoded): full sample z=+2.87 (looks real), but that's
+    almost entirely carried by 2007-2016 (z=+2.96) — 2017-2025 alone is z=+1.05, well short
+    of significant. Widening to the last 2-4 weeks of the season doesn't fix it either
+    (second-half z stays in the 1.0-1.9 range at every window width tested).
+  - Week 10's isolated upset-heavy pooled result (z=-3.30 full sample) has the same problem:
+    z=-2.82 first half, z=-1.55 second half.
+None of these hold up on the more recent half alone, so none of them are in here — pooling
+everything is both simpler and the one choice actually supported by the data. If NFL
+schedule-related effects strengthen again in a way that replicates on fresh data, worth
+revisiting; until then, don't split on week.
 
 nflverse `spread_line` convention: positive = home favored. (The dashboard's own odds use
 the opposite sign; the frontend passes a `home_fav` boolean, not a signed number.)
@@ -43,7 +63,7 @@ log = logging.getLogger(__name__)
 GAMES_CSV = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
 TIMEOUT = 30
 MIN_SEASON = 2007
-SHRINK_K = 40  # pseudo-count pulling a bucket cell toward its all-weeks prior
+SHRINK_K = 40  # pseudo-count pulling a bucket cell toward its all-games prior
 KEY_NUMBERS = (3.0, 7.0)  # NFL final-margin clustering: a field goal, a TD+XP
 ELWAY_BLEND_WEIGHT = 0.65  # how far the ranking blend moves from the market toward ELWAY
 
@@ -118,16 +138,14 @@ def fetch_games() -> list[dict[str, str]]:
 
 
 def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON) -> dict[str, Any]:
-    data: dict[tuple, dict] = defaultdict(_cell)   # (wk_bucket, side, label)
-    prior: dict[str, dict] = defaultdict(_cell)    # label -> all weeks / all sides
-    byweek: dict[int, dict] = defaultdict(_cell)   # week int -> all sides
-    byweek_side: dict[tuple, dict] = defaultdict(_cell)  # (week, fav side) -> all bins
-    pooled: dict[tuple, dict] = defaultdict(_cell) # (wk_bucket, side) -> big-n summary
-    # raw (abs_spread, outcome) pairs for the smooth curve fit, keyed (wk_bucket, side);
-    # "all" gets every game regardless of side, as a fallback for thin side-specific fits.
-    raw_su: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
-    raw_ats: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
-    key_data: dict[tuple, dict] = defaultdict(_key_cell)  # (wk_bucket, side, key_number)
+    data: dict[tuple, dict] = defaultdict(_cell)   # (side, label)
+    prior: dict[str, dict] = defaultdict(_cell)    # label -> all sides
+    pooled: dict[str, dict] = defaultdict(_cell)   # side -> big-n summary
+    # raw (abs_spread, outcome) pairs for the smooth curve fit, keyed by side; "all" gets
+    # every game regardless of side, as a fallback for thin side-specific fits.
+    raw_su: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    raw_ats: dict[str, list[tuple[float, float]]] = defaultdict(list)
+    key_data: dict[tuple, dict] = defaultdict(_key_cell)  # (side, key_number)
     max_season = min_season
 
     for r in rows:
@@ -135,7 +153,6 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
             continue
         try:
             season = int(r["season"])
-            week = int(r["week"])
         except (KeyError, ValueError):
             continue
         if season < min_season:
@@ -174,11 +191,10 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
         miss = abs(cov)
         is_push = abs(cov) < 1e-9
         ats = None if is_push else (1.0 if cov > 0 else 0.0)
-        wkb = "week1" if week == 1 else "rest"
 
-        targets = [(wkb, "all", lab)]
+        targets = [("all", lab)]
         if not neutral:
-            targets.append((wkb, side, lab))
+            targets.append((side, lab))
         for key in targets:
             c = data[key]
             c["su_w"] += su; c["su_n"] += 1; c["miss"] += miss
@@ -186,16 +202,16 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
                 c["ats_w"] += ats; c["ats_n"] += 1
 
         # smooth-curve fit inputs: every game feeds "all", plus its own side unless neutral
-        curve_keys = [(wkb, "all")]
+        curve_keys = ["all"]
         if not neutral:
-            curve_keys.append((wkb, side))
+            curve_keys.append(side)
         for ck in curve_keys:
             raw_su[ck].append((abs_s, su))
             if ats is not None:
                 raw_ats[ck].append((abs_s, ats))
             for kn in KEY_NUMBERS:
                 if abs(abs_s - kn) < 0.01:
-                    kc = key_data[(ck[0], ck[1], kn)]
+                    kc = key_data[(ck, kn)]
                     kc["su_w"] += su; kc["su_n"] += 1
                     if ats is not None:
                         kc["ats_w"] += ats; kc["ats_n"] += 1
@@ -205,23 +221,13 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
         if ats is not None:
             p["ats_w"] += ats; p["ats_n"] += 1
 
-        b = byweek[week]
-        b["su_w"] += su; b["su_n"] += 1; b["miss"] += miss
-        if ats is not None:
-            b["ats_w"] += ats; b["ats_n"] += 1
-        if not neutral:
-            bs = byweek_side[(week, side)]
-            bs["su_w"] += su; bs["su_n"] += 1
-            if ats is not None:
-                bs["ats_w"] += ats; bs["ats_n"] += 1
-
-        for pkey in [(wkb, "all")] + ([] if neutral else [(wkb, side)]):
+        for pkey in ["all"] + ([] if neutral else [side]):
             pc = pooled[pkey]
             pc["su_w"] += su; pc["su_n"] += 1; pc["miss"] += miss
             if ats is not None:
                 pc["ats_w"] += ats; pc["ats_n"] += 1
 
-    # shrink each bucket cell toward the all-weeks prior for that bucket
+    # shrink each bucket cell toward the all-games prior for that bucket
     def shrunk(c: dict, lab: str, field: str) -> float | None:
         w, n = c[f"{field}_w"], c[f"{field}_n"]
         pw, pn = prior[lab][f"{field}_w"], prior[lab][f"{field}_n"]
@@ -230,32 +236,29 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
         prior_rate = pw / pn if pn else 0.5
         return round((w + SHRINK_K * prior_rate) / (n + SHRINK_K), 4)
 
-    cells: dict[str, Any] = {"week1": {}, "rest": {}}
-    for (wkb, side, lab), c in data.items():
-        cells[wkb].setdefault(side, {})[lab] = {
+    cells: dict[str, Any] = {}
+    for (side, lab), c in data.items():
+        cells.setdefault(side, {})[lab] = {
             "su": shrunk(c, lab, "su"),
             "ats": shrunk(c, lab, "ats"),
             "n": int(c["su_n"]),
         }
 
-    # smooth curve: p(field) = sigmoid(a + b*abs_spread), per (wk_bucket, side)
-    curves: dict[str, Any] = {"week1": {}, "rest": {}}
-    curve_coef: dict[tuple, dict[str, Optional[tuple[float, float]]]] = {}
-    for ck in set(raw_su) | set(raw_ats):
-        wkb, side = ck
-        coef = {"su": _fit_logistic(raw_su.get(ck, [])), "ats": _fit_logistic(raw_ats.get(ck, []))}
-        curve_coef[ck] = coef
-        curves[wkb][side] = {
-            field: (list(c) if c else None) for field, c in coef.items()
-        }
+    # smooth curve: p(field) = sigmoid(a + b*abs_spread), per side
+    curves: dict[str, Any] = {}
+    curve_coef: dict[str, dict[str, Optional[tuple[float, float]]]] = {}
+    for side in set(raw_su) | set(raw_ats):
+        coef = {"su": _fit_logistic(raw_su.get(side, [])), "ats": _fit_logistic(raw_ats.get(side, []))}
+        curve_coef[side] = coef
+        curves[side] = {field: (list(c) if c else None) for field, c in coef.items()}
 
     # key-number correction: shrink the raw empirical rate at exactly 3 / 7 toward the
     # smooth curve's OWN prediction there (not the bucket prior — the curve already IS
     # the model), so the adjustment is the part the curve structurally can't capture.
-    key_adjustments: dict[str, Any] = {"week1": {}, "rest": {}}
-    for (wkb, side, kn), kc in key_data.items():
-        coef = curve_coef.get((wkb, side)) or {}
-        out_side = key_adjustments[wkb].setdefault(side, {})
+    key_adjustments: dict[str, Any] = {}
+    for (side, kn), kc in key_data.items():
+        coef = curve_coef.get(side) or {}
+        out_side = key_adjustments.setdefault(side, {})
         for field in ("su", "ats"):
             ab = coef.get(field)
             w, n = kc[f"{field}_w"], kc[f"{field}_n"]
@@ -265,39 +268,22 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
             shrunk_rate = (w + SHRINK_K * predicted) / (n + SHRINK_K)
             out_side.setdefault(field, {})[str(int(kn))] = round(shrunk_rate - predicted, 4)
 
-    summary: dict[str, Any] = {}
-    for wkb in ("week1", "rest"):
-        allc = pooled.get((wkb, "all"), _cell())
-        homec = pooled.get((wkb, "home"), _cell())
-        awayc = pooled.get((wkb, "away"), _cell())
-        summary[wkb] = {
-            "su": _rate(allc["su_w"], allc["su_n"]),
-            "ats": _rate(allc["ats_w"], allc["ats_n"]),
-            # su for a favored side; 1 - away_su = home-dog upset rate, 1 - home_su = away-dog
-            "home_su": _rate(homec["su_w"], homec["su_n"]),
-            "away_su": _rate(awayc["su_w"], awayc["su_n"]),
-            "home_ats": _rate(homec["ats_w"], homec["ats_n"]),
-            "away_ats": _rate(awayc["ats_w"], awayc["ats_n"]),
-            "home_n": int(homec["su_n"]),
-            "away_n": int(awayc["su_n"]),
-            "avg_miss": round(allc["miss"] / allc["su_n"], 2) if allc["su_n"] else None,
-            "n": int(allc["su_n"]),
-        }
-
-    week_series = [
-        {
-            "week": w,
-            "su": _rate(byweek[w]["su_w"], byweek[w]["su_n"]),
-            "ats": _rate(byweek[w]["ats_w"], byweek[w]["ats_n"]),
-            "home_su": _rate(byweek_side[(w, "home")]["su_w"], byweek_side[(w, "home")]["su_n"]),
-            "away_su": _rate(byweek_side[(w, "away")]["su_w"], byweek_side[(w, "away")]["su_n"]),
-            "home_ats": _rate(byweek_side[(w, "home")]["ats_w"], byweek_side[(w, "home")]["ats_n"]),
-            "away_ats": _rate(byweek_side[(w, "away")]["ats_w"], byweek_side[(w, "away")]["ats_n"]),
-            "avg_miss": round(byweek[w]["miss"] / byweek[w]["su_n"], 2) if byweek[w]["su_n"] else None,
-            "n": int(byweek[w]["su_n"]),
-        }
-        for w in sorted(byweek)
-    ]
+    allc = pooled.get("all", _cell())
+    homec = pooled.get("home", _cell())
+    awayc = pooled.get("away", _cell())
+    summary: dict[str, Any] = {
+        "su": _rate(allc["su_w"], allc["su_n"]),
+        "ats": _rate(allc["ats_w"], allc["ats_n"]),
+        # su for a favored side; 1 - away_su = home-dog upset rate, 1 - home_su = away-dog
+        "home_su": _rate(homec["su_w"], homec["su_n"]),
+        "away_su": _rate(awayc["su_w"], awayc["su_n"]),
+        "home_ats": _rate(homec["ats_w"], homec["ats_n"]),
+        "away_ats": _rate(awayc["ats_w"], awayc["ats_n"]),
+        "home_n": int(homec["su_n"]),
+        "away_n": int(awayc["su_n"]),
+        "avg_miss": round(allc["miss"] / allc["su_n"], 2) if allc["su_n"] else None,
+        "n": int(allc["su_n"]),
+    }
 
     return {
         "generated": datetime.now(timezone.utc).isoformat(),
@@ -308,39 +294,36 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
         "curves": curves,
         "key_adjustments": key_adjustments,
         "summary": summary,
-        "byweek": week_series,
     }
 
 
-def _lookup(dist: dict, abs_spread: float, home_fav: bool, week: int) -> dict | None:
+def _lookup(dist: dict, abs_spread: float, home_fav: bool) -> dict | None:
     """Mirror of History.lookup in js/history.js: most specific cell for a game."""
-    wk = (dist.get("cells") or {}).get("week1" if week == 1 else "rest", {})
+    cells = dist.get("cells") or {}
     lab = _bucket(abs_spread)
     side = "home" if home_fav else "away"
-    return wk.get(side, {}).get(lab) or wk.get("all", {}).get(lab)
+    return cells.get(side, {}).get(lab) or cells.get("all", {}).get(lab)
 
 
-def predict(dist: dict, abs_spread: float, home_fav: bool, week: int, field: str) -> Optional[float]:
+def predict(dist: dict, abs_spread: float, home_fav: bool, field: str) -> Optional[float]:
     """P(favorite wins SU / covers) from the smooth curve at this exact spread, with the
     key-number correction applied at 3 and 7. Mirror: History.predict in js/history.js."""
-    wkb = "week1" if week == 1 else "rest"
     side = "home" if home_fav else "away"
     curves = dist.get("curves") or {}
-    coef = (curves.get(wkb, {}).get(side, {}) or {}).get(field) \
-        or (curves.get(wkb, {}).get("all", {}) or {}).get(field)
+    coef = (curves.get(side, {}) or {}).get(field) or (curves.get("all", {}) or {}).get(field)
     if not coef:
         return None
     p = _sigmoid(coef[0] + coef[1] * abs_spread)
     for kn in KEY_NUMBERS:
         if abs(abs_spread - kn) < 0.01:
-            adj = (dist.get("key_adjustments") or {}).get(wkb, {}).get(side, {}).get(field, {}).get(str(int(kn)))
+            adj = (dist.get("key_adjustments") or {}).get(side, {}).get(field, {}).get(str(int(kn)))
             if adj is not None:
                 p += adj
             break
     return round(min(0.995, max(0.005, p)), 4)
 
 
-def _predict_signed(dist: dict, home_fav_side: bool, signed_margin: float, week: int, field: str) -> Optional[float]:
+def _predict_signed(dist: dict, home_fav_side: bool, signed_margin: float, field: str) -> Optional[float]:
     """P(the team on `home_fav_side`, home if True else away, wins/covers), from a SIGNED
     margin for that side (positive = favored by that many points; negative = actually the
     worse side by that many, evaluated by flipping to the other side's curve at the
@@ -351,13 +334,13 @@ def _predict_signed(dist: dict, home_fav_side: bool, signed_margin: float, week:
     strictly monotonic and keeps differentiating games no matter how large the blend gets.
     """
     if signed_margin >= 0:
-        return predict(dist, signed_margin, home_fav_side, week, field)
-    p_other = predict(dist, -signed_margin, not home_fav_side, week, field)
+        return predict(dist, signed_margin, home_fav_side, field)
+    p_other = predict(dist, -signed_margin, not home_fav_side, field)
     return None if p_other is None else round(1 - p_other, 4)
 
 
 def week_budget(
-    dist: dict, week: int, games: list[dict], odds_map: dict[str, dict],
+    dist: dict, games: list[dict], odds_map: dict[str, dict],
     elway_map: dict[str, dict] | None = None,
 ) -> dict[str, list[dict]]:
     """Per spread-bin "take N dogs" suggestion for this week, for both modes.
@@ -393,7 +376,7 @@ def week_budget(
                 continue
             sp = float(o["spread"])
             home_fav = sp <= 0
-            v = predict(dist, abs(sp), home_fav, week, field)
+            v = predict(dist, abs(sp), home_fav, field)
             if v is None:
                 continue
 
@@ -405,7 +388,7 @@ def week_budget(
             if el and el.get("spread_home") is not None:
                 elway_fav_margin = -el["spread_home"] if home_fav else el["spread_home"]
                 eff_margin = (1 - ELWAY_BLEND_WEIGHT) * abs(sp) + ELWAY_BLEND_WEIGHT * elway_fav_margin
-            rank_v = _predict_signed(dist, home_fav, eff_margin, week, field)
+            rank_v = _predict_signed(dist, home_fav, eff_margin, field)
             if rank_v is None:
                 rank_v = v
 
@@ -417,7 +400,7 @@ def week_budget(
             lab = _bucket(disp_spread)
             if lab is None:
                 continue
-            hist_cell = _lookup(dist, disp_spread, home_fav, week) or {}
+            hist_cell = _lookup(dist, disp_spread, home_fav) or {}
             by_bin[lab].append({
                 "game_id": g["game_id"],
                 "fav": g["home"] if home_fav else g["away"],
@@ -466,4 +449,4 @@ def refresh(store, force: bool = False) -> str:
 
     store.kv_set("hist_distribution", json.dumps(dist))
     store.kv_set("hist_date", today)
-    return f"built {dist['seasons']} (week1 n={dist['summary']['week1']['n']})"
+    return f"built {dist['seasons']} (n={dist['summary']['n']})"

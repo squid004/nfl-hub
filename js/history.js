@@ -12,7 +12,6 @@ const HIST_MODES = {
     budgetTitle: 'Upset budget', budgetCol: 'Upset rate', budgetVerb: 'Take as upsets',
     fadeLabel: 'Fade the favorite in', histTitle: 'dog upset rates',
     histBlurb: 'How often the underdog wins outright',
-    refCol: 'Fav ATS',
   },
   ats: {
     field: 'ats', other: 'su', picksKey: 'aPicks',
@@ -21,13 +20,10 @@ const HIST_MODES = {
     budgetTitle: 'Dog-cover budget', budgetCol: 'Dog cover rate', budgetVerb: 'Take the dog side',
     fadeLabel: 'Take the dog in', histTitle: 'dog cover rates',
     histBlurb: 'How often the underdog beats the spread',
-    refCol: 'Fav SU',
   },
 };
 
 const History = {
-  weekBucket(w) { return Number(w) === 1 ? 'week1' : 'rest'; },
-
   bucketLabel(absSpread) {
     const s = Math.abs(absSpread);
     if (s <= 2.5) return '≤2.5';
@@ -37,31 +33,34 @@ const History = {
     return '10+';
   },
 
-  lookup(dist, absSpread, homeFav, week) {
+  // One constant historical estimate by spread size, no week-of-season split. A prior version
+  // split week 1 from "the rest," but neither that split nor several candidate finale-week
+  // splits (tested when investigating week-to-week variation) replicated across independent
+  // halves of the 2007-2025 data -- see nflhub/sources/history.py module docstring for the
+  // actual numbers. Pooling everything is both simpler and the statistically defensible choice.
+  lookup(dist, absSpread, homeFav) {
     if (!dist || !dist.cells) return null;
-    const wk = dist.cells[this.weekBucket(week)];
-    if (!wk) return null;
+    const cells = dist.cells;
     const lab = this.bucketLabel(absSpread);
     const side = homeFav ? 'home' : 'away';
-    return (wk[side] && wk[side][lab]) || (wk.all && wk.all[lab]) || null;
+    return (cells[side] && cells[side][lab]) || (cells.all && cells.all[lab]) || null;
   },
 
   // P(favorite wins SU / covers) from the smooth curve at this exact spread, with the
   // key-number correction at 3/7 applied. Mirror of predict() in nflhub/sources/history.py
   // — see that docstring for why a smooth curve plus an explicit key-number bump, instead
   // of either pure discrete buckets or a pure smooth curve alone.
-  predict(dist, absSpread, homeFav, week, field) {
+  predict(dist, absSpread, homeFav, field) {
     if (!dist || !dist.curves) return null;
-    const wkb = this.weekBucket(week);
     const side = homeFav ? 'home' : 'away';
-    const curves = dist.curves[wkb] || {};
+    const curves = dist.curves;
     const coef = (curves[side] && curves[side][field]) || (curves.all && curves.all[field]);
     if (!coef) return null;
     const [a, b] = coef;
     let p = 1 / (1 + Math.exp(-(a + b * absSpread)));
     for (const kn of [3, 7]) {
       if (Math.abs(absSpread - kn) < 0.01) {
-        const adj = (((dist.key_adjustments || {})[wkb] || {})[side] || {})[field]?.[String(kn)];
+        const adj = ((dist.key_adjustments || {})[side] || {})[field]?.[String(kn)];
         if (adj != null) p += adj;
         break;
       }
@@ -74,19 +73,19 @@ const History = {
   // to the other side's curve). Mirror of _predict_signed in nflhub/sources/history.py —
   // see that docstring for why: a floor-clamped magnitude let an ELWAY/market blend
   // collapse multiple different games to the identical toss-up value and re-tie them.
-  predictSigned(dist, homeFavSide, signedMargin, week, field) {
-    if (signedMargin >= 0) return this.predict(dist, signedMargin, homeFavSide, week, field);
-    const pOther = this.predict(dist, -signedMargin, !homeFavSide, week, field);
+  predictSigned(dist, homeFavSide, signedMargin, field) {
+    if (signedMargin >= 0) return this.predict(dist, signedMargin, homeFavSide, field);
+    const pOther = this.predict(dist, -signedMargin, !homeFavSide, field);
     return pOther == null ? null : 1 - pOther;
   },
 
   // Poisson-binomial mean/sd of favorite SU wins and ATS covers over this week's games.
-  expected(games, odds, dist, week) {
+  expected(games, odds, dist) {
     let suM = 0, suV = 0, atsM = 0, atsV = 0, k = 0;
     for (const g of games) {
       const o = odds[g.game_id];
       if (!o || o.spread == null) continue;
-      const cell = this.lookup(dist, Math.abs(o.spread), o.spread <= 0, week);
+      const cell = this.lookup(dist, Math.abs(o.spread), o.spread <= 0);
       if (!cell || cell.su == null) continue;
       suM += cell.su; suV += cell.su * (1 - cell.su);
       if (cell.ats != null) { atsM += cell.ats; atsV += cell.ats * (1 - cell.ats); }
@@ -98,15 +97,13 @@ const History = {
   summaryLine(ctx, mode = 'ml') {
     const d = ctx.hist;
     if (!d) return '';
-    const wk = this.weekBucket(ctx.week);
-    const s = d.summary[wk];
-    const e = this.expected(ctx.games, ctx.odds, d, ctx.week);
+    const s = d.summary;
+    const e = this.expected(ctx.games, ctx.odds, d);
     if (!e.k || !s) return '';
-    const label = wk === 'week1' ? 'Week 1' : 'Weeks 2+';
     if (mode === 'ml') {
       const upsets = Math.round(e.k - e.suMean);
       const covLean = Math.round(e.k - e.atsMean);
-      return `History (${d.seasons}, ${label}): favorites expected to win ${e.suMean.toFixed(1)} of ` +
+      return `History (${d.seasons}): favorites expected to win ${e.suMean.toFixed(1)} of ` +
         `${e.k} straight up → ~${upsets} moneyline upsets (±${e.suSd.toFixed(1)}). ` +
         `Favorites cover ${Math.round(s.ats * 100)}% ATS → ~${covLean} dogs cover.`;
     }
@@ -117,7 +114,7 @@ const History = {
         ? ' Home favorites cover least → lean road dogs.'
         : ' Road favorites cover least → lean home dogs.';
     }
-    return `History (${d.seasons}, ${label}): favorites expected to cover ${e.atsMean.toFixed(1)} of ` +
+    return `History (${d.seasons}): favorites expected to cover ${e.atsMean.toFixed(1)} of ` +
       `${e.k} → ~${covers} dog covers (±${e.atsSd.toFixed(1)}).${tilt}`;
   },
 
@@ -149,7 +146,7 @@ const History = {
       const bp = bestPrice[g.game_id];
       const sp = (bp && bp.avg_spread_home != null) ? bp.avg_spread_home : o.spread;
       const homeFav = sp <= 0;
-      const v = this.predict(d, Math.abs(sp), homeFav, ctx.week, F);
+      const v = this.predict(d, Math.abs(sp), homeFav, F);
       if (v == null) continue;
 
       // Blend the market favorite's margin toward ELWAY's margin for that same team
@@ -164,12 +161,12 @@ const History = {
         const elwayFavMargin = homeFav ? -el.spread_home : el.spread_home;
         effMargin = 0.35 * Math.abs(sp) + 0.65 * elwayFavMargin;
       }
-      const rankV = this.predictSigned(d, homeFav, effMargin, ctx.week, F) ?? v;
+      const rankV = this.predictSigned(d, homeFav, effMargin, F) ?? v;
 
       // Display bucket only: BUCKETS/bucketLabel assumes clean half-point spreads (true
       // for a single book's line, not necessarily for a cross-book average, e.g. 2.75).
       const dispSpread = Math.round(Math.abs(sp) * 2) / 2;
-      const cell = this.lookup(d, dispSpread, homeFav, ctx.week);
+      const cell = this.lookup(d, dispSpread, homeFav);
 
       groups[this.bucketLabel(dispSpread)].push({
         gameId: g.game_id,
@@ -304,29 +301,12 @@ const History = {
     if (!host) return;
     const d = ctx.hist;
     if (!d) { host.innerHTML = `<div class="panel"><h2>History</h2><p class="muted">Not built yet — appears after the next daily refresh.</p></div>`; return; }
-    const F = M.field, O = M.other;
+    const F = M.field;
 
-    const s1 = d.summary.week1, sr = d.summary.rest;
     const up = v => v == null ? '—' : Math.round((1 - v) * 100) + '%'; // 1 - fav rate = dog rate
-    const refPct = v => v == null ? '—' : Math.round(v * 100) + '%';
 
     // "home dog" = home team is the underdog => AWAY team favored => away_* cell.
-    const row = (lab, s) => `<tr><td>${lab}</td>
-      <td class="num">${up(s[F])}</td>
-      <td class="num" title="home team as underdog, n=${s.away_n ?? '—'}">${up(s['away_' + F])}</td>
-      <td class="num" title="away team as underdog, n=${s.home_n ?? '—'}">${up(s['home_' + F])}</td>
-      <td class="num muted">${refPct(s[O])}</td>
-      <td class="num muted">${s.n}</td></tr>`;
-
-    const wkRows = d.byweek.map(w => `<tr>
-      <td>Wk ${w.week}</td>
-      <td class="num">${up(w[F])}</td>
-      <td class="num">${up(w['away_' + F])}</td>
-      <td class="num">${up(w['home_' + F])}</td>
-      <td class="num muted">${w.n}</td></tr>`).join('');
-
-    const wkKey = this.weekBucket(ctx.week);
-    const cells = d.cells[wkKey] || {};
+    const cells = d.cells || {};
     const bktRows = d.buckets.map(b => {
       const any = (cells.all || {})[b] || {};
       const hd = (cells.away || {})[b] || {};   // away favored -> home dog
@@ -338,33 +318,19 @@ const History = {
         <td class="num muted">${any.n ?? '—'}</td></tr>`;
     }).join('');
 
-    const wkLabel = wkKey === 'week1' ? 'Week 1' : 'Weeks 2+';
     host.innerHTML = `
       <div class="panel">
         <h2>History &mdash; ${M.histTitle} (${d.seasons})</h2>
         <details>
-          <summary class="muted small">Show breakdown (week 1 vs. rest, by spread size, week-over-week)</summary>
+          <summary class="muted small">Show breakdown (by spread size)</summary>
           <p class="muted">${M.histBlurb}, split by whether the dog is at home or on the road.
-            Shrunk toward each bucket's all-weeks rate (k=${d.shrink_k}); n is the raw sample.
-            (${M.refCol} shown for reference.)</p>
-          <div class="grid2">
-            <div>
-              <h3>Week 1 vs. the rest</h3>
-              <table><thead><tr><th>Split</th><th class="num">Any dog</th><th class="num">Home dog</th>
-                <th class="num">Away dog</th><th class="num">${M.refCol}</th><th class="num">n</th></tr></thead>
-                <tbody>${row('Week 1', s1)}${row('Weeks 2+', sr)}</tbody></table>
-              <h3 style="margin-top:14px;">By spread size &mdash; ${wkLabel}</h3>
-              <table><thead><tr><th>Spread</th><th class="num">Any dog</th><th class="num">Home dog</th>
-                <th class="num">Away dog</th><th class="num">n</th></tr></thead>
-                <tbody>${bktRows}</tbody></table>
-            </div>
-            <div>
-              <h3>Week over week</h3>
-              <table><thead><tr><th>Week</th><th class="num">Any dog</th><th class="num">Home dog</th>
-                <th class="num">Away dog</th><th class="num">n</th></tr></thead>
-                <tbody>${wkRows}</tbody></table>
-            </div>
-          </div>
+            One pooled estimate across the whole season -- a week-of-season split (week 1,
+            and several candidate season-finale splits) was tested and didn't hold up on an
+            independent half of the data, so it's not used (see nflhub/sources/history.py).
+            Shrunk toward each bucket's all-games rate (k=${d.shrink_k}); n is the raw sample.</p>
+          <table><thead><tr><th>Spread</th><th class="num">Any dog</th><th class="num">Home dog</th>
+            <th class="num">Away dog</th><th class="num">n</th></tr></thead>
+            <tbody>${bktRows}</tbody></table>
         </details>
       </div>`;
   },

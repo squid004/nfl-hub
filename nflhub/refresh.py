@@ -223,7 +223,7 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
                 for gid, o in wk_odds.items():
                     avg_spread = best_price.get(gid, {}).get("avg_spread_home")
                     budget_odds[gid] = {**o, "spread": avg_spread if avg_spread is not None else o.get("spread")}
-                for mode, rows in history.week_budget(dist, week, games, budget_odds, elway_rows).items():
+                for mode, rows in history.week_budget(dist, games, budget_odds, elway_rows).items():
                     store.upsert_budget_snapshot(week, mode, rows)
                 summary["budget_snapshot"] = "written"
             else:

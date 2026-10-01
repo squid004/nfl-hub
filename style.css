@@ -36,8 +36,6 @@ header .muted { display:block; font-size:12px; }
 #tabs button.active { color:var(--text); border-bottom-color:var(--accent); font-weight:600; }
 
 main { padding:20px; max-width:1280px; margin:0 auto; display:grid; gap:20px; }
-.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
-@media (max-width:860px) { .grid2 { grid-template-columns:1fr; } }
 
 .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
 section > .panel { min-width:0; }

@@ -273,7 +273,7 @@ const Pickem = {
       const stateChip = g.state === 'post' ? `<span class="muted">(${g.away_score}-${g.home_score} F)</span>`
         : g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
 
-      const histCell = hist && hasLine ? History.lookup(hist, Math.abs(o.spread), o.spread <= 0, week) : null;
+      const histCell = hist && hasLine ? History.lookup(hist, Math.abs(o.spread), o.spread <= 0) : null;
       const bucketRank = bucketRanks[g.game_id] || null;
       // Prefer the bucket the ranking itself used (computeBudget prefers the cross-book
       // average spread when available) over recomputing from o.spread alone — otherwise
@@ -425,7 +425,7 @@ const Pickem = {
 
       let suCell = '<td class="num muted">—</td>', atsCell = '<td class="num muted">—</td>';
       if (hist && hasLine) {
-        const h = History.lookup(hist, Math.abs(o.spread), o.spread <= 0, week);
+        const h = History.lookup(hist, Math.abs(o.spread), o.spread <= 0);
         if (h) {
           const suW = h.su != null && h.su < 0.60 ? ' warn' : '';
           const atW = h.ats != null && h.ats < 0.48 ? ' warn' : '';
