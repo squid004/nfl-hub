@@ -64,8 +64,16 @@ function qbFlag(team, injuries) {
 // yet"). So: if the assumed starter (elwayQb1) IS one of the flagged QBs, surface that entry
 // plus any other flagged QB for the team (the presumptive next man up). Otherwise -- ELWAY's
 // assumed starter isn't flagged, either because we don't know who it is or because ELWAY has
-// already moved off the injured player -- fall back to the single worst flagged entry rather
-// than suppressing, so a genuine starter injury never goes silently unshown.
+// already moved off the injured player -- fall back to the worst OTHER flagged entry, but
+// only at Doubtful/Out severity, not Questionable. Checked against real cases: a healthy,
+// playing starter commonly has some unrelated QB2/QB3 sitting at "Questionable" for a minor
+// or unrelated reason (Aidan O'Connell on personal matters behind a fine Kirk Cousins; Trey
+// Lance behind a fine Justin Herbert) -- falling back for those surfaced a meaningless chip.
+// Doubtful/Out don't have that problem: both real cases seen (Mayfield Out, C. Williams
+// Doubtful) were genuine starter changes, and a bog-standard deep backup rarely earns that
+// stronger a tag for no real reason. Questionable still shows when it's the ASSUMED starter
+// (branch above) -- it only stops being a trustworthy signal once it's being used as a guess
+// about which OTHER flagged QB might matter.
 function starterQbFlags(team, injuries, elwayQb1) {
   const qbs = ((injuries || {})[team] || []).filter(i => i.position === 'QB' && QB_SEVERITY[i.status]
     && !/coach'?s decision/i.test(i.detail || ''));
@@ -76,8 +84,9 @@ function starterQbFlags(team, injuries, elwayQb1) {
   const starterEntry = assumed ? qbs.find(i => lastName(i.player) === assumed.name.toLowerCase()) : null;
   if (starterEntry) return [starterEntry, ...qbs.filter(i => i !== starterEntry)];
 
-  const worst = qbFlag(team, injuries);
-  return worst ? [worst] : [];
+  const serious = qbs.filter(i => QB_SEVERITY[i.status] >= 2);
+  if (!serious.length) return [];
+  return [serious.reduce((worst, i) => QB_SEVERITY[i.status] > QB_SEVERITY[worst.status] ? i : worst)];
 }
 function qbChip(team, injuries, elwayQb1) {
   const qbs = starterQbFlags(team, injuries, elwayQb1);
@@ -376,9 +385,10 @@ const Pickem = {
             = Out/IR) regardless of what ELWAY currently assumes at QB1 — if ELWAY's assumed
             starter is the one flagged, another flagged QB for that team shows too (the
             presumptive next man up); if ELWAY has already moved QB1 off an injured player (or
-            we don't know who ELWAY has at QB1), this falls back to the single worst flagged
-            entry instead of disappearing, so a real starter injury never goes unshown just
-            because ELWAY's own sheet caught up to it. <span class="chip warn">STEAM</span> = the market spread
+            we don't know who ELWAY has at QB1), this falls back to the worst OTHER flagged QB
+            at Doubtful/Out severity only (a merely "Questionable" QB2/QB3 unrelated to a fine
+            starter doesn't get a chip; a real starter change does), so a real starter injury
+            never goes unshown just because ELWAY's own sheet caught up to it. <span class="chip warn">STEAM</span> = the market spread
             has moved &ge;1.5 points in one direction since this week's first snapshot.
             <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
             rating that team with a QB1 our live injury feed now shows hurt — a breaking-news
@@ -482,7 +492,8 @@ const Pickem = {
             of that spread size — below ~50% leans dog. The line is snapshotted when you pick.
             A <span class="chip warn">QB</span> chip next to a team shows that team's QB injury
             situation regardless of what ELWAY currently assumes at QB1 (plus any other flagged
-            QB, if ELWAY's assumed starter is the one hurt). A highlighted (amber) Fav cell means
+            QB, if ELWAY's assumed starter is the one hurt; otherwise only a Doubtful/Out backup
+            counts, not a merely Questionable one). A highlighted (amber) Fav cell means
             the line has moved &ge;1.5 points in one direction this week — hover for the
             open/current line. A <span class="elway-stale">red</span> ELWAY Spread cell means
             ELWAY's weekly sheet is still rating a team with a QB1 our live injury feed now
