@@ -57,29 +57,27 @@ function qbFlag(team, injuries) {
   if (!qbs.length) return null;
   return qbs.reduce((worst, i) => QB_SEVERITY[i.status] > QB_SEVERITY[worst.status] ? i : worst);
 }
-// Only the STARTING QB's injury matters for who actually plays: if the assumed starter
-// (elwayQb1, same source elwayStaleQb uses) is healthy/unflagged, suppress every backup's
-// injury entry -- it doesn't matter if QB2 is banged up when QB1 is expected to start. If
-// the starter IS flagged, also surface any other flagged QB for that team (the presumptive
-// next man up). Falls back to qbFlag's single worst-entry behavior when we don't know who
-// the starter is (elwayQb1 not populated for this team).
+// The injury designation should show whenever the team's own best/starting QB is out,
+// independent of whatever ELWAY's sheet currently assumes -- ELWAY updating QB1 to the new
+// starter (which it does once its weekly sheet catches up) must NOT make the chip disappear;
+// that's a different fact (elwayStaleQb, a separate chip, covers "ELWAY hasn't caught up
+// yet"). So: if the assumed starter (elwayQb1) IS one of the flagged QBs, surface that entry
+// plus any other flagged QB for the team (the presumptive next man up). Otherwise -- ELWAY's
+// assumed starter isn't flagged, either because we don't know who it is or because ELWAY has
+// already moved off the injured player -- fall back to the single worst flagged entry rather
+// than suppressing, so a genuine starter injury never goes silently unshown.
 function starterQbFlags(team, injuries, elwayQb1) {
   const qbs = ((injuries || {})[team] || []).filter(i => i.position === 'QB' && QB_SEVERITY[i.status]
     && !/coach'?s decision/i.test(i.detail || ''));
   if (!qbs.length) return [];
 
   const assumed = (elwayQb1 || {})[team];
-  if (!assumed) {
-    const worst = qbFlag(team, injuries);
-    return worst ? [worst] : [];
-  }
-
-  const starterName = assumed.name.toLowerCase();
   const lastName = p => p.trim().split(/\s+/).pop().toLowerCase();
-  const starterEntry = qbs.find(i => lastName(i.player) === starterName);
-  if (!starterEntry) return []; // starter not on the injury report -> expected to start
+  const starterEntry = assumed ? qbs.find(i => lastName(i.player) === assumed.name.toLowerCase()) : null;
+  if (starterEntry) return [starterEntry, ...qbs.filter(i => i !== starterEntry)];
 
-  return [starterEntry, ...qbs.filter(i => i !== starterEntry)];
+  const worst = qbFlag(team, injuries);
+  return worst ? [worst] : [];
 }
 function qbChip(team, injuries, elwayQb1) {
   const qbs = starterQbFlags(team, injuries, elwayQb1);
@@ -374,11 +372,13 @@ const Pickem = {
             dog is — pool-leverage's FADE/CHALK call when it has data this week, otherwise
             the upset-budget flag. ELWAY is Nate Silver's Silver Bulletin NFL forecasting
             model, transcribed weekly into a Google Sheet — not a personal formula. A
-            <span class="chip warn">QB</span> chip only shows if ELWAY's assumed starter is
-            the one flagged (red = Out/IR) — a healthy starter suppresses any backup's injury;
-            if the starter IS hurt, another flagged QB for that team shows too (the presumptive
-            next man up). Falls back to showing the single worst QB entry when we don't know
-            who the starter is. <span class="chip warn">STEAM</span> = the market spread
+            <span class="chip warn">QB</span> chip shows that team's QB injury situation (red
+            = Out/IR) regardless of what ELWAY currently assumes at QB1 — if ELWAY's assumed
+            starter is the one flagged, another flagged QB for that team shows too (the
+            presumptive next man up); if ELWAY has already moved QB1 off an injured player (or
+            we don't know who ELWAY has at QB1), this falls back to the single worst flagged
+            entry instead of disappearing, so a real starter injury never goes unshown just
+            because ELWAY's own sheet caught up to it. <span class="chip warn">STEAM</span> = the market spread
             has moved &ge;1.5 points in one direction since this week's first snapshot.
             <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
             rating that team with a QB1 our live injury feed now shows hurt — a breaking-news
@@ -480,9 +480,9 @@ const Pickem = {
           <p class="tablefoot muted">Away%/Home% are this game's de-vigged market prices.
             Pick the side that covers. Fav ATS is the historical cover rate for any favorite
             of that spread size — below ~50% leans dog. The line is snapshotted when you pick.
-            A <span class="chip warn">QB</span> chip next to a team only shows if the starter
-            (per ELWAY's assumed QB1) is the one flagged injured, plus any other flagged QB if
-            so. A highlighted (amber) Fav cell means
+            A <span class="chip warn">QB</span> chip next to a team shows that team's QB injury
+            situation regardless of what ELWAY currently assumes at QB1 (plus any other flagged
+            QB, if ELWAY's assumed starter is the one hurt). A highlighted (amber) Fav cell means
             the line has moved &ge;1.5 points in one direction this week — hover for the
             open/current line. A <span class="elway-stale">red</span> ELWAY Spread cell means
             ELWAY's weekly sheet is still rating a team with a QB1 our live injury feed now
