@@ -53,7 +53,17 @@ def _fetch_next_data() -> dict[str, Any]:
         raise ActionNetworkUnavailable(f"fetch failed: {exc}") from exc
     m = _NEXT_DATA_RE.search(r.text)
     if not m:
-        raise ActionNetworkUnavailable("__NEXT_DATA__ not found (page layout changed?)")
+        # TEMP diagnostic (2026-10-01): confirmed the tag parses fine from a residential IP,
+        # so "page layout changed" is probably the wrong diagnosis -- more likely Action
+        # Network serves CI/datacenter IPs (e.g. GitHub Actions runners) a different page
+        # (bot-block/challenge), same problem already documented for the unofficial DK
+        # endpoints. This logs what the runner actually received so the next scheduled run
+        # confirms or rules that out; revert once known.
+        snippet = r.text[:300].replace("\n", " ")
+        raise ActionNetworkUnavailable(
+            f"__NEXT_DATA__ not found (status={r.status_code}, len={len(r.text)}, "
+            f"snippet={snippet!r})"
+        )
     try:
         return json.loads(m.group(1))
     except ValueError as exc:
