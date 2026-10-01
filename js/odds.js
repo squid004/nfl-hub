@@ -51,6 +51,7 @@ const Odds = {
         : g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
       const favTeam = o.spread != null ? (o.spread <= 0 ? g.home : g.away) : null;
       const elwayFlip = elwayFullDisagree(el, g.home, g.away, favTeam);
+      const elwayFav = elwayFavLabel(el, g.home, g.away);
       const elwaySpreadCell = staleQb
         ? `<td class="elway-stale" title="ELWAY's rating still assumes ${staleQb.assumedName} at QB1, but our injury report lists him ${staleQb.status}">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>`
         : elwayFlip
@@ -67,8 +68,7 @@ const Odds = {
         <td class="num muted">${o.ml_home ?? '—'}</td>
         <td class="num muted">${pct(o.implied_away)}</td>
         <td class="num muted">${pct(o.implied_home)}</td>
-        <td class="num muted">${pct(el.away_win_prob)}</td>
-        <td class="num muted">${pct(el.home_win_prob)}</td>
+        <td class="num muted">${elwayFav ? `${elwayFav.team} ${pct(elwayFav.pct)}` : '—'}</td>
         <td class="muted">${o.book ?? '—'}</td>
       </tr>`;
     }).join('');
@@ -101,8 +101,7 @@ const Odds = {
           <th title="Sum of ELWAY's home + away avg-points projections. Compare against the Total column, not the sheet's own line.">ELWAY Total</th>
           <th class="num">Away ML</th><th class="num">Home ML</th>
           <th class="num">Away%</th><th class="num">Home%</th>
-          <th class="num" title="ELWAY's away win probability, from its avg-points model">ELWAY Away%</th>
-          <th class="num" title="ELWAY's home win probability, from its avg-points model">ELWAY Home%</th>
+          <th class="num" title="ELWAY's favorite and its win probability, from its avg-points model">ELWAY Fav%</th>
           <th>Book</th></tr></thead>
           <tbody>${rows}</tbody></table>
         <p class="tablefoot muted">ELWAY columns come from Nate Silver's Silver Bulletin
