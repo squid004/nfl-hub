@@ -13,16 +13,7 @@ const App = {
       if (b.dataset.act === 'pick') Pickem.pick(b.dataset.week, b.dataset.game, b.dataset.team, b.dataset.spread);
       if (b.dataset.act === 'atspick') Pickem.atspick(b.dataset.week, b.dataset.game, b.dataset.team, b.dataset.spread);
       if (b.dataset.act === 'refresh') App.requestRefresh();
-      if (b.dataset.act === 'edge-pick-del') Edge.deletePick(b.dataset.opponent, b.dataset.team);
-      if (b.dataset.act === 'edge-bias-save') Edge.saveBiasOverride(b.dataset.team, b.dataset.n);
-      if (b.dataset.act === 'edge-bias-clear') Edge.clearBiasOverride(b.dataset.team);
       if (b.dataset.act === 'power-sort') Power.sortBy(b.dataset.col);
-    });
-    document.body.addEventListener('submit', e => {
-      if (e.target.id === 'edge-standing-form') {
-        e.preventDefault();
-        Edge.saveStanding(e.target);
-      }
     });
     await this.reload();
     // Track the cron without a manual reload.
@@ -36,7 +27,7 @@ const App = {
       const week = parseInt(weekRaw || '1', 10);
       const season = parseInt(seasonRaw || '2025', 10);
       const [games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks, refreshReq, lastRefresh, hist, bSnap,
-             edgeLog, edgeBias, edgeStandings, edgeOpponentPicks, edgeSeasonLog, seasonGames, injuries, spreadHist, elwayQb1,
+             edgeLog, edgeBias, edgeStandings, injuries, spreadHist, elwayQb1,
              teamRatings] =
         await Promise.all([
           DB.weekGames(week), DB.weekOdds(week), DB.bestPriceOdds(week), DB.bookOdds(week), DB.elwayOdds(week),
@@ -44,13 +35,12 @@ const App = {
           DB.pickemPicks(week), DB.atsPicks(week),
           DB.refreshRequest(), DB.kv('last_refresh'), DB.hist(), DB.budgetSnapshot(week),
           DB.edgeRecommendationLog(season, week), DB.edgeBiasAll(), DB.edgeStandings(season),
-          DB.edgeOpponentPicks(season, week), DB.edgeRecommendationLogSeason(season), DB.seasonGames(season),
           DB.injuries(), DB.spreadHistory(week), DB.elwayQb1(),
           DB.teamRatings(),
         ]);
       const ctx = { week, season, games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks,
                     refreshReq, lastRefresh, hist, bSnap,
-                    edgeLog, edgeBias, edgeStandings, edgeOpponentPicks, edgeSeasonLog, seasonGames,
+                    edgeLog, edgeBias, edgeStandings,
                     injuries, spreadHist, elwayQb1, teamRatings };
       this._ctx = ctx;
       Deadlines.render(ctx);

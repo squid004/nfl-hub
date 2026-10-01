@@ -342,27 +342,30 @@ const History = {
     host.innerHTML = `
       <div class="panel">
         <h2>History &mdash; ${M.histTitle} (${d.seasons})</h2>
-        <p class="muted">${M.histBlurb}, split by whether the dog is at home or on the road.
-          Shrunk toward each bucket's all-weeks rate (k=${d.shrink_k}); n is the raw sample.
-          (${M.refCol} shown for reference.)</p>
-        <div class="grid2">
-          <div>
-            <h3>Week 1 vs. the rest</h3>
-            <table><thead><tr><th>Split</th><th class="num">Any dog</th><th class="num">Home dog</th>
-              <th class="num">Away dog</th><th class="num">${M.refCol}</th><th class="num">n</th></tr></thead>
-              <tbody>${row('Week 1', s1)}${row('Weeks 2+', sr)}</tbody></table>
-            <h3 style="margin-top:14px;">By spread size &mdash; ${wkLabel}</h3>
-            <table><thead><tr><th>Spread</th><th class="num">Any dog</th><th class="num">Home dog</th>
-              <th class="num">Away dog</th><th class="num">n</th></tr></thead>
-              <tbody>${bktRows}</tbody></table>
+        <details>
+          <summary class="muted small">Show breakdown (week 1 vs. rest, by spread size, week-over-week)</summary>
+          <p class="muted">${M.histBlurb}, split by whether the dog is at home or on the road.
+            Shrunk toward each bucket's all-weeks rate (k=${d.shrink_k}); n is the raw sample.
+            (${M.refCol} shown for reference.)</p>
+          <div class="grid2">
+            <div>
+              <h3>Week 1 vs. the rest</h3>
+              <table><thead><tr><th>Split</th><th class="num">Any dog</th><th class="num">Home dog</th>
+                <th class="num">Away dog</th><th class="num">${M.refCol}</th><th class="num">n</th></tr></thead>
+                <tbody>${row('Week 1', s1)}${row('Weeks 2+', sr)}</tbody></table>
+              <h3 style="margin-top:14px;">By spread size &mdash; ${wkLabel}</h3>
+              <table><thead><tr><th>Spread</th><th class="num">Any dog</th><th class="num">Home dog</th>
+                <th class="num">Away dog</th><th class="num">n</th></tr></thead>
+                <tbody>${bktRows}</tbody></table>
+            </div>
+            <div>
+              <h3>Week over week</h3>
+              <table><thead><tr><th>Week</th><th class="num">Any dog</th><th class="num">Home dog</th>
+                <th class="num">Away dog</th><th class="num">n</th></tr></thead>
+                <tbody>${wkRows}</tbody></table>
+            </div>
           </div>
-          <div>
-            <h3>Week over week</h3>
-            <table><thead><tr><th>Week</th><th class="num">Any dog</th><th class="num">Home dog</th>
-              <th class="num">Away dog</th><th class="num">n</th></tr></thead>
-              <tbody>${wkRows}</tbody></table>
-          </div>
-        </div>
+        </details>
       </div>`;
   },
 };
