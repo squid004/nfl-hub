@@ -133,22 +133,18 @@ const RATING_COLS = [
   ['pass_def_epa_allowed', 'P-Def', 'Pass defense, 0-100 (100 = best/stingiest ever recorded in the 2007-present dataset)'],
 ];
 
-// Simple glance-able severity so the header chip doesn't require reading numbers to parse --
-// thresholds match the buckets this project's own weather research already established
-// (research/weather_scoring_analysis.py / edge_signal_test_v10_weather.py).
-function weatherSeverity(wx) {
-  if (!wx) return null;
-  if (wx.wind_mph >= 20 || wx.precip_mm >= 10 || wx.cold_flag || wx.snow_in > 0) return 'bad';
-  if (wx.wind_mph >= 10 || wx.precip_mm >= 2 || wx.temp_hi_f < 32) return 'moderate';
-  return null;
+// Header chip only fires for weather bad enough to matter -- the projected score already
+// carries the weather adjustment (and says so) regardless, this is just the at-a-glance flag,
+// so merely breezy/damp conditions with no real scoring impact shouldn't earn a chip.
+// Thresholds match this project's own weather research (research/weather_scoring_analysis.py /
+// edge_signal_test_v10_weather.py).
+function isBadWeather(wx) {
+  return !!wx && (wx.wind_mph >= 20 || wx.precip_mm >= 10 || wx.cold_flag || wx.snow_in > 0);
 }
 
 function weatherChip(wx) {
-  const sev = weatherSeverity(wx);
-  if (!sev) return '';
-  const cls = sev === 'bad' ? 'bad' : 'warn';
-  const label = sev === 'bad' ? 'bad weather' : 'weather';
-  return ` <span class="chip ${cls}" title="${esc(forecastSummary(wx))}">${label}</span>`;
+  if (!isBadWeather(wx)) return '';
+  return ` <span class="chip bad" title="${esc(forecastSummary(wx))}">bad weather</span>`;
 }
 
 // Full forecast for the card's details layer -- everything fetch_forecast_weather() returns,
@@ -318,8 +314,6 @@ const Pickem = {
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
           <span class="matchup">${rankPrefix(g.away)}${teamSpan(g.away)}${wchip(g.away)}${qbChip(g.away, injuries, elwayQb1)} @ ${rankPrefix(g.home)}${teamSpan(g.home)}${wchip(g.home)}${qbChip(g.home, injuries, elwayQb1)}</span>
           ${stateChip}
-          ${bucketLabel ? `<span class="chip" title="Spread bucket: ${bucketLabel}">${bucketLabel}</span>` : ''}
-          ${bucketRank ? `<span class="chip${bucketRank.taken ? ' warn' : ''}" title="Rank ${bucketRank.rank} of ${bucketRank.n} in this spread bucket, by market spread + ELWAY-adjusted rank">${bucketRank.taken ? 'budget dog ' : 'bucket '}#${bucketRank.rank}/${bucketRank.n}</span>` : ''}
           ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
           ${move && move.steam ? `<span class="chip warn" title="Line opened ${signed(move.open)}, now ${signed(move.cur)} — a ${Math.abs(move.deltaHome).toFixed(1)}-point move this week">STEAM</span>` : ''}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
@@ -389,12 +383,11 @@ const Pickem = {
             <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
             rating that team with a QB1 our live injury feed now shows hurt — a breaking-news
             injury ELWAY's own depth-chart tracking hasn't caught up to yet.
-            <span class="chip warn">weather</span>/<span class="chip bad">bad weather</span> =
-            live forecast at kickoff (only shown for outdoor stadiums within ~16 days out) is
-            moderate or bad for scoring — &ge;10mph wind, &ge;2mm precip, or sub-freezing highs
-            for "weather"; &ge;20mph wind, &ge;10mm precip, any snow, or sub-20&deg;F highs for
-            "bad weather." Hover the chip for the exact forecast; the full forecast is also in
-            each card's "Why?" section.</p>
+            <span class="chip bad">bad weather</span> = live forecast at kickoff (only shown
+            for outdoor stadiums within ~16 days out) is bad enough to matter for scoring —
+            &ge;20mph wind, &ge;10mm precip, any snow, or sub-20&deg;F highs. Milder forecasts
+            don't get a chip, but still silently adjust the projected score (and say so) in
+            each card's "Why?" section, where the full forecast always shows when available.</p>
         </details>
       </div>`;
   },
