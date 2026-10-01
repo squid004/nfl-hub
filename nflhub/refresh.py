@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from . import optimizer, store
@@ -239,6 +239,14 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         log.exception("edge step failed")  # blocks fantasy/odds/etc. from refreshing
         summary["edge_recommendation"] = f"error ({exc})"
 
+    # 4e. pool leaderboard chalk/dog-pick reminder for the Upset Budget panel (rebuilt
+    # once/day, same cadence as hist_distribution)
+    try:
+        summary["edge_leaderboard"] = _apply_edge_leaderboard(season)
+    except Exception as exc:  # noqa: BLE001 - best-effort; never block the rest of refresh
+        log.warning("edge leaderboard skipped: %s", exc)
+        summary["edge_leaderboard"] = f"skipped ({exc})"
+
     # 5. bookkeeping: clear the "Refresh now" flag, stamp last_refresh
     try:
         if store.refresh_pending():
@@ -401,6 +409,48 @@ def _apply_edge(
     if rows:
         store.edge_upsert_recommendation_log(season, week, rows)
     summary["edge_recommendation"] = f"{len(rows)} games, budget {budget_total} ({standing.value})"
+
+
+def _apply_edge_leaderboard(season: int) -> str:
+    """Rebuild edge_core.pool_leaderboard_summary from this season's opponent picks +
+    nflverse's own closing spreads/results (not the live `odds` table, which nulls out a
+    game's spread once it's final -- same reason history.py/team_ratings.py use nflverse for
+    anything historical). At most once/day, like hist_distribution."""
+    today = date.today().isoformat()
+    if store.kv_get("edge_leaderboard_date") == today:
+        return "cached"
+
+    picks = [p for p in store.edge_all_opponent_picks() if p.get("season") == season]
+    if not picks:
+        return "no picks yet"
+
+    rows = history.fetch_games()
+    results: dict[tuple[int, str], dict[str, bool]] = {}
+    for r in rows:
+        if r.get("game_type") != "REG" or r.get("season") != str(season):
+            continue
+        try:
+            wk = int(r["week"])
+            sl = float(r["spread_line"])
+            home_score, away_score = float(r["home_score"]), float(r["away_score"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if sl == 0 or home_score == away_score:
+            continue  # pick'em (no favorite) or a tie (no winner) -- exclude either way
+        try:
+            home, away = normalize_team(r["home_team"]), normalize_team(r["away_team"])
+        except UnknownTeamError:
+            continue
+        home_fav = sl > 0
+        home_won = home_score > away_score
+        results[(wk, home)] = {"fav": home_fav, "won": home_won}
+        results[(wk, away)] = {"fav": not home_fav, "won": not home_won}
+
+    summary = edge_core.pool_leaderboard_summary(picks, results)
+    store.kv_set("edge_pool_leaderboard", json.dumps(summary))
+    store.kv_set("edge_leaderboard_date", today)
+    leaders = summary.get("season_leaders") or {}
+    return f"built ({len(picks)} picks, leader(s) {leaders.get('names')} at {leaders.get('correct')})"
 
 
 def _apply_fantasypros(cfg: Config, season: int, week: int, summary: dict[str, Any]) -> None:

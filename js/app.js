@@ -27,20 +27,20 @@ const App = {
       const week = parseInt(weekRaw || '1', 10);
       const season = parseInt(seasonRaw || '2025', 10);
       const [games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks, refreshReq, lastRefresh, hist, bSnap,
-             edgeLog, edgeBias, edgeStandings, injuries, spreadHist, elwayQb1,
+             edgeLog, edgeBias, edgeStandings, edgeLeaderboard, injuries, spreadHist, elwayQb1,
              teamRatings] =
         await Promise.all([
           DB.weekGames(week), DB.weekOdds(week), DB.bestPriceOdds(week), DB.bookOdds(week), DB.elwayOdds(week),
           DB.latestRoster('yahoo'), DB.latestRoster('espn'),
           DB.pickemPicks(week), DB.atsPicks(week),
           DB.refreshRequest(), DB.kv('last_refresh'), DB.hist(), DB.budgetSnapshot(week),
-          DB.edgeRecommendationLog(season, week), DB.edgeBiasAll(), DB.edgeStandings(season),
+          DB.edgeRecommendationLog(season, week), DB.edgeBiasAll(), DB.edgeStandings(season), DB.edgeLeaderboard(),
           DB.injuries(), DB.spreadHistory(week), DB.elwayQb1(),
           DB.teamRatings(),
         ]);
       const ctx = { week, season, games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks,
                     refreshReq, lastRefresh, hist, bSnap,
-                    edgeLog, edgeBias, edgeStandings,
+                    edgeLog, edgeBias, edgeStandings, edgeLeaderboard,
                     injuries, spreadHist, elwayQb1, teamRatings };
       this._ctx = ctx;
       Deadlines.render(ctx);

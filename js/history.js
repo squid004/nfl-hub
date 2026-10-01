@@ -23,6 +23,31 @@ const HIST_MODES = {
   },
 };
 
+// "Chalk is king" reminder for the bottom of the Upset Budget panel: how chalk-heavy this
+// season's front-runner(s) and each week's actual winner(s) have been, from
+// nflhub.sources.edge_core.pool_leaderboard_summary (kv 'edge_pool_leaderboard', rebuilt
+// once/day). Moneyline only -- "dog pick" is an SU concept, not an ATS one.
+function chalkReminderHtml(ctx) {
+  const lb = ctx.edgeLeaderboard;
+  if (!lb) return '';
+  const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
+  const leaders = lb.season_leaders;
+  const leaderLine = leaders
+    ? `This season's front-runner${leaders.names.length > 1 ? 's are' : ' is'} ` +
+      `${esc(leaders.names.join(' / '))} (${leaders.correct}/${leaders.total} correct, ` +
+      `only ${pct(leaders.dog_pct)} of picks on a dog).`
+    : '';
+  const winners = lb.week_winners || [];
+  const winnersLine = winners.length
+    ? `Every week's actual winner so far has picked dogs just ${pct(lb.week_winner_dog_pct)} ` +
+      `of the time on average (` +
+      winners.map(w => `wk${w.week}: ${esc(w.names.join('/'))} at ${pct(w.dog_pct)}`).join(', ') +
+      `).`
+    : '';
+  if (!leaderLine && !winnersLine) return '';
+  return `<p class="muted small" style="margin-top:14px;"><strong>Chalk is king:</strong> ${leaderLine} ${winnersLine}</p>`;
+}
+
 const History = {
   bucketLabel(absSpread) {
     const s = Math.abs(absSpread);
@@ -292,6 +317,7 @@ const History = {
           </tbody></table>
         <p class="tablefoot muted">${footer}</p>
         ${cmp}
+        ${mode === 'ml' ? chalkReminderHtml(ctx) : ''}
       </div>`;
   },
 

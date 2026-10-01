@@ -111,6 +111,16 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return null; }
   },
 
+  // { week_winners: [{week, names, correct, dog_pct}], week_winner_dog_pct,
+  //   season_leaders: {names, correct, total, dog_pct} }, written by nflhub.refresh
+  // (nflhub/sources/edge_core.py pool_leaderboard_summary) -- the "chalk is king" reminder
+  // at the bottom of the Upset Budget panel. See js/history.js renderBins().
+  async edgeLeaderboard() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'edge_pool_leaderboard').maybeSingle();
+    if (!data) return null;
+    try { return JSON.parse(data.value); } catch { return null; }
+  },
+
   // team abbr -> [{player, position, status, detail}], written by nflhub.refresh (ESPN's
   // league-wide injury report). Only ever read here for the QB flag — see pickem.js.
   async injuries() {

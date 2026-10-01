@@ -11,9 +11,10 @@ nflhub/sources/edge_core_vectors.py for verification.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Optional
+from typing import Any, Optional
 
 
 # --- devig (SPEC.md 2.1) -----------------------------------------------------
@@ -218,3 +219,75 @@ def monday_night_tiebreaker(my_estimate: float, crowd_estimate: float) -> float:
     number up, so being closest wins more than being right.
     """
     return my_estimate + (-2 if my_estimate < crowd_estimate else 2)
+
+
+# --- pool leaderboard / "chalk is king" reminder (nfl-hub addition, not in SPEC.md) ----------
+# Ad-hoc analysis (2026-10-01) of this specific pool's weeks 1-3: both season co-leaders and
+# every individual week's winner picked chalk on the large majority of games (85-98% of
+# picks for the season leaders; never more than 5 of 16 picks on a dog for any week's
+# winner), and beat a robot that always picks the favorite on the identical slate by only
+# +1 or +2 games out of 48 -- well within noise. This surfaces that same read live, every
+# refresh, instead of it being a one-off finding that goes stale.
+
+def pool_leaderboard_summary(
+    picks: list[dict[str, Any]], results: dict[tuple[int, str], dict[str, bool]],
+) -> dict[str, Any]:
+    """`picks`: {week, opponent, team_picked} rows, team codes already normalized to this
+    app's own convention. `results`: (week, team_code) -> {"fav": is this team that week's
+    market favorite, "won": did this team win} for every graded game this season -- built by
+    the caller from whatever historical odds/results source it has (see refresh.py), so this
+    stays pure and doesn't need to know where that data comes from.
+
+    "Dog pick" = a pick that was NOT the market favorite. Returns each week's winner(s) (ties
+    included) and the season leader(s), each with how much of their pick history was chalk --
+    the reminder this exists for.
+    """
+    per_week: dict[int, dict[str, dict[str, int]]] = defaultdict(dict)
+    season_totals: dict[str, dict[str, int]] = defaultdict(lambda: {"correct": 0, "total": 0, "dog_picks": 0})
+
+    for p in picks:
+        week, opp, team = p["week"], p["opponent"], p["team_picked"]
+        r = results.get((week, team))
+        if r is None:
+            continue
+        stat = per_week[week].setdefault(opp, {"correct": 0, "total": 0, "dog_picks": 0})
+        for d in (stat, season_totals[opp]):
+            d["total"] += 1
+            if r["won"]:
+                d["correct"] += 1
+            if not r["fav"]:
+                d["dog_picks"] += 1
+
+    week_winners: list[dict[str, Any]] = []
+    winner_dog_sum = winner_total_sum = 0
+    for week in sorted(per_week):
+        wk = per_week[week]
+        if not wk:
+            continue
+        best = max(s["correct"] for s in wk.values())
+        names = sorted(opp for opp, s in wk.items() if s["correct"] == best)
+        dogs = sum(wk[n]["dog_picks"] for n in names)
+        tot = sum(wk[n]["total"] for n in names)
+        week_winners.append({
+            "week": week, "names": names, "correct": best,
+            "dog_pct": round(dogs / tot, 4) if tot else None,
+        })
+        winner_dog_sum += dogs
+        winner_total_sum += tot
+
+    season_leaders = None
+    if season_totals:
+        best = max(s["correct"] for s in season_totals.values())
+        names = sorted(opp for opp, s in season_totals.items() if s["correct"] == best)
+        dogs = sum(season_totals[n]["dog_picks"] for n in names)
+        tot = sum(season_totals[n]["total"] for n in names)
+        season_leaders = {
+            "names": names, "correct": best, "total": tot // len(names),
+            "dog_pct": round(dogs / tot, 4) if tot else None,
+        }
+
+    return {
+        "week_winners": week_winners,
+        "week_winner_dog_pct": round(winner_dog_sum / winner_total_sum, 4) if winner_total_sum else None,
+        "season_leaders": season_leaders,
+    }
