@@ -341,7 +341,7 @@ const Pickem = {
           </div>
           <div class="stat-block">
             <div class="stat-label">History</div>
-            <div>${histCell ? `Fav SU ${pct(histCell.su)}` : '<span class="muted">—</span>'}</div>
+            <div>${histCell ? `${favTeam} ${pct(histCell.su)}` : '<span class="muted">—</span>'}</div>
             <div class="muted">${bucketLabel ? `${bucketLabel} bucket` : ' '}</div>
           </div>
           <div class="stat-block">
