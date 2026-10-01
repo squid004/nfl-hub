@@ -21,8 +21,11 @@
 <nav id="tabs" role="tablist" aria-label="Sections">
   <button data-tab="pickem" role="tab">Moneyline Pick'em</button>
   <button data-tab="ats" role="tab">Against the Spread</button>
-  <button data-tab="parlays" role="tab">Parlays</button>
   <button data-tab="power" role="tab">Power Rankings</button>
+  <!-- Parlays tab hidden 2026-10-01 -- actionnetwork.py's best-price scrape is blocked by
+       Action Network's bot mitigation (see that module's docstring), so "Shop the line" has
+       nothing to show and the tab isn't providing value right now. The sections/data
+       pipeline are untouched; re-add this button + 'parlays' to Tabs.NAMES to bring it back. -->
 </nav>
 
 <main>
