@@ -25,10 +25,16 @@ fit quality. Notably, turnovers_def_forced optimizes to exactly 0.0 -- once the 
 are known, takeaways forced adds no information, it's not just weak on its own. Computed once
 offline, not refit daily -- see POWER_WEIGHTS/ORIENTATION below.
 
-Display: every UI surface shows `normalized_ratings()`/the `*_0_100` fields (min-max rescaled
-to 0-100 per stat across the current league, 100 = best in the NFL this season) rather than
-raw signed EPA -- see `_normalize_0_100`. Purely cosmetic: the model itself still fits on the
-raw/z-scored values above, this never feeds back into any calculation.
+Display: every UI surface shows `display_ratings()`/the `*_display` fields rather than raw
+signed EPA. The 4 EPA metrics (and the composite power score) are rescaled to a fixed 0-100
+scale anchored to the best/worst value EVER recorded across the full 2007-present dataset --
+not this season's 32 teams -- specifically so a mediocre season's "best" team doesn't get
+displayed as a misleadingly inflated 100 (see compute_ratings' historical_bounds, computed
+once from a full point-in-time replay of the whole dataset). Points/turnovers are left as
+their raw per-game average, not rescaled at all -- they're already a directly countable,
+intuitive unit, so normalizing them would only obscure them. All of this is cosmetic: the
+model itself still fits on the raw/z-scored values above, this never feeds back into any
+calculation.
 
 Completed seasons' play-by-play is pre-aggregated once and committed as small parquet files
 in nflhub/data/team_ratings/ (~390KB total for 2007-2025) so this doesn't re-download and
@@ -66,6 +72,16 @@ RATING_METRICS = (
     "rush_off_epa", "pass_off_epa", "rush_def_epa_allowed", "pass_def_epa_allowed",
     "points_off", "points_def_allowed", "turnovers_off", "turnovers_def_forced",
 )
+# EPA metrics get a 0-100 display scale anchored to the best/worst ever recorded across the
+# whole dataset (see compute_ratings' historical_bounds). Points/turnovers are "definitively
+# countable" -- displayed as their own raw per-game average, no rescaling at all.
+EPA_DISPLAY_METRICS = ("rush_off_epa", "pass_off_epa", "rush_def_epa_allowed", "pass_def_epa_allowed")
+COUNTABLE_METRICS = ("points_off", "points_def_allowed", "turnovers_off", "turnovers_def_forced")
+# How many teams need a complete rating before a point-in-time snapshot counts toward the
+# historical composite-score bounds -- high enough to skip the first week or two of a new
+# season (when only a handful of teams have played their first game and z-scores against a
+# tiny pool are noisy), without requiring literally every team (bye weeks, mid-week ties).
+MIN_TEAMS_FOR_HISTORICAL_SNAPSHOT = 28
 PBP_COLS = ["game_id", "season", "week", "season_type", "posteam", "defteam", "play_type",
             "epa", "wp", "interception", "fumble_lost"]
 MISMATCH_Z_THRESHOLD = 1.5  # combined (offense z + opposing defense-allowed z) needed to flag a callout
@@ -249,9 +265,14 @@ class _RunningMean:
         self.mean += (x - self.mean) / self.n
 
 
-def compute_ratings(played_games: list[dict], current_season: int) -> dict[str, dict[str, float]]:
+def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict[str, dict[str, float]], dict[str, tuple[float, float]]]:
     """`played_games`: nflverse games.csv REG rows with a result, any seasons needed.
-    Returns {team: {metric: rating}} as of the most recent game passed in."""
+    Returns ({team: {metric: rating}} as of the most recent game passed in, historical_bounds)
+    where historical_bounds is {metric: (min, max)} (oriented, higher=better) for the 4 EPA
+    metrics plus "composite" for the power-ranking score -- each the most extreme value ever
+    observed at any point in the replayed history, used to anchor the fixed 0-100 display
+    scale (see module docstring) instead of a per-season min/max that would make a mediocre
+    season's best team look inflated."""
     by_game: dict[str, dict[str, dict]] = defaultdict(dict)
     seasons_needed = sorted({int(g["season"]) for g in played_games})
     for season in seasons_needed:
@@ -270,6 +291,8 @@ def compute_ratings(played_games: list[dict], current_season: int) -> dict[str, 
 
     rating: dict[str, dict] = defaultdict(lambda: {m: None for m in RATING_METRICS})
     last_season: dict[str, int] = {}
+    epa_bounds = {m: [float("inf"), float("-inf")] for m in EPA_DISPLAY_METRICS}
+    composite_bounds = [float("inf"), float("-inf")]
 
     for gid, teams in sorted(by_game.items()):
         g = games_by_id.get(gid)
@@ -312,11 +335,34 @@ def compute_ratings(played_games: list[dict], current_season: int) -> dict[str, 
             for m in RATING_METRICS:
                 prev = rating[team][m]
                 rating[team][m] = raw[m] if prev is None else (1 - EWMA_ALPHA) * prev + EWMA_ALPHA * raw[m]
+                if m in epa_bounds:
+                    oriented = ORIENTATION[m] * rating[team][m]
+                    b = epa_bounds[m]
+                    if oriented < b[0]: b[0] = oriented
+                    if oriented > b[1]: b[1] = oriented
 
-    return {
+        # Point-in-time snapshot of the whole league right after this game, to track the most
+        # extreme composite power score ever seen -- same z-score + weight formula as
+        # power_rankings(), just replayed at every step of history instead of only today.
+        complete = {t: r for t, r in rating.items() if all(r[m] is not None for m in RATING_METRICS)}
+        if len(complete) >= MIN_TEAMS_FOR_HISTORICAL_SNAPSHOT:
+            z_snap: dict[str, dict[str, float]] = defaultdict(dict)
+            for m in RATING_METRICS:
+                zm, _ = _rank_and_z({t: r[m] for t, r in complete.items()})
+                for t, v in zm.items():
+                    z_snap[t][m] = v
+            for t, zt in z_snap.items():
+                score = sum(POWER_WEIGHTS[m] * ORIENTATION[m] * zt.get(m, 0.0) for m in RATING_METRICS)
+                if score < composite_bounds[0]: composite_bounds[0] = score
+                if score > composite_bounds[1]: composite_bounds[1] = score
+
+    ratings_out = {
         team: {m: (round(v, 4) if v is not None else None) for m, v in r.items()}
         for team, r in rating.items()
     }
+    historical_bounds = {m: tuple(b) for m, b in epa_bounds.items()}
+    historical_bounds["composite"] = tuple(composite_bounds)
+    return ratings_out, historical_bounds
 
 
 def _ordinal(n: int) -> str:
@@ -338,34 +384,37 @@ def _rank_and_z(values: dict[str, float]) -> tuple[dict[str, float], dict[str, i
     return z, rank
 
 
-def _normalize_0_100(values: dict[str, float], orientation: int = 1) -> dict[str, float]:
-    """Min-max scale raw values to [0, 100] after applying `orientation`, so the result is
-    always "higher = better" and always positive -- e.g. a good (low) defense-allowed EPA and
-    a good (high) offense EPA both read as a high number, with no sign to interpret. Display
-    only: the underlying model keeps fitting on z-scores/raw EPA, this never feeds back in."""
-    oriented = {t: orientation * v for t, v in values.items()}
-    lo, hi = min(oriented.values()), max(oriented.values())
+def _normalize_fixed(value: float, lo: float, hi: float) -> float:
+    """Scale an already-oriented (higher=better) value to [0, 100] against FIXED bounds --
+    not the current team pool's own min/max, so a mediocre season's best team doesn't show up
+    as a misleadingly inflated 100. Clipped defensively, though in practice `value` is always
+    one of the snapshots `lo`/`hi` were themselves computed from (see compute_ratings), so it
+    should never actually fall outside [lo, hi]."""
     if hi == lo:
-        return {t: 50.0 for t in oriented}
-    return {t: round(100 * (v - lo) / (hi - lo), 1) for t, v in oriented.items()}
+        return 50.0
+    return round(max(0.0, min(100.0, 100 * (value - lo) / (hi - lo))), 1)
 
 
-def normalized_ratings(ratings: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
-    """Each of the 8 stats, per team, rescaled to [0, 100] across the current league (100 =
-    best in the NFL this season at that stat, 0 = worst) -- the display-friendly counterpart
-    to the raw EPA/points/turnover values `ratings` holds, for anywhere those get shown."""
+def display_ratings(ratings: dict[str, dict[str, float]], historical_bounds: dict[str, tuple[float, float]]) -> dict[str, dict[str, float]]:
+    """Display-ready version of `ratings`: the 4 EPA metrics rescaled to a fixed 0-100 scale
+    anchored to the best/worst ever recorded across the whole dataset (`historical_bounds`,
+    from compute_ratings); points/turnovers left as their own raw per-game average, since
+    they're already a directly countable, intuitive unit that normalizing would only obscure."""
     out: dict[str, dict[str, float]] = defaultdict(dict)
-    for m in RATING_METRICS:
-        vals = {t: r[m] for t, r in ratings.items() if r.get(m) is not None}
-        if not vals:
-            continue
-        scaled = _normalize_0_100(vals, ORIENTATION[m])
-        for t, v in scaled.items():
-            out[t][m] = v
+    for t, r in ratings.items():
+        for m in RATING_METRICS:
+            v = r.get(m)
+            if v is None:
+                continue
+            if m in EPA_DISPLAY_METRICS:
+                lo, hi = historical_bounds[m]
+                out[t][m] = _normalize_fixed(ORIENTATION[m] * v, lo, hi)
+            else:
+                out[t][m] = round(v, 2)
     return out
 
 
-def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict]) -> dict[str, dict]:
+def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict], historical_bounds: dict[str, tuple[float, float]]) -> dict[str, dict]:
     """For each upcoming game (already normalized home/away team codes), rule-based sentences
     for any offense-vs-opposing-defense pairing whose combined z-score clears
     MISMATCH_Z_THRESHOLD -- a real strength meeting a real weakness, not just noise. Keyed
@@ -381,7 +430,7 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict])
         for t in vals:
             z.setdefault(t, {})[m] = zm[t]
             rank.setdefault(t, {})[m] = rankm[t]
-    ratings_0_100 = normalized_ratings(ratings)
+    ratings_display = display_ratings(ratings, historical_bounds)
 
     out: dict[str, dict] = {}
     for g in upcoming:
@@ -397,7 +446,7 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict])
                 combined = z[off_team][off_m] + z[def_team][def_m]
                 if abs(combined) < MISMATCH_Z_THRESHOLD:
                     continue
-                off_disp, def_disp = ratings_0_100[off_team][off_m], ratings_0_100[def_team][def_m]
+                off_disp, def_disp = ratings_display[off_team][off_m], ratings_display[def_team][def_m]
                 off_rank, def_rank = rank[off_team][off_m], rank[def_team][def_m]
                 favors_offense = combined > 0
                 # each side's descriptor reflects that team's OWN rank (good/bad), independent
@@ -429,7 +478,7 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict])
         out[f"{away}@{home}"] = {
             "home": home, "away": away,
             "home_ratings": ratings[home], "away_ratings": ratings[away],
-            "home_ratings_0_100": ratings_0_100.get(home), "away_ratings_0_100": ratings_0_100.get(away),
+            "home_ratings_display": ratings_display.get(home), "away_ratings_display": ratings_display.get(away),
             "callouts": callouts,
             "predicted_home_points": predict_points(ratings[home], ratings[away], weather),
             "predicted_away_points": predict_points(ratings[away], ratings[home], weather),
@@ -438,15 +487,18 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict])
     return out
 
 
-def power_rankings(ratings: dict[str, dict[str, float]]) -> dict[str, dict]:
+def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict[str, tuple[float, float]]) -> dict[str, dict]:
     """Composite score per team: sum of POWER_WEIGHTS[m] * ORIENTATION[m] * z-score(team, m)
     across all 8 stats, ranked 1 = best. Each z-score is cross-sectional (against the other 31
-    current teams), so this reflects current relative standing, not an absolute scale.
+    current teams), so the underlying fit still reflects current relative standing, not an
+    absolute scale -- only the DISPLAY representation below is anchored to history instead.
 
     `score`/`ratings` keep the raw signed values the model is actually fit on (z-score-weighted
-    sum, raw EPA/points/turnovers); `score_0_100`/`ratings_0_100` are the same information
-    min-max rescaled to a positive 0-100 range (100 = best in the NFL this season) purely for
-    display, so nothing with a +/- EPA sign to interpret ever has to reach the UI."""
+    sum, raw EPA/points/turnovers); `score_display`/`ratings_display` are the display-friendly
+    version: the composite score and the 4 EPA stats rescaled to [0, 100] against the most
+    extreme value ever seen across the full dataset (`historical_bounds`), so a mediocre
+    season's best team doesn't read as an inflated 100; points/turnovers are left as their own
+    raw per-game average (see display_ratings)."""
     if len(ratings) < 4:
         return {}
     z: dict[str, dict[str, float]] = defaultdict(dict)
@@ -457,13 +509,14 @@ def power_rankings(ratings: dict[str, dict[str, float]]) -> dict[str, dict]:
             z[t][m] = v
 
     scores = {t: sum(POWER_WEIGHTS[m] * ORIENTATION[m] * zt.get(m, 0.0) for m in RATING_METRICS) for t, zt in z.items()}
-    scores_0_100 = _normalize_0_100(scores, orientation=1)  # scores are already oriented higher=better
-    ratings_0_100 = normalized_ratings(ratings)
+    composite_lo, composite_hi = historical_bounds["composite"]
+    scores_display = {t: _normalize_fixed(s, composite_lo, composite_hi) for t, s in scores.items()}
+    ratings_display = display_ratings(ratings, historical_bounds)
     order = sorted(scores, key=lambda t: -scores[t])
     return {
         t: {
-            "rank": i + 1, "score": round(scores[t], 4), "score_0_100": scores_0_100[t],
-            "ratings": ratings[t], "ratings_0_100": ratings_0_100.get(t, {}),
+            "rank": i + 1, "score": round(scores[t], 4), "score_display": scores_display[t],
+            "ratings": ratings[t], "ratings_display": ratings_display.get(t, {}),
         }
         for i, t in enumerate(order)
     }
@@ -484,7 +537,7 @@ def refresh(store, force: bool = False) -> str:
     all_rows = [r for r in csv.DictReader(io.StringIO(resp.text)) if r["game_type"] == "REG"]
     played = [r for r in all_rows if r.get("result") not in ("", "NA", None) and int(r["season"]) >= FIRST_SEASON]
 
-    raw_ratings = compute_ratings(played, current_season)
+    raw_ratings, historical_bounds = compute_ratings(played, current_season)
 
     # nflverse spells some current teams differently than nfl-hub's own canonical codes
     # (e.g. "LA" for the Rams, "WAS" for Washington) -- normalize so the frontend can look
@@ -507,8 +560,8 @@ def refresh(store, force: bool = False) -> str:
                               "gameday": r.get("gameday")})
         except UnknownTeamError:
             continue
-    matchups = matchup_callouts(ratings, upcoming)
-    power = power_rankings(ratings)
+    matchups = matchup_callouts(ratings, upcoming, historical_bounds)
+    power = power_rankings(ratings, historical_bounds)
 
     store.kv_set("team_ratings", json.dumps({
         "generated": datetime.now(timezone.utc).isoformat(),

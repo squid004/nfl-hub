@@ -8,9 +8,12 @@
 // -- see the Moneyline Pick'em matchup blocks and research/ for the backtesting showing this
 // doesn't beat the market spread.
 //
-// Every stat column renders the 0-100 normalized value (*_0_100 fields, 100 = best in the NFL
-// this season), not raw signed EPA/points/turnovers -- same scale for every column, nothing
-// with a +/- sign to interpret. The underlying fit still runs on the raw values server-side.
+// Power Score + the 4 EPA columns render a fixed 0-100 scale (*_display fields, 100 = the best
+// value EVER recorded across the full 2007-present dataset, not just this season's 32 teams --
+// see team_ratings.py compute_ratings' historical_bounds), so a weak season's "best" team
+// doesn't read as an inflated 100. Points/turnovers are directly countable already, so those
+// columns show the plain per-game average for the window being evaluated, not a 0-100 score.
+const EPA_0_100_COLS = new Set(['score', 'rush_off_epa', 'pass_off_epa', 'rush_def_epa_allowed', 'pass_def_epa_allowed']);
 const POWER_COLS = [
   ['rank', 'Rank'],
   ['team', 'Team'],
@@ -19,16 +22,18 @@ const POWER_COLS = [
   ['pass_off_epa', 'Pass Offense'],
   ['rush_def_epa_allowed', 'Rush Defense'],
   ['pass_def_epa_allowed', 'Pass Defense'],
-  ['points_off', 'Points Scored'],
-  ['points_def_allowed', 'Points Allowed'],
-  ['turnovers_off', 'Turnover Avoidance'],
-  ['turnovers_def_forced', 'Takeaways Forced'],
+  ['points_off', 'Points/G'],
+  ['points_def_allowed', 'Points Allowed/G'],
+  ['turnovers_off', 'Turnovers/G'],
+  ['turnovers_def_forced', 'Takeaways/G'],
 ];
 
 function fmtPowerVal(key, v) {
   if (v == null) return '—';
   if (key === 'team' || key === 'rank') return v;
-  return v.toFixed(1); // every column is 0-100 normalized now, same scale throughout
+  if (EPA_0_100_COLS.has(key)) return v.toFixed(1); // fixed 0-100 scale
+  if (key.startsWith('points')) return v.toFixed(1); // raw per-game average
+  return v.toFixed(2); // turnovers: raw per-game average
 }
 
 const Power = {
@@ -46,7 +51,7 @@ const Power = {
     const teamRatings = ctx.teamRatings || {};
     const pr = teamRatings.power_rankings || {};
     const meta = teamRatings.power_ranking_meta || null;
-    const rows = Object.entries(pr).map(([team, info]) => ({ team, rank: info.rank, score: info.score_0_100, ...info.ratings_0_100 }));
+    const rows = Object.entries(pr).map(([team, info]) => ({ team, rank: info.rank, score: info.score_display, ...info.ratings_display }));
 
     if (!rows.length) {
       el.innerHTML = `<div class="panel"><h2>Power Rankings</h2><p class="muted">No rating data yet.</p></div>`;
@@ -80,8 +85,10 @@ const Power = {
       <div class="panel">
         <h2>Power Rankings</h2>
         <p class="muted small">${meta ? esc(meta.method) : 'Composite of 8 stats, garbage time excluded.'}
-          Every column is shown on a 0-100 scale (100 = best in the NFL this season), including
-          defensive/turnover stats, so higher is always better everywhere in the table.
+          Power Score and the 4 EPA columns are shown on a 0-100 scale anchored to the best/worst
+          ever recorded across the full 2007-present dataset (not just this season's 32 teams),
+          so higher is always better and a weak season's best team won't look inflated. Points
+          and turnover columns show the actual per-game average for the window evaluated.
           Click a column header to sort.</p>
         ${meta ? `<details class="power-methodology">
           <summary class="muted small">Weights used (click to expand)</summary>

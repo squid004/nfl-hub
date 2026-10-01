@@ -117,10 +117,10 @@ function matchupFor(teamRatings, home, away) {
 }
 
 const RATING_COLS = [
-  ['rush_off_epa', 'R-Off', 'Rush offense, 0-100 (100 = best in the NFL this season, garbage time excluded)'],
-  ['pass_off_epa', 'P-Off', 'Pass offense, 0-100 (100 = best in the NFL this season, garbage time excluded)'],
-  ['rush_def_epa_allowed', 'R-Def', 'Rush defense, 0-100 (100 = best/stingiest in the NFL this season)'],
-  ['pass_def_epa_allowed', 'P-Def', 'Pass defense, 0-100 (100 = best/stingiest in the NFL this season)'],
+  ['rush_off_epa', 'R-Off', 'Rush offense, 0-100 (100 = best ever recorded in the 2007-present dataset, garbage time excluded)'],
+  ['pass_off_epa', 'P-Off', 'Pass offense, 0-100 (100 = best ever recorded in the 2007-present dataset, garbage time excluded)'],
+  ['rush_def_epa_allowed', 'R-Def', 'Rush defense, 0-100 (100 = best/stingiest ever recorded in the 2007-present dataset)'],
+  ['pass_def_epa_allowed', 'P-Def', 'Pass defense, 0-100 (100 = best/stingiest ever recorded in the 2007-present dataset)'],
 ];
 
 function matchupTableHtml(matchup, home, away) {
@@ -137,7 +137,7 @@ function matchupTableHtml(matchup, home, away) {
     : '';
   return `<table class="mini-ratings">
     <thead><tr><th></th>${RATING_COLS.map(([, label, title]) => `<th class="num" title="${title}">${label}</th>`).join('')}</tr></thead>
-    <tbody>${row(away, matchup.away_ratings_0_100)}${row(home, matchup.home_ratings_0_100)}</tbody>
+    <tbody>${row(away, matchup.away_ratings_display)}${row(home, matchup.home_ratings_display)}</tbody>
   </table>${proj}`;
 }
 
