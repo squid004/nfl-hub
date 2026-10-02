@@ -329,6 +329,10 @@ const Pickem = {
         ? (g.home_score + g.away_score > o.total ? `Over ${o.total}`
            : g.home_score + g.away_score < o.total ? `Under ${o.total}` : `Push ${o.total}`)
         : `O/U ${o.total ?? '—'}`;
+      // Once final, the line/implied-% stop mattering -- show the actual final score instead,
+      // winner bolded green.
+      const scorePart = (team, score) => result === team
+        ? `<span class="result-good">${team} ${score}</span>` : `${team} ${score}`;
 
       const bucketRank = bucketRanks[g.game_id] || null;
       // Prefer the bucket the ranking itself used (computeBudget prefers the cross-book
@@ -381,9 +385,12 @@ const Pickem = {
         <div class="game-card-body">
           <div class="stat-block">
             <div class="stat-label">Market</div>
-            <div>${favLabel} &middot; ${ouLabel}</div>
-            <div class="muted">${pct(o.implied_away)} / ${pct(o.implied_home)} &middot; ${o.book ?? '—'}</div>
-            ${move ? `<div class="muted small">opened ${signed(move.open)}</div>` : ''}
+            ${postGame
+              ? `<div>${scorePart(g.away, g.away_score)} - ${scorePart(g.home, g.home_score)}</div>
+                 <div class="muted">${ouLabel}</div>`
+              : `<div>${favLabel} &middot; ${ouLabel}</div>
+                 <div class="muted">${pct(o.implied_away)} / ${pct(o.implied_home)} &middot; ${o.book ?? '—'}</div>
+                 ${move ? `<div class="muted small">opened ${signed(move.open)}</div>` : ''}`}
           </div>
           <div class="stat-block">
             <div class="stat-label">ELWAY</div>
