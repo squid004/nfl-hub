@@ -113,6 +113,21 @@ function elwayStaleQb(team, elwayQb1, injuries) {
   return { assumedName: assumed.name, status: flagged.status, detail: flagged.detail };
 }
 
+// Fallback for when the live odds feed has gone blank for a game that's underway or over
+// (ESPN's scoreboard odds field frequently does this once a game starts) -- refresh.py now
+// freezes the odds table's spread/total/moneyline at kickoff going forward (stops upserting
+// once a game leaves "pre"), but that can't recover a game whose live row already got
+// overwritten with nulls before that fix existed. For the spread specifically, we don't need
+// an outside source to recover it: spread_history already has our own timestamped snapshots,
+// so the latest one at or before kickoff IS the frozen pre-game line.
+function frozenSpread(rawSpread, rows, kickoff) {
+  if (rawSpread != null) return rawSpread;
+  if (!rows || !rows.length) return null;
+  const ko = Date.parse(kickoff);
+  const before = rows.filter(r => Date.parse(r.captured_at) <= ko);
+  return (before.length ? before[before.length - 1] : rows[0]).spread_home;
+}
+
 // Net spread movement this week from spread_history (ascending list of {spread_home,
 // captured_at}), home-spread signed. "steam" = the line has moved >=1.5 pts net in one
 // direction since the week's first snapshot — a sharp-money signal distinct from ELWAY.
@@ -281,10 +296,11 @@ const Pickem = {
       const elRaw = elway[g.game_id];
       const el = elRaw ? { ...elRaw, _home: g.home, _away: g.away } : null;
       const elwayFav = elwayFavLabel(el, g.home, g.away);
-      const hasLine = o.spread != null;
-      const favTeam = !hasLine ? null : (o.spread <= 0 ? g.home : g.away);
+      const effSpread = frozenSpread(o.spread, spreadHist[g.game_id], g.kickoff);
+      const hasLine = effSpread != null;
+      const favTeam = !hasLine ? null : (effSpread <= 0 ? g.home : g.away);
       const dogTeam = favTeam == null ? null : (favTeam === g.home ? g.away : g.home);
-      const favLabel = !hasLine ? '—' : (o.spread === 0 ? 'Pick’em' : `${favTeam} ${o.spread}`);
+      const favLabel = !hasLine ? '—' : (effSpread === 0 ? 'Pick’em' : `${favTeam} ${effSpread}`);
       const mine = (picks[g.game_id] || {}).pick;
       const mineIsDog = mine && dogTeam && mine === dogTeam;
 
@@ -297,12 +313,28 @@ const Pickem = {
       const stateChip = g.state === 'post' ? `<span class="muted">(${g.away_score}-${g.home_score} F)</span>`
         : g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
 
-      const histCell = hist && hasLine ? History.lookup(hist, Math.abs(o.spread), o.spread <= 0) : null;
+      const histCell = hist && hasLine ? History.lookup(hist, Math.abs(effSpread), effSpread <= 0) : null;
+
+      // Grading, once the game is final (null = no verdict -- not final yet, or nothing to
+      // compare). A tie grades neither side right nor wrong, same as the existing win-chip
+      // logic (wchip) already treats it.
+      const postGame = g.state === 'post';
+      const elwayHit = postGame && elwayFav && result !== 'TIE' ? elwayFav.team === result : null;
+      const histHit = postGame && histCell && favTeam && result !== 'TIE' ? favTeam === result : null;
+      const pickHit = postGame && mine && result !== 'TIE' ? mine === result : null;
+      const resultClass = v => v === true ? 'result-good' : v === false ? 'result-bad' : '';
+      // Once final, "O/U 44.5" (which side of the number nobody picked yet) stops being the
+      // useful question -- show which side actually hit instead.
+      const ouLabel = postGame && o.total != null
+        ? (g.home_score + g.away_score > o.total ? `Over ${o.total}`
+           : g.home_score + g.away_score < o.total ? `Under ${o.total}` : `Push ${o.total}`)
+        : `O/U ${o.total ?? '—'}`;
+
       const bucketRank = bucketRanks[g.game_id] || null;
       // Prefer the bucket the ranking itself used (computeBudget prefers the cross-book
       // average spread when available) over recomputing from o.spread alone — otherwise
       // the badge could name a different bucket than the rank next to it was computed in.
-      const bucketLabel = bucketRank ? bucketRank.lab : (hasLine ? History.bucketLabel(Math.abs(o.spread)) : null);
+      const bucketLabel = bucketRank ? bucketRank.lab : (hasLine ? History.bucketLabel(Math.abs(effSpread)) : null);
       const edgeRec = edgeLog[g.game_id];
       const hasEdge = edgeRec && edgeRec.recommendation && edgeRec.recommendation !== 'NO_DATA';
       const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
@@ -318,11 +350,11 @@ const Pickem = {
       };
 
       const btn = team => `<button data-act="${M.act}" data-week="${week}" data-game="${g.game_id}"
-        data-team="${team}" data-spread="${hasLine ? o.spread : ''}"
+        data-team="${team}" data-spread="${hasLine ? effSpread : ''}"
         class="${mine === team ? 'primary' : ''}">${team}</button>`;
 
       const narrative = hasLine
-        ? buildNarrative({ favTeam, dogTeam, marketMargin: Math.abs(o.spread), el, histCell,
+        ? buildNarrative({ favTeam, dogTeam, marketMargin: Math.abs(effSpread), el, histCell,
                            bucketLabel, bucketRank, edgeRec: hasEdge ? edgeRec : null,
                            matchupCallouts: matchup ? matchup.callouts : null })
         : 'No market line yet for this game.';
@@ -334,7 +366,7 @@ const Pickem = {
              ${edgeLabel}${edgeRec.recommendation === 'FADE' ? ' ' + edgeRec.underdog_team : ''}</span>`
         : '<span class="muted">—</span>';
 
-      return `<div class="game-card">
+      return `<div class="game-card${pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
           <span class="matchup">${rankPrefix(g.away)}${teamSpan(g.away)}${wchip(g.away)}${qbChip(g.away, injuries, elwayQb1)} @ ${rankPrefix(g.home)}${teamSpan(g.home)}${wchip(g.home)}${qbChip(g.home, injuries, elwayQb1)}</span>
@@ -349,18 +381,18 @@ const Pickem = {
         <div class="game-card-body">
           <div class="stat-block">
             <div class="stat-label">Market</div>
-            <div>${favLabel} &middot; O/U ${o.total ?? '—'}</div>
+            <div>${favLabel} &middot; ${ouLabel}</div>
             <div class="muted">${pct(o.implied_away)} / ${pct(o.implied_home)} &middot; ${o.book ?? '—'}</div>
             ${move ? `<div class="muted small">opened ${signed(move.open)}</div>` : ''}
           </div>
           <div class="stat-block">
             <div class="stat-label">ELWAY</div>
-            <div>${elwayFav ? `${elwayFav.team} ${pct(elwayFav.pct)}` : '<span class="muted">—</span>'}</div>
+            <div class="${resultClass(elwayHit)}">${elwayFav ? `${elwayFav.team} ${pct(elwayFav.pct)}` : '<span class="muted">—</span>'}</div>
             <div class="muted">${el && el.spread_home != null ? `implied ${signed(el.spread_home)}` : ' '}</div>
           </div>
           <div class="stat-block">
             <div class="stat-label">History</div>
-            <div>${histCell ? `${favTeam} ${pct(histCell.su)}` : '<span class="muted">—</span>'}</div>
+            <div class="${resultClass(histHit)}">${histCell ? `${favTeam} ${pct(histCell.su)}` : '<span class="muted">—</span>'}</div>
             <div class="muted">${bucketLabel ? `${bucketLabel} bucket` : ' '}</div>
           </div>
           <div class="stat-block">
@@ -415,7 +447,13 @@ const Pickem = {
             for outdoor stadiums within ~16 days out) is bad enough to matter for scoring —
             &ge;20mph wind, &ge;10mm precip, any snow, or sub-20&deg;F highs. Milder forecasts
             don't get a chip, but still silently adjust the projected score (and say so) in
-            each card's "Details" section, where the full forecast always shows when available.</p>
+            each card's "Details" section, where the full forecast always shows when available.
+            Once a game is final, the ELWAY/History numbers turn <span class="result-good">green</span>
+            if the side they favored actually won or <span class="result-bad">red</span> if it
+            didn't, the whole card gets a light green/red tint if your own pick hit or missed,
+            and O/U swaps to the actual Over/Under result. The market line itself is frozen at
+            whatever it was just before kickoff -- it won't keep changing once the game starts
+            just because the live odds feed does.</p>
         </details>
       </div>`;
   },
@@ -434,26 +472,27 @@ const Pickem = {
       const el = elway[g.game_id] || {};
       const move = lineMovement(spreadHist[g.game_id]);
       const staleQb = elwayStaleQb(g.home, elwayQb1, injuries) || elwayStaleQb(g.away, elwayQb1, injuries);
-      const hasLine = o.spread != null;
-      const favTeam = !hasLine ? null : (o.spread <= 0 ? g.home : g.away);
+      const effSpread = frozenSpread(o.spread, spreadHist[g.game_id], g.kickoff);
+      const hasLine = effSpread != null;
+      const favTeam = !hasLine ? null : (effSpread <= 0 ? g.home : g.away);
       const dogTeam = favTeam == null ? null : (favTeam === g.home ? g.away : g.home);
-      const lineFor = t => !hasLine ? '' : (o.spread === 0 ? ' PK'
-        : (' ' + signed(t === g.home ? o.spread : -o.spread)));
-      const favLabel = !hasLine ? '—' : (o.spread === 0 ? 'PK' : `${favTeam} ${o.spread}`);
+      const lineFor = t => !hasLine ? '' : (effSpread === 0 ? ' PK'
+        : (' ' + signed(t === g.home ? effSpread : -effSpread)));
+      const favLabel = !hasLine ? '—' : (effSpread === 0 ? 'PK' : `${favTeam} ${effSpread}`);
       const mine = (picks[g.game_id] || {}).pick;
       const mineIsDog = mine && dogTeam && mine === dogTeam;
 
       let result = null;
       if (g.state === 'post' && hasLine) {
-        const favMargin = (o.spread <= 0 ? 1 : -1) * (g.home_score - g.away_score);
-        const edge = favMargin - Math.abs(o.spread);
+        const favMargin = (effSpread <= 0 ? 1 : -1) * (g.home_score - g.away_score);
+        const edge = favMargin - Math.abs(effSpread);
         result = Math.abs(edge) < 1e-9 ? 'PUSH' : (edge > 0 ? favTeam : dogTeam);
       }
       const wchip = t => result === t ? ` <span class="chip good">${M.winChip}</span>` : '';
 
       let atsCell = '<td class="num muted">—</td>';
       if (hist && hasLine) {
-        const h = History.lookup(hist, Math.abs(o.spread), o.spread <= 0);
+        const h = History.lookup(hist, Math.abs(effSpread), effSpread <= 0);
         if (h) {
           const atW = h.ats != null && h.ats < 0.48 ? ' warn' : '';
           atsCell = `<td class="num${atW}" title="${favTeam} covers, n=${h.n}">${h.ats != null ? Math.round(h.ats * 100) + '%' : '—'}</td>`;
@@ -461,7 +500,7 @@ const Pickem = {
       }
 
       const btn = team => `<button data-act="${M.act}" data-week="${week}" data-game="${g.game_id}"
-        data-team="${team}" data-spread="${hasLine ? o.spread : ''}"
+        data-team="${team}" data-spread="${hasLine ? effSpread : ''}"
         class="${mine === team ? 'primary' : ''}">${team}${lineFor(team)}</button>`;
 
       const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);

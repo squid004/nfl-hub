@@ -75,6 +75,10 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 
 .game-card-grid { display:grid; gap:10px; }
 .game-card { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+.game-card.result-win  { background:color-mix(in srgb, var(--good) 12%, var(--panel2)); }
+.game-card.result-loss { background:color-mix(in srgb, var(--bad) 12%, var(--panel2)); }
+.result-good { color:var(--good); font-weight:600; }
+.result-bad  { color:var(--bad); font-weight:600; }
 .game-card-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
 .game-card-head .matchup { font-weight:600; }
 .line-move-chip { margin-left:auto; }

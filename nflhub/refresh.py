@@ -60,6 +60,13 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         summary["errors"].append(f"schedule: {exc}")
         games = [dict(g) for g in store.games_for_week(week)]
 
+    # Games still in "pre" state -- the market/ELWAY rows for everything else get frozen at
+    # whatever was last written while still pre-kickoff (see steps 2 and 2c below), instead
+    # of continuing to take whatever the live feed happens to return once a game is underway
+    # (in-play odds, or just a blank/stale field) and silently changing what the card shows
+    # after kickoff.
+    pre_game_ids = {g["game_id"] for g in games if g.get("state") == "pre"}
+
     # 2. odds
     wk_odds: dict[str, Any] = {}
     try:
@@ -67,7 +74,8 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
             games, cfg.odds.provider, cfg.odds.api_key, cfg.odds.espn_game_odds
         )
         for o in wk_odds.values():
-            store.upsert_odds(o)
+            if o["game_id"] in pre_game_ids:
+                store.upsert_odds(o)
         summary["odds"] = len(wk_odds)
     except Exception as exc:  # noqa: BLE001
         log.exception("odds refresh failed")
@@ -91,7 +99,7 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     if cfg.elway.sheet_id:
         try:
             elway_rows = elway.fetch_week(cfg.elway.sheet_id, week, games)
-            store.upsert_elway_odds(list(elway_rows.values()))
+            store.upsert_elway_odds([r for r in elway_rows.values() if r["game_id"] in pre_game_ids])
             summary["elway"] = len(elway_rows)
         except Exception as exc:  # noqa: BLE001 - personal sheet; never block the rest
             log.warning("elway sheet pull failed: %s", exc)
