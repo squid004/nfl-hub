@@ -174,12 +174,6 @@ const DB = {
     return data || [];
   },
 
-  async edgeStandings(season) {
-    const { data } = await this._c().from('edge_season_standing').select('*')
-      .eq('season', season).order('week');
-    return data || [];
-  },
-
   // --- writes ---
   async setPickemPick(week, gameId, team, spread) {
     const { error } = await this._c().from('pickem_pick')

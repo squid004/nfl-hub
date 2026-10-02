@@ -369,13 +369,10 @@ const Pickem = {
     }).join('');
 
     const made = Object.keys(picks).length;
-    const lean = hist ? History.summaryLine(ctx, 'ml') : '';
     document.getElementById(M.id).innerHTML = `
       <div class="panel">
         <h2>${M.title} &mdash; ${made}/${games.length} made
           &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
-        ${Edge.budgetBannerHtml(ctx)}
-        ${lean ? `<p class="lean">${esc(lean)}</p>` : ''}
         <div class="game-card-grid">${cards}</div>
         <details>
           <summary class="muted small">Chip legend</summary>
