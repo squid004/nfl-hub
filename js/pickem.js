@@ -150,7 +150,7 @@ function isBadWeather(wx) {
 
 function weatherChip(wx) {
   if (!isBadWeather(wx)) return '';
-  return ` <span class="chip bad" title="${esc(forecastSummary(wx))}">bad weather</span>`;
+  return ` <span class="chip bad" title="${esc(forecastSummary(wx))}">Bad Weather</span>`;
 }
 
 // Full forecast for the card's details layer -- everything fetch_forecast_weather() returns,
@@ -312,10 +312,11 @@ const Pickem = {
                            matchupCallouts: matchup ? matchup.callouts : null })
         : 'No market line yet for this game.';
 
+      const edgeLabel = edgeRec && edgeRec.recommendation === 'NO_PLAY' ? 'NO PLAY' : edgeRec?.recommendation;
       const edgeChip = hasEdge
         ? `<span class="chip ${edgeRec.recommendation === 'FADE' ? 'good' : ''}"
              title="p=${(edgeRec.p_favorite * 100).toFixed(1)}%, f=${edgeRec.f_estimate != null ? Math.round(edgeRec.f_estimate * 100) + '%' : '—'}, leverage=${edgeRec.leverage != null ? edgeRec.leverage.toFixed(3) : '—'}">
-             ${edgeRec.recommendation}${edgeRec.recommendation === 'FADE' ? ' ' + edgeRec.underdog_team : ''}</span>`
+             ${edgeLabel}${edgeRec.recommendation === 'FADE' ? ' ' + edgeRec.underdog_team : ''}</span>`
         : '<span class="muted">—</span>';
 
       return `<div class="game-card">
@@ -395,7 +396,7 @@ const Pickem = {
             <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
             rating that team with a QB1 our live injury feed now shows hurt — a breaking-news
             injury ELWAY's own depth-chart tracking hasn't caught up to yet.
-            <span class="chip bad">bad weather</span> = live forecast at kickoff (only shown
+            <span class="chip bad">Bad Weather</span> = live forecast at kickoff (only shown
             for outdoor stadiums within ~16 days out) is bad enough to matter for scoring —
             &ge;20mph wind, &ge;10mm precip, any snow, or sub-20&deg;F highs. Milder forecasts
             don't get a chip, but still silently adjust the projected score (and say so) in
