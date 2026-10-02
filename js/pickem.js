@@ -309,15 +309,12 @@ const Pickem = {
         result = g.home_score > g.away_score ? g.home
           : g.away_score > g.home_score ? g.away : 'TIE';
       }
-      const wchip = t => result === t ? ` <span class="chip good">${M.winChip}</span>` : '';
-      const stateChip = g.state === 'post' ? `<span class="muted">(${g.away_score}-${g.home_score} F)</span>`
-        : g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
+      const stateChip = g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
 
       const histCell = hist && hasLine ? History.lookup(hist, Math.abs(effSpread), effSpread <= 0) : null;
 
       // Grading, once the game is final (null = no verdict -- not final yet, or nothing to
-      // compare). A tie grades neither side right nor wrong, same as the existing win-chip
-      // logic (wchip) already treats it.
+      // compare). A tie grades neither side right nor wrong.
       const postGame = g.state === 'post';
       const elwayHit = postGame && elwayFav && result !== 'TIE' ? elwayFav.team === result : null;
       const histHit = postGame && histCell && favTeam && result !== 'TIE' ? favTeam === result : null;
@@ -373,7 +370,7 @@ const Pickem = {
       return `<div class="game-card${pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
-          <span class="matchup">${rankPrefix(g.away)}${teamSpan(g.away)}${wchip(g.away)}${qbChip(g.away, injuries, elwayQb1)} @ ${rankPrefix(g.home)}${teamSpan(g.home)}${wchip(g.home)}${qbChip(g.home, injuries, elwayQb1)}</span>
+          <span class="matchup">${rankPrefix(g.away)}${teamSpan(g.away)}${qbChip(g.away, injuries, elwayQb1)} @ ${rankPrefix(g.home)}${teamSpan(g.home)}${qbChip(g.home, injuries, elwayQb1)}</span>
           ${stateChip}
           ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
