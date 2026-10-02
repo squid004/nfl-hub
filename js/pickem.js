@@ -123,6 +123,20 @@ function lineMovement(rows) {
   return { open, cur, deltaHome, steam: Math.abs(deltaHome) >= 1.5 };
 }
 
+// Every nonzero net move gets a chip now, not just ones that clear the steam threshold --
+// green at/above 1.5 pts (the threshold "steam" means something by), plain/colorless below
+// it but still shown, so a small move isn't hidden, just not called out as sharp money.
+// Shows the signed delta itself (home-spread convention: negative = home favored) rather
+// than just a yes/no flag, so the magnitude is visible at a glance.
+function lineMoveChip(move) {
+  if (!move || move.deltaHome === 0) return '';
+  const mag = Math.abs(move.deltaHome);
+  const label = (move.deltaHome > 0 ? '+' : '') + move.deltaHome.toFixed(1);
+  const steam = mag >= 1.5;
+  const title = `Line opened ${signed(move.open)}, now ${signed(move.cur)} — a ${mag.toFixed(1)}-point move this week`;
+  return ` <span class="chip${steam ? ' good' : ''}" title="${title}">${steam ? 'STEAM ' : ''}${label}</span>`;
+}
+
 // EPA ratings + rule-based mismatch callouts for one game, from the team_ratings kv blob
 // (nflhub/sources/team_ratings.py -- rush/pass offense+defense EPA/play, garbage time
 // excluded). Backtesting in that repo's research/ found this does NOT beat the closing
@@ -325,7 +339,7 @@ const Pickem = {
           <span class="matchup">${rankPrefix(g.away)}${teamSpan(g.away)}${wchip(g.away)}${qbChip(g.away, injuries, elwayQb1)} @ ${rankPrefix(g.home)}${teamSpan(g.home)}${wchip(g.home)}${qbChip(g.home, injuries, elwayQb1)}</span>
           ${stateChip}
           ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
-          ${move && move.steam ? `<span class="chip warn" title="Line opened ${signed(move.open)}, now ${signed(move.cur)} — a ${Math.abs(move.deltaHome).toFixed(1)}-point move this week">STEAM</span>` : ''}
+          ${lineMoveChip(move)}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
             `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
           ).join('')}
@@ -388,8 +402,11 @@ const Pickem = {
             we don't know who ELWAY has at QB1), this falls back to the worst OTHER flagged QB
             at Doubtful/Out severity only (a merely "Questionable" QB2/QB3 unrelated to a fine
             starter doesn't get a chip; a real starter change does), so a real starter injury
-            never goes unshown just because ELWAY's own sheet caught up to it. <span class="chip warn">STEAM</span> = the market spread
-            has moved &ge;1.5 points in one direction since this week's first snapshot.
+            never goes unshown just because ELWAY's own sheet caught up to it. Any net line
+            move this week shows as a chip with the signed point move
+            (<span class="chip good">STEAM +1.5</span> at/above a 1.5-point move in one
+            direction since this week's first snapshot, <span class="chip">+0.5</span> plain
+            below that).
             <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
             rating that team with a QB1 our live injury feed now shows hurt — a breaking-news
             injury ELWAY's own depth-chart tracking hasn't caught up to yet.
