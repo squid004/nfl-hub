@@ -6,7 +6,7 @@
 //   'ats' -> favorite ATS cover rate   (dog "cover" = dog beats the number)
 const HIST_MODES = {
   ml: {
-    field: 'su', other: 'ats', picksKey: 'pPicks',
+    field: 'su', picksKey: 'pPicks',
     upsetsId: 'upsets', histId: 'history',
     dogWord: 'upset', dogVerb: 'wins outright', favVerb: 'wins SU',
     budgetTitle: 'Upset budget', budgetCol: 'Upset rate', budgetVerb: 'Take as upsets',
@@ -14,7 +14,7 @@ const HIST_MODES = {
     histBlurb: 'How often the underdog wins outright',
   },
   ats: {
-    field: 'ats', other: 'su', picksKey: 'aPicks',
+    field: 'ats', picksKey: 'aPicks',
     upsetsId: 'atsupsets', histId: 'atshistory',
     dogWord: 'dog cover', dogVerb: 'covers', favVerb: 'covers',
     budgetTitle: 'Dog-cover budget', budgetCol: 'Dog cover rate', budgetVerb: 'Take the dog side',
@@ -158,7 +158,7 @@ const History = {
     const M = HIST_MODES[mode];
     const d = ctx.hist;
     if (!d) return null;
-    const F = M.field, O = M.other;
+    const F = M.field;
     const picks = ctx[M.picksKey] || {};
     const bestPrice = ctx.bestPrice || {};
     const elway = ctx.elway || {};
@@ -204,7 +204,7 @@ const History = {
       });
     }
 
-    let totN = 0, totPrimary = 0, totOther = 0, totPicked = 0, totYourDog = 0;
+    let totN = 0, totPrimary = 0, totPicked = 0, totYourDog = 0;
     const binStats = [];
     const flaggedIds = new Set();
     const rankByGame = {}; // gameId -> { rank, n, taken, lab } — every game in its bucket, not just flagged
@@ -212,7 +212,6 @@ const History = {
       const gs = groups[lab].slice().sort((a, b) => a.rankV - b.rankV); // most live dog (lowest fav prob) first
       const n = gs.length;
       const primary = gs.reduce((s, x) => s + (1 - x.v), 0);
-      const other = gs.reduce((s, x) => s + (x[O] != null ? 1 - x[O] : 0), 0);
       const take = Math.round(primary);
       gs.forEach((x, i) => {
         x.rank = i + 1;            // 1 = most live dog in this bucket, all games ranked
@@ -222,13 +221,13 @@ const History = {
       });
       const pickedN = gs.filter(x => x.picked).length;
       const yourDog = gs.filter(x => x.picked && x.picked === x.dog).length;
-      totN += n; totPrimary += primary; totOther += other;
+      totN += n; totPrimary += primary;
       totPicked += pickedN; totYourDog += yourDog;
       binStats.push({ lab, n, take, pickedN, yourDog });
       return { lab, gs, n, primary, take };
     });
 
-    return { bins, binStats, totN, totPrimary, totOther, totPicked, totYourDog, flaggedIds, rankByGame };
+    return { bins, binStats, totN, totPrimary, totPicked, totYourDog, flaggedIds, rankByGame };
   },
 
   // "budget": this week's games grouped by spread bin, with how many dog picks to make.
@@ -239,7 +238,7 @@ const History = {
     const budget = this.computeBudget(ctx, mode);
     if (!budget) { host.innerHTML = ''; return; }
     const F = M.field;
-    const { bins, binStats, totN, totPrimary, totOther, totPicked, totYourDog } = budget;
+    const { bins, binStats, totN, totPrimary, totPicked, totYourDog } = budget;
 
     const rows = bins.map(({ lab, gs, n, primary, take }) => {
       // Sorted by rankV already (most live first), so rank order = list order.
@@ -288,12 +287,6 @@ const History = {
           <tbody>${crows}</tbody></table>`;
     }
 
-    const footer = mode === 'ml'
-      ? `Spread pool: the same bins historically send about <strong>${Math.round(totOther)}</strong>
-         of ${totN} favorites to <em>not</em> cover.`
-      : `Moneyline: the same bins historically see about <strong>${Math.round(totOther)}</strong>
-         of ${totN} favorites lose outright.`;
-
     const locked = (ctx.bSnap || []).find(r => r.mode === mode && r.bin === 'TOTAL');
     const lockLine = locked
       ? `<p class="muted">Locked for the record: <strong>take ${locked.suggested}</strong>
@@ -315,7 +308,6 @@ const History = {
             <tr class="tot"><td>Total</td><td class="num">${totN}</td>
               <td class="num">${totRate}%</td><td class="num"><strong>${Math.round(totPrimary)}</strong></td><td></td></tr>
           </tbody></table>
-        <p class="tablefoot muted">${footer}</p>
         ${cmp}
         ${mode === 'ml' ? chalkReminderHtml(ctx) : ''}
       </div>`;

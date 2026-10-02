@@ -433,13 +433,11 @@ const Pickem = {
       }
       const wchip = t => result === t ? ` <span class="chip good">${M.winChip}</span>` : '';
 
-      let suCell = '<td class="num muted">—</td>', atsCell = '<td class="num muted">—</td>';
+      let atsCell = '<td class="num muted">—</td>';
       if (hist && hasLine) {
         const h = History.lookup(hist, Math.abs(o.spread), o.spread <= 0);
         if (h) {
-          const suW = h.su != null && h.su < 0.60 ? ' warn' : '';
           const atW = h.ats != null && h.ats < 0.48 ? ' warn' : '';
-          suCell = `<td class="num${suW}" title="${favTeam} straight up, n=${h.n}">${h.su != null ? Math.round(h.su * 100) + '%' : '—'}</td>`;
           atsCell = `<td class="num${atW}" title="${favTeam} covers, n=${h.n}">${h.ats != null ? Math.round(h.ats * 100) + '%' : '—'}</td>`;
         }
       }
@@ -462,9 +460,7 @@ const Pickem = {
         <td class="muted${move && move.steam ? ' warn' : ''}" title="${move ? `opened ${signed(move.open)}, now ${signed(move.cur)}` : ''}">${favLabel}</td>
         ${elwaySpreadCell}
         <td class="muted">${o.total ?? '—'}</td>
-        <td class="num muted">${pct(o.implied_away)}</td>
-        <td class="num muted">${pct(o.implied_home)}</td>
-        ${suCell}${atsCell}
+        ${atsCell}
         <td>${mine ? `<strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">—</span>'}</td>
         <td class="btns">${btn(g.away)} ${btn(g.home)}</td>
       </tr>`;
@@ -480,16 +476,14 @@ const Pickem = {
         <table><thead><tr><th>Kick</th><th>Away</th><th>Home</th><th>Fav</th>
           <th class="num" title="ELWAY's home-spread equivalent: away avg pts minus home avg pts. Compare against the Fav column's market line, not the sheet's own spread.">ELWAY Spread</th>
           <th>O/U</th>
-          <th class="num">Away%</th><th class="num">Home%</th>
-          <th class="num" title="Historical: favorite of this spread wins straight up">Fav SU</th>
           <th class="num" title="Historical: favorite of this spread covers">Fav ATS</th>
           <th>Pick</th><th></th></tr></thead>
           <tbody>${rows}</tbody></table>
         <details>
           <summary class="muted small">Legend</summary>
-          <p class="tablefoot muted">Away%/Home% are this game's de-vigged market prices.
-            Pick the side that covers. Fav ATS is the historical cover rate for any favorite
-            of that spread size — below ~50% leans dog. The line is snapshotted when you pick.
+          <p class="tablefoot muted">Pick the side that covers. Fav ATS is the historical
+            cover rate for any favorite of that spread size — below ~50% leans dog. The line
+            is snapshotted when you pick.
             A <span class="chip warn">QB</span> chip next to a team shows that team's QB injury
             situation regardless of what ELWAY currently assumes at QB1 (plus any other flagged
             QB, if ELWAY's assumed starter is the one hurt; otherwise only a Doubtful/Out backup
