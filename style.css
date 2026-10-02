@@ -77,6 +77,7 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 .game-card { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
 .game-card-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
 .game-card-head .matchup { font-weight:600; }
+.line-move-chip { margin-left:auto; }
 .rank-badge { color:var(--dim); font-weight:700; font-size:.8em; }
 .game-card-body {
   display:grid; grid-template-columns:repeat(4, 1fr); gap:10px;

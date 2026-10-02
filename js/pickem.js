@@ -127,14 +127,15 @@ function lineMovement(rows) {
 // green at/above 1.5 pts (the threshold "steam" means something by), plain/colorless below
 // it but still shown, so a small move isn't hidden, just not called out as sharp money.
 // Shows the signed delta itself (home-spread convention: negative = home favored) rather
-// than just a yes/no flag, so the magnitude is visible at a glance.
+// than just a yes/no flag, so the magnitude is visible at a glance. Pinned to the right edge
+// of the card header (.line-move-chip, margin-left:auto) via CSS, last in header markup order.
 function lineMoveChip(move) {
   if (!move || move.deltaHome === 0) return '';
   const mag = Math.abs(move.deltaHome);
   const label = (move.deltaHome > 0 ? '+' : '') + move.deltaHome.toFixed(1);
   const steam = mag >= 1.5;
   const title = `Line opened ${signed(move.open)}, now ${signed(move.cur)} — a ${mag.toFixed(1)}-point move this week`;
-  return ` <span class="chip${steam ? ' good' : ''}" title="${title}">${steam ? 'STEAM ' : ''}${label}</span>`;
+  return ` <span class="chip line-move-chip${steam ? ' good' : ''}" title="${title}">Steam: ${label}</span>`;
 }
 
 // EPA ratings + rule-based mismatch callouts for one game, from the team_ratings kv blob
@@ -339,11 +340,11 @@ const Pickem = {
           <span class="matchup">${rankPrefix(g.away)}${teamSpan(g.away)}${wchip(g.away)}${qbChip(g.away, injuries, elwayQb1)} @ ${rankPrefix(g.home)}${teamSpan(g.home)}${wchip(g.home)}${qbChip(g.home, injuries, elwayQb1)}</span>
           ${stateChip}
           ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
-          ${lineMoveChip(move)}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
             `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
           ).join('')}
           ${matchup ? weatherChip(matchup.weather) : ''}
+          ${lineMoveChip(move)}
         </div>
         <div class="game-card-body">
           <div class="stat-block">
@@ -403,10 +404,10 @@ const Pickem = {
             at Doubtful/Out severity only (a merely "Questionable" QB2/QB3 unrelated to a fine
             starter doesn't get a chip; a real starter change does), so a real starter injury
             never goes unshown just because ELWAY's own sheet caught up to it. Any net line
-            move this week shows as a chip with the signed point move
-            (<span class="chip good">STEAM +1.5</span> at/above a 1.5-point move in one
-            direction since this week's first snapshot, <span class="chip">+0.5</span> plain
-            below that).
+            move this week shows as a "Steam:" chip, pinned to the right of the card header,
+            with the signed point move itself (<span class="chip good">Steam: +1.5</span> at/
+            above a 1.5-point move in one direction since this week's first snapshot,
+            <span class="chip">Steam: +0.5</span> plain below that).
             <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
             rating that team with a QB1 our live injury feed now shows hurt — a breaking-news
             injury ELWAY's own depth-chart tracking hasn't caught up to yet.
