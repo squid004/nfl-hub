@@ -506,12 +506,21 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict],
         if home not in ratings or away not in ratings:
             continue
         callouts = []
+        # rush_edge/pass_edge: the single biggest |combined z| direction for that phase in
+        # THIS game, stored unconditionally (unlike `callouts`, which only keeps sentences
+        # that clear MISMATCH_Z_THRESHOLD) -- lets a caller rank every game's edge across a
+        # whole week (e.g. "3 biggest pass matchups this week") instead of just knowing
+        # whether any one game cleared a fixed bar.
+        edges: dict[str, dict | None] = {}
         for phase in ("rush", "pass"):
             off_m, def_m = f"{phase}_off_epa", f"{phase}_def_epa_allowed"
+            best_edge = None
             for off_team, def_team in ((home, away), (away, home)):
                 if off_m not in z.get(off_team, {}) or def_m not in z.get(def_team, {}):
                     continue
                 combined = z[off_team][off_m] + z[def_team][def_m]
+                if best_edge is None or abs(combined) > abs(best_edge["z"]):
+                    best_edge = {"team": off_team, "opponent": def_team, "z": round(combined, 3)}
                 if abs(combined) < MISMATCH_Z_THRESHOLD:
                     continue
                 off_rank, def_rank = display_rank[off_team][off_m], display_rank[def_team][def_m]
@@ -522,6 +531,7 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict],
                     f"{'faces' if favors_offense else 'runs into'} {def_team}'s {phase} defense "
                     f"({_ordinal(def_rank)}) -- {verdict}."
                 )
+            edges[f"{phase}_edge"] = best_edge
         weather = None
         gameday = g.get("gameday")
         # skip the forecast fetch entirely for games outside its ~16-day reliable window --
@@ -534,14 +544,29 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict],
                 days_out = None
             if days_out is not None and 0 <= days_out <= 15:
                 weather = fetch_forecast_weather(home, gameday)
+        predicted_home_points = predict_points(ratings[home], ratings[away], weather)
+        predicted_away_points = predict_points(ratings[away], ratings[home], weather)
+        # How many of those predicted points are the weather adjustment itself, not the base
+        # model -- the difference against the same prediction with weather=None. Lets a caller
+        # flag "weather is worth N points here" without re-implementing predict_points' formula.
+        weather_points_delta = None
+        if weather is not None:
+            base_home = predict_points(ratings[home], ratings[away], None)
+            base_away = predict_points(ratings[away], ratings[home], None)
+            if None not in (base_home, base_away, predicted_home_points, predicted_away_points):
+                weather_points_delta = round(
+                    (predicted_home_points - base_home) + (predicted_away_points - base_away), 2
+                )
         out[f"{away}@{home}"] = {
             "home": home, "away": away,
             "home_ratings": ratings[home], "away_ratings": ratings[away],
             "home_ratings_display": ratings_display.get(home), "away_ratings_display": ratings_display.get(away),
             "callouts": callouts,
-            "predicted_home_points": predict_points(ratings[home], ratings[away], weather),
-            "predicted_away_points": predict_points(ratings[away], ratings[home], weather),
+            **edges,
+            "predicted_home_points": predicted_home_points,
+            "predicted_away_points": predicted_away_points,
             "weather": weather,
+            "weather_points_delta": weather_points_delta,
         }
     return out
 

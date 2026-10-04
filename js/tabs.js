@@ -2,10 +2,7 @@
 
 // Client-side tabs: show/hide <section data-tab="..."> groups. No routing library.
 const Tabs = {
-  // 'parlays' hidden for now (not in NAMES) -- see the comment in index.html. Keeping it out
-  // of this list, not just dropping its nav button, is what makes a stale #parlays hash or
-  // leftover localStorage value fall back to 'pickem' instead of landing on a dead tab.
-  NAMES: ['pickem', 'ats', 'power'],
+  NAMES: ['pickem', 'ats', 'power', 'parlays'],
   _store: 'nflhub.tab',
 
   init() {

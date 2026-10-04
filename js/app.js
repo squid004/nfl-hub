@@ -53,6 +53,7 @@ const App = {
       Edge.render(ctx);
       Odds.render(ctx);
       Power.render(ctx);
+      Parlays.render(ctx);
       this.renderStatus(ctx);
     } catch (e) {
       document.getElementById('status').textContent = 'Error: ' + e.message;

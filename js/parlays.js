@@ -1,0 +1,129 @@
+'use strict';
+
+// Rule-based, non-wagering "biggest statistical trends" board -- no payout/odds math, just
+// three call-outs per week: the biggest EPA offense-vs-defense mismatches, the biggest
+// ELWAY-vs-market total disagreements, and games where weather is worth real points. All
+// three reuse data already computed elsewhere (team_ratings.py's matchup_callouts, the
+// elway_odds/odds tables) -- nothing new is fetched for this tab.
+
+// Top `n` games this week by |z| for one phase's edge (rush_edge/pass_edge), biggest first.
+function biggestEdges(ctx, phase, n = 3) {
+  if (!ctx.teamRatings) return [];
+  const rows = [];
+  (ctx.games || []).forEach(g => {
+    const matchup = matchupFor(ctx.teamRatings, g.home, g.away);
+    const edge = matchup && matchup[`${phase}_edge`];
+    if (edge) rows.push({ g, matchup, edge });
+  });
+  rows.sort((a, b) => Math.abs(b.edge.z) - Math.abs(a.edge.z));
+  return rows.slice(0, n);
+}
+
+// "TEAM phase offense (NN/100) vs OPPONENT phase defense (NN/100)" -- same 0-100 display
+// scale as the game-card matchup table, so the number means the same thing everywhere.
+function edgeSentence(phase, matchup, edge) {
+  const offDisplay = edge.team === matchup.home ? matchup.home_ratings_display : matchup.away_ratings_display;
+  const defDisplay = edge.opponent === matchup.home ? matchup.home_ratings_display : matchup.away_ratings_display;
+  const fmt = v => v != null ? v.toFixed(0) : '—';
+  const off = offDisplay ? offDisplay[`${phase}_off_epa`] : null;
+  const def = defDisplay ? defDisplay[`${phase}_def_epa_allowed`] : null;
+  return `${edge.team} ${phase} offense (${fmt(off)}/100) vs ${edge.opponent} ${phase} defense (${fmt(def)}/100)`;
+}
+
+// Every game this week with both an ELWAY total and a market total, biggest gap first. No
+// top-N cap -- unlike the EPA matchups, the user wants every disagreement called out, not
+// just the top 3.
+function totalDisagreements(ctx) {
+  const rows = [];
+  (ctx.games || []).forEach(g => {
+    const o = (ctx.odds || {})[g.game_id] || {};
+    const el = (ctx.elway || {})[g.game_id] || {};
+    if (o.total == null || el.total == null) return;
+    const delta = Math.round((el.total - o.total) * 10) / 10;
+    if (delta !== 0) rows.push({ g, o, el, delta });
+  });
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  return rows;
+}
+
+// Every game this week where predict_points()'s weather adjustment is worth >=1 combined
+// point, biggest first. This is a heads-up, not a confirmed market miss -- there's no total-
+// line movement history (only spread_history) to check whether the book already priced the
+// weather in, so the copy below is deliberately framed as "worth checking", not "the book is
+// wrong".
+function weatherCallouts(ctx) {
+  if (!ctx.teamRatings) return [];
+  const rows = [];
+  (ctx.games || []).forEach(g => {
+    const matchup = matchupFor(ctx.teamRatings, g.home, g.away);
+    const delta = matchup && matchup.weather_points_delta;
+    if (delta != null && Math.abs(delta) >= 1) rows.push({ g, matchup, delta });
+  });
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  return rows;
+}
+
+const Parlays = {
+  render(ctx) {
+    const el = document.getElementById('parlays-trends');
+    if (!el) return;
+
+    const edgeRows = (phase, label) => {
+      const rows = biggestEdges(ctx, phase, 3);
+      if (!rows.length) return `<p class="muted small">No ${label.toLowerCase()} mismatches big enough to call out this week.</p>`;
+      return `<ol>${rows.map(({ g, matchup, edge }) =>
+        `<li>${esc(edgeSentence(phase, matchup, edge))}
+           <span class="muted small">(${esc(g.away)} @ ${esc(g.home)}, ${fmtLocal(g.kickoff, false)})</span></li>`
+      ).join('')}</ol>`;
+    };
+
+    const totalRows = totalDisagreements(ctx);
+    const totalHtml = totalRows.length
+      ? `<ol>${totalRows.map(({ g, o, el: elw, delta }) =>
+          `<li>${esc(g.away)} @ ${esc(g.home)}: ELWAY ${elw.total} vs market ${o.total}
+             <span class="${delta > 0 ? 'result-good' : 'result-bad'}">(${signed(delta)})</span>
+             <span class="muted small">${fmtLocal(g.kickoff, false)}</span></li>`
+        ).join('')}</ol>`
+      : `<p class="muted small">No games with both an ELWAY and a market total this week.</p>`;
+
+    const wxRows = weatherCallouts(ctx);
+    const wxHtml = wxRows.length
+      ? `<ol>${wxRows.map(({ g, delta }) =>
+          `<li>${esc(g.away)} @ ${esc(g.home)}: weather is worth about
+             <span class="${delta < 0 ? 'result-bad' : 'result-good'}">${signed(delta)} total points</span>
+             in our model <span class="muted small">(${fmtLocal(g.kickoff, false)}) — worth checking it's
+             actually reflected in the posted total.</span></li>`
+        ).join('')}</ol>`
+      : `<p class="muted small">No game this week where weather is worth a point of note.</p>`;
+
+    el.innerHTML = `
+      <div class="panel">
+        <h2>Biggest matchups (EPA)</h2>
+        <h3>Pass</h3>
+        ${edgeRows('pass', 'Pass')}
+        <h3>Run</h3>
+        ${edgeRows('rush', 'Run')}
+        <p class="tablefoot muted">Biggest offense-vs-opposing-defense EPA mismatches this
+          week, by combined z-score against the rest of the league. Same model as the
+          matchup table on each Moneyline card — descriptive only, not a betting edge (see
+          Power Rankings methodology).</p>
+      </div>
+      <div class="panel">
+        <h2>ELWAY vs. the total</h2>
+        ${totalHtml}
+        <p class="tablefoot muted"><span class="result-good">Green</span> = ELWAY's avg-points
+          model projects MORE total points than the market; <span class="result-bad">red</span>
+          = fewer. Ranked by size of the gap, biggest first.</p>
+      </div>
+      <div class="panel">
+        <h2>Weather vs. the total</h2>
+        ${wxHtml}
+        <p class="tablefoot muted">Our own wind/precip/cold-adjusted points model
+          (<code>predict_points</code>) vs. the same model with no weather adjustment applied —
+          <span class="result-bad">red</span> = weather likely suppresses the total,
+          <span class="result-good">green</span> = likely lifts it. We don't have total-line
+          movement history to confirm whether the book already baked this in, so treat this as
+          a prompt to go check the number yourself, not a confirmed market miss.</p>
+      </div>`;
+  },
+};

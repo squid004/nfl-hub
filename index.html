@@ -22,10 +22,7 @@
   <button data-tab="pickem" role="tab">Moneyline Pick'em</button>
   <button data-tab="ats" role="tab">Against the Spread</button>
   <button data-tab="power" role="tab">Power Rankings</button>
-  <!-- Parlays tab hidden 2026-10-01 -- actionnetwork.py's best-price scrape is blocked by
-       Action Network's bot mitigation (see that module's docstring), so "Shop the line" has
-       nothing to show and the tab isn't providing value right now. The sections/data
-       pipeline are untouched; re-add this button + 'parlays' to Tabs.NAMES to bring it back. -->
+  <button data-tab="parlays" role="tab">Parlays</button>
 </nav>
 
 <main>
@@ -38,14 +35,7 @@
   <section id="atsupsets" data-tab="ats"></section>
   <section id="atshistory" data-tab="ats"></section>
 
-  <section id="parlays-stub" data-tab="parlays">
-    <div class="panel">
-      <h2>Parlays</h2>
-      <p class="muted">Parlay tracking is coming. For now this tab holds the full odds
-        board below — spreads, totals, moneylines and de-vigged win probabilities for
-        every game this week.</p>
-    </div>
-  </section>
+  <section id="parlays-trends" data-tab="parlays"></section>
   <section id="odds" data-tab="parlays"></section>
 
   <section id="power" data-tab="power"></section>
@@ -60,6 +50,7 @@
 <script src="js/pickem.js"></script>
 <script src="js/odds.js"></script>
 <script src="js/power.js"></script>
+<script src="js/parlays.js"></script>
 <script src="js/tabs.js"></script>
 <script src="js/app.js"></script>
 </body>
