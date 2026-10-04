@@ -119,6 +119,31 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 .bias-bar.pos { background:var(--good); }
 .bias-val { width:64px; text-align:right; flex-shrink:0; }
 
+.dist-metric { margin:22px 0 0; }
+.dist-metric:first-of-type { margin-top:14px; }
+.dist-label { font-weight:600; font-size:.85rem; margin-bottom:4px; }
+.dist-strip {
+  position:relative; height:10px; margin:18px 4px 4px;
+  background:var(--panel2); border:1px solid var(--line); border-radius:999px;
+}
+.dist-tick {
+  position:absolute; top:50%; left:0; width:6px; height:6px;
+  margin:-3px 0 0 -3px; border-radius:50%; background:var(--dim);
+}
+.dist-tick.outlier-good, .dist-tick.outlier-bad {
+  width:10px; height:10px; margin:-5px 0 0 -5px; z-index:1;
+}
+.dist-tick.outlier-good { background:var(--good); box-shadow:0 0 0 2px color-mix(in srgb, var(--good) 35%, transparent); }
+.dist-tick.outlier-bad { background:var(--bad); box-shadow:0 0 0 2px color-mix(in srgb, var(--bad) 35%, transparent); }
+.dist-tick-label {
+  position:absolute; top:-15px; left:50%; transform:translateX(-50%);
+  font-size:10px; font-weight:700; white-space:nowrap;
+}
+.dist-tick-label.outlier-good { color:var(--good); }
+.dist-tick-label.outlier-bad { color:var(--bad); }
+.dist-mean-line { position:absolute; top:-3px; bottom:-3px; width:1px; background:var(--accent); opacity:.6; }
+.dist-summary { margin-top:4px; }
+
 button, select, input, textarea {
   font:inherit; background:var(--panel2); color:var(--text);
   border:1px solid var(--line); border-radius:7px; padding:5px 10px;
