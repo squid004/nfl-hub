@@ -135,6 +135,10 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 }
 .dist-tick.outlier-good { background:var(--good); box-shadow:0 0 0 2px color-mix(in srgb, var(--good) 35%, transparent); }
 .dist-tick.outlier-bad { background:var(--bad); box-shadow:0 0 0 2px color-mix(in srgb, var(--bad) 35%, transparent); }
+.dist-tick.above-avg { background:color-mix(in srgb, var(--good) 55%, var(--dim)); }
+.dist-tick.below-avg { background:color-mix(in srgb, var(--bad) 55%, var(--dim)); }
+.mild-good { color:color-mix(in srgb, var(--good) 55%, var(--dim)); font-weight:600; }
+.mild-bad  { color:color-mix(in srgb, var(--bad) 55%, var(--dim)); font-weight:600; }
 .dist-tick-label {
   position:absolute; top:-15px; left:50%; transform:translateX(-50%);
   font-size:10px; font-weight:700; white-space:nowrap;

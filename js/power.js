@@ -138,7 +138,12 @@ const Power = {
 
   // One number-line strip per EPA stat, every team positioned at its actual 0-100 value (not
   // just rank order) so clustering vs. real gaps is visible as literal physical distance, not
-  // just color or order. See buildTiers() above for what actually counts as a real tier break.
+  // just color or order. Every team lands in exactly one of four groups: Elite/Weak (a real,
+  // gap-isolated group via buildTiers() -- genuinely cut off from everyone else, not just
+  // "best/worst by rank") or, failing that, Above/Below average (plain comparison to the
+  // league mean) -- so a team that's considerably worse than average but NOT isolated from
+  // its similarly-bad neighbors (a gradual bottom cluster, not a cliff) still shows up as
+  // Below average instead of disappearing into an undifferentiated middle pack.
   _distributionPanel(rows) {
     const metricHtml = ([key, label]) => {
       const teamVals = rows.filter(r => r[key] != null).map(r => ({ team: r.team, value: r[key] }));
@@ -148,36 +153,40 @@ const Power = {
         teams, avg: teams.reduce((s, t) => s + t.value, 0) / teams.length,
       }));
       const packIdx = tiers.reduce((best, t, i) => t.teams.length > tiers[best].teams.length ? i : best, 0);
-      // Standout tiers ranked outward from the pack on each side: the one furthest from
-      // average is "Elite"/"Weak" (the strongest, most-separated group); any other standout
-      // tier in between is just "Above average"/"Below average".
-      const above = tiers.map((t, i) => ({ ...t, i })).filter(t => t.i !== packIdx && t.avg > avg)
-        .sort((a, b) => b.avg - a.avg);
-      const below = tiers.map((t, i) => ({ ...t, i })).filter(t => t.i !== packIdx && t.avg < avg)
-        .sort((a, b) => a.avg - b.avg);
-      const standoutIdx = new Map();
-      above.forEach((t, rank) => standoutIdx.set(t.i, { cls: 'outlier-good', label: rank === 0 ? 'Elite' : 'Above average' }));
-      below.forEach((t, rank) => standoutIdx.set(t.i, { cls: 'outlier-bad', label: rank === 0 ? 'Weak' : 'Below average' }));
 
-      const ticks = tiers.flatMap((t, i) => {
-        const standout = standoutIdx.get(i);
-        return t.teams.map(team => `<div class="dist-tick${standout ? ' ' + standout.cls : ''}" style="left:${team.value}%"
-            title="${esc(team.team)}: ${team.value.toFixed(1)}/100">${standout && t.teams.length <= 3 ? `<span class="dist-tick-label ${standout.cls}">${esc(team.team)}</span>` : ''}</div>`);
+      const byValueDesc = (a, b) => b.value - a.value;
+      const elite = tiers.filter((t, i) => i !== packIdx && t.avg > avg).flatMap(t => t.teams).sort(byValueDesc);
+      const weak = tiers.filter((t, i) => i !== packIdx && t.avg < avg).flatMap(t => t.teams).sort(byValueDesc);
+      const aboveAvg = tiers[packIdx].teams.filter(t => t.value > avg).sort(byValueDesc);
+      const belowAvg = tiers[packIdx].teams.filter(t => t.value <= avg).sort(byValueDesc);
+
+      const GROUPS = [
+        { key: 'elite', teams: elite, label: 'Elite', cls: 'outlier-good', textCls: 'result-good', labelDots: true },
+        { key: 'above', teams: aboveAvg, label: 'Above average', cls: 'above-avg', textCls: 'mild-good', labelDots: false },
+        { key: 'below', teams: belowAvg, label: 'Below average', cls: 'below-avg', textCls: 'mild-bad', labelDots: false },
+        { key: 'weak', teams: weak, label: 'Weak', cls: 'outlier-bad', textCls: 'result-bad', labelDots: true },
+      ];
+      const groupOf = new Map();
+      GROUPS.forEach(g => g.teams.forEach(t => groupOf.set(t.team, g)));
+
+      const ticks = teamVals.map(t => {
+        const g = groupOf.get(t.team);
+        return `<div class="dist-tick${g ? ' ' + g.cls : ''}" style="left:${t.value}%"
+            title="${esc(t.team)}: ${t.value.toFixed(1)}/100 (${g ? g.label.toLowerCase() : ''})">${g && g.labelDots ? `<span class="dist-tick-label ${g.cls}">${esc(t.team)}</span>` : ''}</div>`;
       }).join('');
 
-      const tierLine = t => {
-        const standout = standoutIdx.get(t.i);
-        const names = t.teams.map(x => x.team).join(', ');
-        const diff = Math.abs(t.avg - avg).toFixed(1);
-        const dir = t.avg > avg ? 'above' : 'below';
-        return `<li><strong class="${standout.cls === 'outlier-good' ? 'result-good' : 'result-bad'}">`
-          + `${standout.label}</strong> (${names}) — avg ${t.avg.toFixed(1)}/100, ${diff}pts ${dir} `
-          + `the league average, cut off from the rest of the pack by a real gap.</li>`;
+      const groupLine = g => {
+        if (!g.teams.length) return '';
+        const names = g.teams.map(t => t.team).join(', ');
+        const gavg = g.teams.reduce((s, t) => s + t.value, 0) / g.teams.length;
+        const diff = Math.abs(gavg - avg).toFixed(1);
+        const dir = gavg > avg ? 'above' : 'below';
+        const isolation = g.key === 'elite' || g.key === 'weak' ? ', cut off from the rest of the pack by a real gap' : '';
+        return `<li><strong class="${g.textCls}">${g.label}</strong> `
+          + `(${g.teams.length}: ${esc(names)}) — avg ${gavg.toFixed(1)}/100, ${diff}pts ${dir} `
+          + `the league average${isolation}.</li>`;
       };
-      const standoutLines = [...above, ...below].map(tierLine).join('');
-      const summary = standoutLines
-        ? `<ul class="dist-tiers">${standoutLines}</ul>`
-        : `<p class="muted small dist-summary">No real tiers here — the whole league is bunched together with no significant gaps.</p>`;
+      const lines = GROUPS.map(groupLine).filter(Boolean).join('');
 
       return `<div class="dist-metric">
         <div class="dist-label">${esc(label)}</div>
@@ -185,7 +194,7 @@ const Power = {
           <div class="dist-mean-line" style="left:${avg}%" title="League average: ${avg.toFixed(1)}/100"></div>
           ${ticks}
         </div>
-        ${summary}
+        <ul class="dist-tiers">${lines}</ul>
       </div>`;
     };
     const metrics = DIST_METRICS.map(metricHtml).filter(Boolean).join('');
@@ -194,12 +203,14 @@ const Power = {
       <div class="panel">
         <h2>EPA distribution &amp; tiers</h2>
         <p class="muted small">Every team's 0-100 EPA score (same scale as the table above),
-          positioned on a line so clustering is visible at a glance, not just rank. Teams only
-          split into a separate tier when a real gap (not just rank) separates them from the
-          main pack -- a pack of similarly-bad teams near the bottom stays one tier, however
-          far it sits from average; a smaller group genuinely cut off, elite or weak, gets its
-          own tier instead. <span class="result-good">Green</span>/<span class="result-bad">red</span>
-          mark standout tiers; the thin vertical line is the league average.</p>
+          positioned on a line so clustering is visible at a glance, not just rank. Every team
+          falls into one of four groups: <strong class="result-good">Elite</strong>/
+          <strong class="result-bad">Weak</strong> when a real gap (not just rank) cuts a group
+          off from everyone else, however small; otherwise just
+          <strong class="mild-good">Above</strong>/<strong class="mild-bad">Below average</strong>
+          -- so a cluster of similarly-bad teams that's nonetheless well below average still
+          shows up as a real group instead of disappearing into an undifferentiated middle.
+          The thin vertical line is the league average.</p>
         ${metrics}
       </div>`;
   },
