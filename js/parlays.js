@@ -13,21 +13,25 @@ function biggestEdges(ctx, phase, n = 3) {
   (ctx.games || []).forEach(g => {
     const matchup = matchupFor(ctx.teamRatings, g.home, g.away);
     const edge = matchup && matchup[`${phase}_edge`];
-    if (edge) rows.push({ g, matchup, edge });
+    if (edge) rows.push({ g, edge });
   });
   rows.sort((a, b) => Math.abs(b.edge.z) - Math.abs(a.edge.z));
   return rows.slice(0, n);
 }
 
-// "TEAM phase offense (NN/100) vs OPPONENT phase defense (NN/100)" -- same 0-100 display
-// scale as the game-card matchup table, so the number means the same thing everywhere.
-function edgeSentence(phase, matchup, edge) {
-  const offDisplay = edge.team === matchup.home ? matchup.home_ratings_display : matchup.away_ratings_display;
-  const defDisplay = edge.opponent === matchup.home ? matchup.home_ratings_display : matchup.away_ratings_display;
-  const fmt = v => v != null ? v.toFixed(0) : '—';
-  const off = offDisplay ? offDisplay[`${phase}_off_epa`] : null;
-  const def = defDisplay ? defDisplay[`${phase}_def_epa_allowed`] : null;
-  return `${edge.team} ${phase} offense (${fmt(off)}/100) vs ${edge.opponent} ${phase} defense (${fmt(def)}/100)`;
+// 1st/2nd/3rd/4th/...th -- same convention as team_ratings.py's _ordinal().
+function ordinal(n) {
+  if (n == null) return '—';
+  const rem100 = n % 100;
+  if (rem100 >= 10 && rem100 <= 20) return `${n}th`;
+  return `${n}${ { 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th' }`;
+}
+
+// "TEAM phase offense (Nth) vs OPPONENT phase defense (Nth)" -- league rank (of 32), not the
+// raw/display EPA number, so it reads the same as the matchup sentences used elsewhere.
+function edgeSentence(phase, edge) {
+  return `${edge.team} ${phase} offense (${ordinal(edge.off_rank)}) vs `
+    + `${edge.opponent} ${phase} defense (${ordinal(edge.def_rank)})`;
 }
 
 // Every game this week with a DraftKings total AND an ELWAY total that disagree by >=3
@@ -74,8 +78,8 @@ const Parlays = {
     const edgeRows = (phase, label) => {
       const rows = biggestEdges(ctx, phase, 3);
       if (!rows.length) return `<p class="muted small">No ${label.toLowerCase()} mismatches big enough to call out this week.</p>`;
-      return `<ol>${rows.map(({ g, matchup, edge }) =>
-        `<li>${esc(edgeSentence(phase, matchup, edge))}
+      return `<ol>${rows.map(({ g, edge }) =>
+        `<li>${esc(edgeSentence(phase, edge))}
            <span class="muted small">(${esc(g.away)} @ ${esc(g.home)}, ${fmtLocal(g.kickoff, false)})</span></li>`
       ).join('')}</ol>`;
     };

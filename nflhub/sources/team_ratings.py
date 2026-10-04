@@ -532,7 +532,8 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict],
                 off_rank, def_rank = display_rank[off_team][off_m], display_rank[def_team][def_m]
                 genuine_mismatch = off_rank <= EDGE_RANK_GATE and def_rank > n_teams - EDGE_RANK_GATE
                 if genuine_mismatch and (best_edge is None or abs(combined) > abs(best_edge["z"])):
-                    best_edge = {"team": off_team, "opponent": def_team, "z": round(combined, 3)}
+                    best_edge = {"team": off_team, "opponent": def_team, "z": round(combined, 3),
+                                 "off_rank": off_rank, "def_rank": def_rank}
                 if abs(combined) < MISMATCH_Z_THRESHOLD:
                     continue
                 favors_offense = combined > 0
