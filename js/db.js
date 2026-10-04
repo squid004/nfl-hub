@@ -137,6 +137,14 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return {}; }
   },
 
+  // team abbr -> ordered list of QB names (index 0 = current starter), from ESPN's depth
+  // chart (written by nflhub.refresh). See pickem.js's qbChip().
+  async qbDepthChart() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'qb_depth_chart').maybeSingle();
+    if (!data) return {};
+    try { return JSON.parse(data.value); } catch { return {}; }
+  },
+
   // { teams: {TEAM: {rush_off_epa, pass_off_epa, rush_def_epa_allowed, pass_def_epa_allowed}},
   //   matchups: {"AWAY@HOME": {home, away, home_ratings, away_ratings, callouts: [...]}} },
   // written by nflhub.refresh (garbage-time-excluded EPA ratings; see nflhub/sources/team_ratings.py).

@@ -30,17 +30,20 @@ function edgeSentence(phase, matchup, edge) {
   return `${edge.team} ${phase} offense (${fmt(off)}/100) vs ${edge.opponent} ${phase} defense (${fmt(def)}/100)`;
 }
 
-// Every game this week with both an ELWAY total and a market total, biggest gap first. No
-// top-N cap -- unlike the EPA matchups, the user wants every disagreement called out, not
-// just the top 3.
+// Every game this week with a DraftKings total AND an ELWAY total that disagree by >=3
+// points, biggest gap first. Gated on book === 'DraftKings' specifically (not just "any
+// market total") since that's the one sportsbook line this is meant to be checked against --
+// odds.js sets o.book to 'DraftKings' only when ESPN's per-game DK odds enrichment actually
+// succeeded for that game, else it's ESPN's own default line (see nflhub/sources/odds.py).
+const TOTAL_DISAGREEMENT_MIN = 3;
 function totalDisagreements(ctx) {
   const rows = [];
   (ctx.games || []).forEach(g => {
     const o = (ctx.odds || {})[g.game_id] || {};
     const el = (ctx.elway || {})[g.game_id] || {};
-    if (o.total == null || el.total == null) return;
+    if (o.book !== 'DraftKings' || o.total == null || el.total == null) return;
     const delta = Math.round((el.total - o.total) * 10) / 10;
-    if (delta !== 0) rows.push({ g, o, el, delta });
+    if (Math.abs(delta) >= TOTAL_DISAGREEMENT_MIN) rows.push({ g, o, el, delta });
   });
   rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
   return rows;
@@ -80,11 +83,11 @@ const Parlays = {
     const totalRows = totalDisagreements(ctx);
     const totalHtml = totalRows.length
       ? `<ol>${totalRows.map(({ g, o, el: elw, delta }) =>
-          `<li>${esc(g.away)} @ ${esc(g.home)}: ELWAY ${elw.total} vs market ${o.total}
+          `<li>${esc(g.away)} @ ${esc(g.home)}: ELWAY ${elw.total} vs DraftKings ${o.total}
              <span class="${delta > 0 ? 'result-good' : 'result-bad'}">(${signed(delta)})</span>
              <span class="muted small">${fmtLocal(g.kickoff, false)}</span></li>`
         ).join('')}</ol>`
-      : `<p class="muted small">No games with both an ELWAY and a market total this week.</p>`;
+      : `<p class="muted small">No DraftKings/ELWAY total disagreement of ${TOTAL_DISAGREEMENT_MIN}+ points this week.</p>`;
 
     const wxRows = weatherCallouts(ctx);
     const wxHtml = wxRows.length
@@ -103,17 +106,19 @@ const Parlays = {
         ${edgeRows('pass', 'Pass')}
         <h3>Run</h3>
         ${edgeRows('rush', 'Run')}
-        <p class="tablefoot muted">Biggest offense-vs-opposing-defense EPA mismatches this
-          week, by combined z-score against the rest of the league. Same model as the
-          matchup table on each Moneyline card — descriptive only, not a betting edge (see
-          Power Rankings methodology).</p>
+        <p class="tablefoot muted">Only genuine mismatches: a top-8 offense against a
+          bottom-8 defense in that phase, ranked by combined z-score against the rest of the
+          league. Same underlying model as the matchup table on each Moneyline card —
+          descriptive only, not a betting edge (see Power Rankings methodology).</p>
       </div>
       <div class="panel">
         <h2>ELWAY vs. the total</h2>
         ${totalHtml}
-        <p class="tablefoot muted"><span class="result-good">Green</span> = ELWAY's avg-points
-          model projects MORE total points than the market; <span class="result-bad">red</span>
-          = fewer. Ranked by size of the gap, biggest first.</p>
+        <p class="tablefoot muted">Only shown when ELWAY's avg-points total disagrees with
+          the DraftKings total by ${TOTAL_DISAGREEMENT_MIN}+ points.
+          <span class="result-good">Green</span> = ELWAY projects MORE points than DraftKings;
+          <span class="result-bad">red</span> = fewer. Ranked by size of the gap, biggest
+          first.</p>
       </div>
       <div class="panel">
         <h2>Weather vs. the total</h2>

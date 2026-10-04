@@ -187,6 +187,16 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         log.exception("news refresh failed")
         summary["errors"].append(f"news: {exc}")
 
+    # 4a. QB depth-chart order (index 0 = starter) -- lets the frontend tell a genuinely
+    # next-man-up QB injury apart from a healthy backup's unrelated minor issue. Independent
+    # try/except: unrelated to injuries/news above, shouldn't take either down.
+    try:
+        store.kv_set("qb_depth_chart", json.dumps(nfl_schedule.fetch_qb_depth_charts()))
+        summary["qb_depth_chart"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        log.exception("qb depth chart refresh failed")
+        summary["errors"].append(f"qb_depth_chart: {exc}")
+
     # 4b. historical favorite-vs-spread distribution (rebuilt once/day)
     try:
         summary["history"] = history.refresh(store)

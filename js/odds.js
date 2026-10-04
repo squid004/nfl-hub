@@ -42,6 +42,7 @@ const Odds = {
   render(ctx) {
     const injuries = ctx.injuries || {};
     const elwayQb1 = ctx.elwayQb1 || {};
+    const depthChart = ctx.qbDepthChart || {};
     const rows = ctx.games.map(g => {
       const o = ctx.odds[g.game_id] || {};
       const el = (ctx.elway || {})[g.game_id] || {};
@@ -59,7 +60,7 @@ const Odds = {
         : `<td class="muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>`;
       return `<tr>
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
-        <td>${g.away}${qbChip(g.away, injuries)} @ ${g.home}${qbChip(g.home, injuries)} ${state}</td>
+        <td>${g.away}${qbChip(g.away, injuries, depthChart)} @ ${g.home}${qbChip(g.home, injuries, depthChart)} ${state}</td>
         <td class="muted${move && move.steam ? ' warn' : ''}" title="${move ? `opened ${signed(move.open)}, now ${signed(move.cur)}` : ''}">${signed(o.spread)}</td>
         ${elwaySpreadCell}
         <td class="muted">${o.total ?? '—'}</td>
@@ -81,7 +82,7 @@ const Odds = {
       const bookCells = bookNames.map(name => bookCell(byBook[name], bp.avg_spread_home)).join('');
       return `<tr>
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
-        <td>${g.away}${qbChip(g.away, injuries)} @ ${g.home}${qbChip(g.home, injuries)}</td>
+        <td>${g.away}${qbChip(g.away, injuries, depthChart)} @ ${g.home}${qbChip(g.home, injuries, depthChart)}</td>
         <td class="muted">${bp.avg_spread_home != null ? signed(bp.avg_spread_home) : '—'}</td>
         ${bookCells}
         <td>${bestCell(bp.spread_away_line, bp.spread_away_price, bp.spread_away_book)}<br>

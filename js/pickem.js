@@ -57,39 +57,36 @@ function qbFlag(team, injuries) {
   if (!qbs.length) return null;
   return qbs.reduce((worst, i) => QB_SEVERITY[i.status] > QB_SEVERITY[worst.status] ? i : worst);
 }
-// The injury designation should show whenever the team's own best/starting QB is out,
-// independent of whatever ELWAY's sheet currently assumes -- ELWAY updating QB1 to the new
-// starter (which it does once its weekly sheet catches up) must NOT make the chip disappear;
-// that's a different fact (elwayStaleQb, a separate chip, covers "ELWAY hasn't caught up
-// yet"). So: if the assumed starter (elwayQb1) IS one of the flagged QBs, surface that entry
-// plus any other flagged QB for the team (the presumptive next man up). Otherwise -- ELWAY's
-// assumed starter isn't flagged, either because we don't know who it is or because ELWAY has
-// already moved off the injured player -- fall back to the worst OTHER flagged entry, but
-// only at Doubtful/Out severity, not Questionable. Checked against real cases: a healthy,
-// playing starter commonly has some unrelated QB2/QB3 sitting at "Questionable" for a minor
-// or unrelated reason (Aidan O'Connell on personal matters behind a fine Kirk Cousins; Trey
-// Lance behind a fine Justin Herbert) -- falling back for those surfaced a meaningless chip.
-// Doubtful/Out don't have that problem: both real cases seen (Mayfield Out, C. Williams
-// Doubtful) were genuine starter changes, and a bog-standard deep backup rarely earns that
-// stronger a tag for no real reason. Questionable still shows when it's the ASSUMED starter
-// (branch above) -- it only stops being a trustworthy signal once it's being used as a guess
-// about which OTHER flagged QB might matter.
-function starterQbFlags(team, injuries, elwayQb1) {
-  const qbs = ((injuries || {})[team] || []).filter(i => i.position === 'QB' && QB_SEVERITY[i.status]
-    && !/coach'?s decision/i.test(i.detail || ''));
-  if (!qbs.length) return [];
-
-  const assumed = (elwayQb1 || {})[team];
-  const lastName = p => p.trim().split(/\s+/).pop().toLowerCase();
-  const starterEntry = assumed ? qbs.find(i => lastName(i.player) === assumed.name.toLowerCase()) : null;
-  if (starterEntry) return [starterEntry, ...qbs.filter(i => i !== starterEntry)];
-
-  const serious = qbs.filter(i => QB_SEVERITY[i.status] >= 2);
-  if (!serious.length) return [];
-  return [serious.reduce((worst, i) => QB_SEVERITY[i.status] > QB_SEVERITY[worst.status] ? i : worst)];
+// A backup QB's injury only actually matters once he's next in line to play -- i.e. every
+// QB ranked ahead of him on the REAL depth chart (kv 'qb_depth_chart', ESPN's own ordered
+// depth chart, index 0 = starter) is also hurt. Walk the depth chart in order and stop at
+// the first healthy (unflagged) name -- everyone before that point is returned, everyone
+// after is irrelevant noise (a deep QB3's unrelated tweak behind two healthy QBs ahead of
+// him, e.g.). Matches injuries entries to depth-chart names by exact string equality --
+// both come from the same ESPN athlete.displayName field (verified live, suffixes like
+// "Jr."/"Sr." included on both sides), unlike elwayStaleQb below which has to fall back to
+// last-name matching against ELWAY's sheet (a genuinely different, surname-only source).
+// Replaced an earlier heuristic that only had ELWAY's single assumed-starter guess to work
+// from, not a real depth chart, and still produced wrong calls.
+function starterQbFlags(team, injuries, depthChart) {
+  const order = (depthChart || {})[team] || [];
+  if (!order.length) return [];
+  const flagged = new Map();
+  ((injuries || {})[team] || []).forEach(i => {
+    if (i.position === 'QB' && QB_SEVERITY[i.status] && !/coach'?s decision/i.test(i.detail || '')) {
+      flagged.set(i.player, i);
+    }
+  });
+  const chain = [];
+  for (const name of order) {
+    const hit = flagged.get(name);
+    if (!hit) break;
+    chain.push(hit);
+  }
+  return chain;
 }
-function qbChip(team, injuries, elwayQb1) {
-  const qbs = starterQbFlags(team, injuries, elwayQb1);
+function qbChip(team, injuries, depthChart) {
+  const qbs = starterQbFlags(team, injuries, depthChart);
   if (!qbs.length) return '';
   return qbs.map(qb => {
     const cls = QB_SEVERITY[qb.status] >= 3 ? 'bad' : 'warn';
@@ -280,6 +277,7 @@ const Pickem = {
     const injuries = ctx.injuries || {};
     const spreadHist = ctx.spreadHist || {};
     const elwayQb1 = ctx.elwayQb1 || {};
+    const depthChart = ctx.qbDepthChart || {};
     const teamRatings = ctx.teamRatings || null;
     const power = (teamRatings && teamRatings.power_rankings) || {};
     const bucketRanks = computeBucketRanks(ctx);
@@ -370,7 +368,7 @@ const Pickem = {
       return `<div class="game-card${pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
-          <span class="matchup">${rankPrefix(g.away)}${teamSpan(g.away)}${qbChip(g.away, injuries, elwayQb1)} @ ${rankPrefix(g.home)}${teamSpan(g.home)}${qbChip(g.home, injuries, elwayQb1)}</span>
+          <span class="matchup">${rankPrefix(g.away)}${teamSpan(g.away)}${qbChip(g.away, injuries, depthChart)} @ ${rankPrefix(g.home)}${teamSpan(g.home)}${qbChip(g.home, injuries, depthChart)}</span>
           ${stateChip}
           ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
@@ -470,6 +468,7 @@ const Pickem = {
     const injuries = ctx.injuries || {};
     const spreadHist = ctx.spreadHist || {};
     const elwayQb1 = ctx.elwayQb1 || {};
+    const depthChart = ctx.qbDepthChart || {};
 
     const rows = games.map(g => {
       const o = odds[g.game_id] || {};
@@ -516,8 +515,8 @@ const Pickem = {
 
       return `<tr>
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
-        <td>${g.away}${wchip(g.away)}${qbChip(g.away, injuries, elwayQb1)}</td>
-        <td>${g.home}${wchip(g.home)}${qbChip(g.home, injuries, elwayQb1)}</td>
+        <td>${g.away}${wchip(g.away)}${qbChip(g.away, injuries, depthChart)}</td>
+        <td>${g.home}${wchip(g.home)}${qbChip(g.home, injuries, depthChart)}</td>
         <td class="muted${move && move.steam ? ' warn' : ''}" title="${move ? `opened ${signed(move.open)}, now ${signed(move.cur)}` : ''}">${favLabel}</td>
         ${elwaySpreadCell}
         <td class="muted">${o.total ?? '—'}</td>

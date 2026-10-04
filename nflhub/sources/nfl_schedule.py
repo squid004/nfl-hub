@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 import requests
+
+from .edge_teams import TEAMS
 
 log = logging.getLogger(__name__)
 
@@ -180,3 +183,31 @@ def fetch_injuries() -> dict[str, list[dict[str, Any]]]:
         if abbr:
             out[abbr] = entries
     return out
+
+
+def _fetch_team_qb_depth(team: str) -> list[str]:
+    """Ordered QB depth-chart names for one team (index 0 = current starter), via ESPN's
+    per-team depth chart endpoint -- there's no league-wide equivalent, unlike fetch_injuries.
+    Returns [] on any failure (best-effort, same convention as fetch_forecast_weather)."""
+    try:
+        data = _get(f"teams/{team.lower()}/depthcharts")
+    except Exception as exc:  # noqa: BLE001 - best-effort external source
+        log.warning("qb depth chart fetch failed for %s: %s", team, exc)
+        return []
+    for chart in data.get("depthchart", []):
+        qb = (chart.get("positions", {}) or {}).get("qb")
+        if qb:
+            return [a.get("displayName", "") for a in qb.get("athletes", []) if a.get("displayName")]
+    return []
+
+
+def fetch_qb_depth_charts() -> dict[str, list[str]]:
+    """team -> ordered list of QB names (index 0 = current starter). Used to tell a
+    genuinely-next-man-up QB injury apart from a healthy backup's unrelated minor issue (see
+    js/pickem.js qbChip) -- fetch_injuries alone has no depth-chart order, just a flat list of
+    whoever's hurt. One HTTP call per team (threaded like odds.py's DK-odds enrichment), since
+    ESPN has no bulk depth-chart endpoint."""
+    teams = list(TEAMS)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as ex:
+        results = list(ex.map(_fetch_team_qb_depth, teams))
+    return dict(zip(teams, results))
