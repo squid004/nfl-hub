@@ -35,32 +35,34 @@ const DIST_METRICS = [
   ['rush_def_epa_allowed', 'Rush Defense'],
   ['pass_def_epa_allowed', 'Pass Defense'],
 ];
-// A team only counts as a real outlier when its CLOSEST neighbor on the 0-100 scale is
-// still unusually far away -- that's what separates "this team is genuinely isolated" from
-// "this team happens to sit next to one isolated team" (the near-side neighbor of a real
-// outlier is NOT itself isolated; nearest-neighbor distance, not farthest-neighbor distance,
-// is what makes that distinction). Directly answers "if most of the bad ones are close to
-// average, where's the real gap" -- a cluster of similarly-bad teams has small gaps between
-// them and triggers nothing, no matter how far the whole cluster sits from the league mean.
-const OUTLIER_GAP_FLOOR = 4;   // 0-100 scale points -- guards a tight league (tiny median
-                                // gap) from reading any gap as "huge" in relative terms alone
-const OUTLIER_GAP_MULT = 2.5;  // nearest-neighbor gap must also be this many times the
-                                // league's typical (median) nearest-neighbor gap
+// Partition the sorted 0-100 scale into tiers wherever a consecutive gap is large relative
+// to the league's typical gap here -- the single LARGEST resulting tier is "the pack" (never
+// called out); every other tier is a real, separated group, however many teams it has. This
+// generalizes a plain "is this one team isolated" check: a 1-team tier IS that isolated
+// outlier, but a 2-3 team tier catches a case nearest-neighbor-only logic would miss entirely
+// -- e.g. two teams sitting close to EACH OTHER but both genuinely cut off from the pack
+// (each one's nearest neighbor is its tier-mate, not far, so neither alone would ever trip a
+// per-team isolation check -- the gap that matters is the one below the pair, not between them).
+const TIER_GAP_FLOOR = 4;   // 0-100 scale points -- guards a tight league (tiny median gap)
+                             // from reading any gap as "huge" in relative terms alone
+const TIER_GAP_MULT = 2.5;  // a cut's gap must also be this many times the league's typical
+                             // (median) consecutive gap here
 
-function findOutliers(teamVals) {
-  const sorted = [...teamVals].sort((a, b) => a.value - b.value);
+function buildTiers(teamVals) {
+  const sorted = [...teamVals].sort((a, b) => b.value - a.value); // best first
   const n = sorted.length;
-  const nearest = sorted.map((row, i) => {
-    const below = i > 0 ? row.value - sorted[i - 1].value : Infinity;
-    const above = i < n - 1 ? sorted[i + 1].value - row.value : Infinity;
-    return Math.min(below, above);
-  });
-  const finiteSorted = nearest.filter(g => Number.isFinite(g)).sort((a, b) => a - b);
-  const median = finiteSorted.length ? finiteSorted[Math.floor(finiteSorted.length / 2)] : 0;
-  const threshold = Math.max(OUTLIER_GAP_FLOOR, median * OUTLIER_GAP_MULT);
-  return sorted
-    .map((row, i) => ({ ...row, nearestGap: nearest[i] }))
-    .filter(row => Number.isFinite(row.nearestGap) && row.nearestGap >= threshold);
+  if (n < 2) return [sorted];
+  const gaps = [];
+  for (let i = 0; i < n - 1; i++) gaps.push(sorted[i].value - sorted[i + 1].value);
+  const sortedGaps = [...gaps].sort((a, b) => a - b);
+  const median = sortedGaps[Math.floor(sortedGaps.length / 2)];
+  const threshold = Math.max(TIER_GAP_FLOOR, median * TIER_GAP_MULT);
+  const tiers = [[sorted[0]]];
+  for (let i = 0; i < n - 1; i++) {
+    if (gaps[i] >= threshold) tiers.push([]);
+    tiers[tiers.length - 1].push(sorted[i + 1]);
+  }
+  return tiers;
 }
 
 function fmtPowerVal(key, v) {
@@ -136,48 +138,68 @@ const Power = {
 
   // One number-line strip per EPA stat, every team positioned at its actual 0-100 value (not
   // just rank order) so clustering vs. real gaps is visible as literal physical distance, not
-  // just color or order. See findOutliers() above for what actually counts as a flagged gap.
+  // just color or order. See buildTiers() above for what actually counts as a real tier break.
   _distributionPanel(rows) {
     const metricHtml = ([key, label]) => {
       const teamVals = rows.filter(r => r[key] != null).map(r => ({ team: r.team, value: r[key] }));
       if (teamVals.length < 4) return '';
-      const outliers = findOutliers(teamVals);
-      const outlierTeams = new Map(outliers.map(o => [o.team, o]));
       const avg = teamVals.reduce((s, t) => s + t.value, 0) / teamVals.length;
-      const ticks = teamVals.map(t => {
-        const out = outlierTeams.get(t.team);
-        const cls = out ? (t.value >= avg ? 'outlier-good' : 'outlier-bad') : '';
-        return `<div class="dist-tick${cls ? ' ' + cls : ''}" style="left:${t.value}%"
-            title="${esc(t.team)}: ${t.value.toFixed(1)}/100">${out ? `<span class="dist-tick-label ${cls}">${esc(t.team)}</span>` : ''}</div>`;
+      const tiers = buildTiers(teamVals).map(teams => ({
+        teams, avg: teams.reduce((s, t) => s + t.value, 0) / teams.length,
+      }));
+      const packIdx = tiers.reduce((best, t, i) => t.teams.length > tiers[best].teams.length ? i : best, 0);
+      // Standout tiers ranked outward from the pack on each side: the one furthest from
+      // average is "Elite"/"Weak" (the strongest, most-separated group); any other standout
+      // tier in between is just "Above average"/"Below average".
+      const above = tiers.map((t, i) => ({ ...t, i })).filter(t => t.i !== packIdx && t.avg > avg)
+        .sort((a, b) => b.avg - a.avg);
+      const below = tiers.map((t, i) => ({ ...t, i })).filter(t => t.i !== packIdx && t.avg < avg)
+        .sort((a, b) => a.avg - b.avg);
+      const standoutIdx = new Map();
+      above.forEach((t, rank) => standoutIdx.set(t.i, { cls: 'outlier-good', label: rank === 0 ? 'Elite' : 'Above average' }));
+      below.forEach((t, rank) => standoutIdx.set(t.i, { cls: 'outlier-bad', label: rank === 0 ? 'Weak' : 'Below average' }));
+
+      const ticks = tiers.flatMap((t, i) => {
+        const standout = standoutIdx.get(i);
+        return t.teams.map(team => `<div class="dist-tick${standout ? ' ' + standout.cls : ''}" style="left:${team.value}%"
+            title="${esc(team.team)}: ${team.value.toFixed(1)}/100">${standout && t.teams.length <= 3 ? `<span class="dist-tick-label ${standout.cls}">${esc(team.team)}</span>` : ''}</div>`);
       }).join('');
-      const summary = outliers.length
-        ? outliers.sort((a, b) => b.nearestGap - a.nearestGap).map(o =>
-            `<strong class="${o.value >= avg ? 'result-good' : 'result-bad'}">${esc(o.team)}</strong> `
-            + `(${o.value.toFixed(1)}/100) is a real outlier — its nearest neighbor is still `
-            + `${o.nearestGap.toFixed(1)}pts away, well past the league's typical gap here.`
-          ).join(' ')
-        : `No real outliers here — teams differ gradually, not in a clustered-pack-plus-isolated-team pattern.`;
+
+      const tierLine = t => {
+        const standout = standoutIdx.get(t.i);
+        const names = t.teams.map(x => x.team).join(', ');
+        const diff = Math.abs(t.avg - avg).toFixed(1);
+        const dir = t.avg > avg ? 'above' : 'below';
+        return `<li><strong class="${standout.cls === 'outlier-good' ? 'result-good' : 'result-bad'}">`
+          + `${standout.label}</strong> (${names}) — avg ${t.avg.toFixed(1)}/100, ${diff}pts ${dir} `
+          + `the league average, cut off from the rest of the pack by a real gap.</li>`;
+      };
+      const standoutLines = [...above, ...below].map(tierLine).join('');
+      const summary = standoutLines
+        ? `<ul class="dist-tiers">${standoutLines}</ul>`
+        : `<p class="muted small dist-summary">No real tiers here — the whole league is bunched together with no significant gaps.</p>`;
+
       return `<div class="dist-metric">
         <div class="dist-label">${esc(label)}</div>
         <div class="dist-strip">
           <div class="dist-mean-line" style="left:${avg}%" title="League average: ${avg.toFixed(1)}/100"></div>
           ${ticks}
         </div>
-        <p class="muted small dist-summary">${summary}</p>
+        ${summary}
       </div>`;
     };
     const metrics = DIST_METRICS.map(metricHtml).filter(Boolean).join('');
     if (!metrics) return '';
     return `
       <div class="panel">
-        <h2>EPA distribution &amp; outliers</h2>
+        <h2>EPA distribution &amp; tiers</h2>
         <p class="muted small">Every team's 0-100 EPA score (same scale as the table above),
-          positioned on a line so clustering is visible at a glance, not just rank. A team is
-          only called a real outlier when its CLOSEST neighbor is still unusually far away --
-          a pack of similarly-bad teams near the bottom isn't an outlier just because one of
-          them ranks dead last; a team genuinely alone out past the rest of the league is.
-          <span class="result-good">Green</span>/<span class="result-bad">red</span> labels
-          mark the flagged teams; the thin vertical line is the league average.</p>
+          positioned on a line so clustering is visible at a glance, not just rank. Teams only
+          split into a separate tier when a real gap (not just rank) separates them from the
+          main pack -- a pack of similarly-bad teams near the bottom stays one tier, however
+          far it sits from average; a smaller group genuinely cut off, elite or weak, gets its
+          own tier instead. <span class="result-good">Green</span>/<span class="result-bad">red</span>
+          mark standout tiers; the thin vertical line is the league average.</p>
         ${metrics}
       </div>`;
   },

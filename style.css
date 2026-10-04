@@ -143,6 +143,8 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 .dist-tick-label.outlier-bad { color:var(--bad); }
 .dist-mean-line { position:absolute; top:-3px; bottom:-3px; width:1px; background:var(--accent); opacity:.6; }
 .dist-summary { margin-top:4px; }
+.dist-tiers { margin:4px 0 0; padding-left:18px; font-size:.82rem; color:var(--dim); }
+.dist-tiers li { margin-bottom:3px; }
 
 button, select, input, textarea {
   font:inherit; background:var(--panel2); color:var(--text);
