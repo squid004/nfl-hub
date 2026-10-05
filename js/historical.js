@@ -5,8 +5,8 @@
 // team's own SIMPLE full-season average per stat, not the live Power Rankings tab's EWMA-
 // decayed rolling rating, and z-scored/ranked against the WHOLE pooled multi-season dataset
 // at once (not per-season) so eras are directly comparable on one scale. Descriptive only,
-// same caveat as the live tab -- see team_ratings.py's historical_power_rankings() docstring
-// for why there's no strength-of-schedule column here.
+// same caveat as the live tab. Team codes are whatever that franchise actually went by THAT
+// season (e.g. "STL" through 2015, "LAR" from 2016) -- not normalized to today's rebrand.
 const HIST_DISPLAY_CAP = 32;
 const HIST_COLS = [
   ['rank', 'Rank'],
@@ -21,8 +21,9 @@ const HIST_COLS = [
   ['points_def_allowed', 'Points Allowed/G'],
   ['turnovers_off', 'Turnovers/G'],
   ['turnovers_def_forced', 'Takeaways/G'],
+  ['sos', 'SOS', 'Strength of schedule for that season: the average of that team\'s own opponents\' season-long Power Scores, on the same 0-100 pooled scale. 100 = toughest schedule ever recorded, 0 = easiest. Descriptive only -- not folded into Power Score itself.'],
 ];
-const HIST_0_100_COLS = new Set(['score', 'rush_off_epa', 'pass_off_epa', 'rush_def_epa_allowed', 'pass_def_epa_allowed']);
+const HIST_0_100_COLS = new Set(['score', 'sos', 'rush_off_epa', 'pass_off_epa', 'rush_def_epa_allowed', 'pass_def_epa_allowed']);
 
 function fmtHistVal(key, v) {
   if (v == null) return '—';
@@ -50,7 +51,7 @@ const Historical = {
       el.innerHTML = `<div class="panel"><h2>Historical Power Rankings</h2><p class="muted">No historical data yet.</p></div>`;
       return;
     }
-    const rows = all.map(r => ({ team: r.team, season: r.season, rank: r.rank, score: r.score_display, ...r.ratings_display }));
+    const rows = all.map(r => ({ team: r.team, season: r.season, rank: r.rank, score: r.score_display, sos: r.sos_display, ...r.ratings_display }));
 
     // Sorting always runs over the FULL pooled dataset, not just the visible window -- only
     // the display is capped to the top HIST_DISPLAY_CAP of whatever order that produces, so
@@ -63,10 +64,10 @@ const Historical = {
     });
     const shown = sorted.slice(0, HIST_DISPLAY_CAP);
 
-    const header = HIST_COLS.map(([key, label]) => {
+    const header = HIST_COLS.map(([key, label, title]) => {
       const active = col === key;
       const arrow = active ? (dir === 1 ? ' ▲' : ' ▼') : '';
-      return `<th class="num"><button data-act="historical-sort" data-col="${key}" class="sort-btn${active ? ' active' : ''}">${label}${arrow}</button></th>`;
+      return `<th class="num"${title ? ` title="${esc(title)}"` : ''}><button data-act="historical-sort" data-col="${key}" class="sort-btn${active ? ' active' : ''}">${label}${arrow}</button></th>`;
     }).join('');
 
     const body = shown.map(r => `<tr>${HIST_COLS.map(([key]) =>
@@ -81,11 +82,13 @@ const Historical = {
           composite Power Score formula as the live Power Rankings tab -- but each team's own
           full-season average rather than an EWMA-decayed rolling rating, and z-scored against
           every team-season ever at once (not just that year's 32 teams), so a 2023 team and a
-          2007 team land on the exact same scale. No strength-of-schedule column here -- that
-          needs opponents' own season-long scores, which is circular within a single
-          historical pass. Showing the top ${HIST_DISPLAY_CAP} of ${all.length} by the active
-          sort — click a column to re-sort the WHOLE dataset, e.g. sort Pass Defense ascending
-          to surface the worst pass defenses of the era, not just this week's.</p>
+          2007 team land on the exact same scale. SOS is each team's opponents' own season-long
+          Power Scores averaged together -- safe to compute directly here since full-season
+          scores are already fully known, unlike the live tab's point-in-time rating. Team codes
+          reflect the team that season (e.g. "STL" through 2015, "LAR" from 2016), not today's
+          rebrand. Showing the top ${HIST_DISPLAY_CAP} of ${all.length} by the active sort —
+          click a column to re-sort the WHOLE dataset, e.g. sort Pass Defense ascending to
+          surface the worst pass defenses of the era, not just this week's.</p>
         <table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>
       </div>`;
   },

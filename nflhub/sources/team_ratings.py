@@ -607,7 +607,33 @@ def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict
     }
 
 
-def compute_historical_season_averages(played_games: list[dict], current_season: int) -> dict[tuple[str, int], dict[str, float]]:
+# nflverse's games.csv uses the REAL contemporary team code for every season it covers --
+# STL 2007-2015, SD 2007-2016, OAK 2007-2019, then LA/LAC/LV starting the season each
+# franchise actually moved (verified directly against the live file: "STL" never appears
+# after 2015, "LA" never appears before 2016, etc.). The play-by-play files are NOT
+# consistent with that -- they retroactively relabel every St. Louis/San Diego/Oakland game
+# as LA/LAC/LV even back to 2007 (verified directly against the committed 2007 and 2010
+# parquet caches: no "STL"/"SD"/"OAK" in either, "LA"/"LAC"/"LV" in both). _phase_stats_for_
+# season() comes from the play-by-play files, so games.csv's home/away code has to be
+# normalize_team()'d (same canonical mapping, -> LAR/LAC/LV) to even FIND the matching row
+# at all -- using the raw games.csv code directly against that dict, like compute_ratings()
+# itself still does, silently drops every STL/SD/OAK-era game for both that team AND
+# whoever they played that week. Unlike that join key, the team code actually STORED below
+# is the games.csv one -- the team fans actually watched that year, not today's rebrand --
+# with only two pure-spelling fixes that apply regardless of season: nflverse spells
+# Washington "WAS" (this app uses "WSH") and the Rams "LA" from 2016 on (this app uses
+# "LAR"); neither is a relocation-era distinction, just a different abbreviation for the
+# same current team.
+_HISTORICAL_SPELLING_FIX = {"WAS": "WSH", "LA": "LAR"}
+
+
+def _historical_team_code(raw: str) -> str:
+    return _HISTORICAL_SPELLING_FIX.get(raw, raw)
+
+
+def compute_historical_season_averages(
+    played_games: list[dict], current_season: int
+) -> tuple[dict[tuple[str, int], dict[str, float]], dict[tuple[str, int], list[str]]]:
     """One row per (team, season) for every FULLY COMPLETED season in `played_games`
     (season < current_season) -- the simple, equally-weighted average of that team's own
     games THAT SEASON for each of the 8 RATING_METRICS, deliberately NOT the EWMA-decayed
@@ -618,16 +644,31 @@ def compute_historical_season_averages(played_games: list[dict], current_season:
     whatever they looked like at the specific week the rating happened to be measured.
     Reuses _phase_stats_for_season()'s own per-season parquet cache (nflhub/data/
     team_ratings/, already committed for every completed season through 2025), so this is
-    cheap -- no new downloads for any season that's already in that cache."""
+    cheap -- no new downloads for any season that's already in that cache.
+
+    Also returns `opponents`: {(team, season): [opponent_team, ...]} for every game played
+    that season -- used by historical_power_rankings() to compute a season's strength of
+    schedule as a plain second pass over already-known composite scores (see that
+    function's docstring for why that's NOT circular, unlike it first looked)."""
     by_game: dict[str, dict[str, dict]] = defaultdict(dict)
     seasons_needed = sorted({int(g["season"]) for g in played_games if int(g["season"]) < current_season})
     for season in seasons_needed:
         for row in _phase_stats_for_season(season, current_season).to_dict("records"):
-            by_game[row["game_id"]][row["team"]] = row
+            # The play-by-play files' own team code needs the same normalize_team() pass as
+            # games.csv's home/away below -- they use "LA" for the Rams even in 2007 (unlike
+            # games.csv's "STL"), so without this the join key mismatches for this one
+            # franchise even though Chargers/Raiders already match (PBP already spells those
+            # "LAC"/"LV" outright, no gap to close there).
+            try:
+                team_key = normalize_team(row["team"])
+            except UnknownTeamError:
+                continue
+            by_game[row["game_id"]][team_key] = row
 
     games_by_id = {g["game_id"]: g for g in played_games}
     sums: dict[tuple[str, int], dict[str, float]] = defaultdict(lambda: defaultdict(float))
     counts: dict[tuple[str, int], int] = defaultdict(int)
+    opponents: dict[tuple[str, int], list[str]] = defaultdict(list)
 
     for gid, teams in by_game.items():
         g = games_by_id.get(gid)
@@ -636,7 +677,11 @@ def compute_historical_season_averages(played_games: list[dict], current_season:
         season = int(g["season"])
         if season >= current_season:
             continue
-        home, away = g["home_team"], g["away_team"]
+        home_raw_code, away_raw_code = g["home_team"], g["away_team"]
+        try:
+            home, away = normalize_team(home_raw_code), normalize_team(away_raw_code)
+        except UnknownTeamError:
+            continue
         if home not in teams or away not in teams:
             continue
         try:
@@ -656,23 +701,26 @@ def compute_historical_season_averages(played_games: list[dict], current_season:
         home_raw["turnovers_def_forced"] = away_raw["turnovers_off"]
         away_raw["turnovers_def_forced"] = home_raw["turnovers_off"]
 
-        for team_code, raw in ((home, home_raw), (away, away_raw)):
-            try:
-                team = normalize_team(team_code)
-            except UnknownTeamError:
-                continue  # a relocated franchise's old code -- the current code already covers it
+        home_team = _historical_team_code(home_raw_code)
+        away_team = _historical_team_code(away_raw_code)
+        for team, opp, raw in ((home_team, away_team, home_raw), (away_team, home_team, away_raw)):
             key = (team, season)
             counts[key] += 1
+            opponents[key].append(opp)
             for m in RATING_METRICS:
                 sums[key][m] += raw[m]
 
-    return {
+    averages = {
         key: {m: round(sums[key][m] / n, 4) for m in RATING_METRICS}
         for key, n in counts.items()
     }
+    return averages, opponents
 
 
-def historical_power_rankings(team_season_avgs: dict[tuple[str, int], dict[str, float]]) -> list[dict]:
+def historical_power_rankings(
+    team_season_avgs: dict[tuple[str, int], dict[str, float]],
+    opponents: dict[tuple[str, int], list[str]] | None = None,
+) -> list[dict]:
     """Composite Power Score for every (team, season) in `team_season_avgs`, z-scored and
     ranked against the WHOLE pooled historical dataset at once -- every team-season from
     every completed year, not cross-sectionally within just that one season's 32 teams. That
@@ -682,9 +730,19 @@ def historical_power_rankings(team_season_avgs: dict[tuple[str, int], dict[str, 
     ranking (power_rankings() above); the 4 EPA columns get a fresh 0-100 scale anchored to
     THIS pooled dataset's own extremes (the best/worst full-season average ever recorded),
     analogous to team_ratings.py's module-level historical_bounds but computed from season
-    averages, not point-in-time EWMA snapshots. No SOS here -- a season's strength of
-    schedule needs opponents' own season-long composite scores, which is circular within a
-    single pass like this one; omitted rather than faked."""
+    averages, not point-in-time EWMA snapshots.
+
+    SOS (if `opponents` is given): a plain second pass, NOT an iterative/simultaneous solve
+    -- composite scores are computed first from the 8 base stats alone (no SOS input), so by
+    the time SOS is computed every opponent's score is already a known, fixed number; there
+    is no circularity to resolve. That's genuinely different from the live dashboard's own
+    SOS (EWMA-weighted, "AT THE TIME each game was played"), which has to special-case
+    causality because a team's ROLLING rating keeps changing week to week -- using an
+    opponent's end-of-season rating for a game played in week 3 would be a look-ahead. A
+    full-season average has no such evolving state to protect against: the whole point of
+    this dataset is the retrospective, fully-known season, so using opponents' own (equally
+    retrospective, equally fully-known) season scores is exactly the right comparison, not a
+    shortcut around a harder problem."""
     if len(team_season_avgs) < 4:
         return []
     z: dict[tuple, dict[str, float]] = defaultdict(dict)
@@ -703,6 +761,15 @@ def historical_power_rankings(team_season_avgs: dict[tuple[str, int], dict[str, 
         if oriented_vals:
             epa_bounds[m] = (min(oriented_vals), max(oriented_vals))
 
+    sos: dict[tuple, float] = {}
+    if opponents:
+        for key in team_season_avgs:
+            team, season = key
+            opp_scores = [scores[(opp, season)] for opp in opponents.get(key, []) if (opp, season) in scores]
+            if opp_scores:
+                sos[key] = sum(opp_scores) / len(opp_scores)
+    sos_lo, sos_hi = (min(sos.values()), max(sos.values())) if sos else (0.0, 0.0)
+
     order = sorted(scores, key=lambda k: -scores[k])
     out = []
     for i, key in enumerate(order):
@@ -720,6 +787,8 @@ def historical_power_rankings(team_season_avgs: dict[tuple[str, int], dict[str, 
             "team": team, "season": season, "rank": i + 1,
             "score": round(scores[key], 4),
             "score_display": _normalize_fixed(scores[key], composite_lo, composite_hi),
+            "sos": round(sos[key], 4) if key in sos else None,
+            "sos_display": _normalize_fixed(sos[key], sos_lo, sos_hi) if key in sos else None,
             "ratings": r, "ratings_display": ratings_display,
         })
     return out
@@ -744,8 +813,8 @@ def refresh_historical(store, force: bool = False) -> str:
     all_rows = [r for r in csv.DictReader(io.StringIO(resp.text)) if r["game_type"] == "REG"]
     played = [r for r in all_rows if r.get("result") not in ("", "NA", None) and int(r["season"]) >= FIRST_SEASON]
 
-    season_avgs = compute_historical_season_averages(played, current_season)
-    rankings = historical_power_rankings(season_avgs)
+    season_avgs, opponents = compute_historical_season_averages(played, current_season)
+    rankings = historical_power_rankings(season_avgs, opponents)
     seasons_covered = sorted({s for _, s in season_avgs})
 
     store.kv_set("historical_power_rankings", json.dumps({
