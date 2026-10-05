@@ -193,3 +193,12 @@ summary { cursor:pointer; }
 #backtest-chart { width:100%; height:520px; }
 #backtest-selected { margin-top:8px; min-height:1.2em; }
 #backtest-weekyear { width:100%; height:440px; }
+.backtest-controls { display:flex; flex-direction:column; gap:8px; margin:10px 0; }
+.backtest-control-row { display:flex; gap:16px; flex-wrap:wrap; align-items:center; }
+.backtest-control-row label { display:flex; align-items:center; gap:6px; font-size:.82rem; color:var(--dim); white-space:nowrap; }
+.backtest-control-row select { padding:3px 6px; }
+.backtest-control-row input[type="range"] { width:110px; vertical-align:middle; }
+#backtest-min-spread-val, #backtest-min-delta-val { min-width:2.6em; text-align:right; color:var(--text); }
+#backtest-cell-chip .chip { display:inline-flex; align-items:center; }
+#backtest-cell-chip button { background:transparent; border:none; color:var(--dim); font-weight:700; cursor:pointer; line-height:1; }
+#backtest-cell-chip button:hover { color:var(--text); border:none; }

@@ -25,6 +25,8 @@ const HIST_COLS = [
 ];
 const HIST_0_100_COLS = new Set(['score', 'sos', 'rush_off_epa', 'pass_off_epa', 'rush_def_epa_allowed', 'pass_def_epa_allowed']);
 const BACKTEST_OUTCOME_LABEL = { hit: 'Hit', miss: 'Miss', tie: 'Tie', push: 'Push' };
+const BACKTEST_MIN_SPREAD_MAX = 20;  // slider ceiling -- real |spread| tops out well under this
+const BACKTEST_MIN_DELTA_MAX = 2;    // slider ceiling -- real |delta| tops out well under this
 
 // r.outcome (from the backend) is always MODEL-relative. This recomputes the same hit/miss/
 // tie/push classification relative to the MARKET favorite instead, from fields already on
@@ -49,8 +51,19 @@ const Historical = {
   _shellBuilt: false,
   _scatterGenerated: null,
   _scatterFull: null,
+  _weekYearRange: null,
+
+  // Every backtest-scatter filter/display option lives here, read by _applyFilters()/
+  // _drawBacktest() -- see resetAllFilters() for the canonical default state.
   _hideAgreements: false,
-  _colorBy: 'model',
+  _colorBy: 'model',       // 'model' | 'market' -- which favorite the dot colors are graded against
+  _yAxisMode: 'delta',     // 'delta' | 'margin' -- what's actually plotted on the y-axis
+  _teamFilter: '',         // '' = all teams, else a team code that must appear as home or away
+  _minSpread: 0,           // only show |spread| >= this
+  _minDelta: 0,            // only show |delta| >= this
+  _seasonFrom: null, _seasonTo: null,  // null = unbounded on that side
+  _weekFrom: null, _weekTo: null,
+  _cellFilter: null,       // { season, week } set by clicking the heatmap below, or null
 
   sortBy(col) {
     if (this._sort.col === col) this._sort.dir *= -1;
@@ -67,16 +80,82 @@ const Historical = {
     if (btn) btn.textContent = this._hideAgreements
       ? 'Show all games'
       : 'Hide games where market & model agreed';
-    if (this._scatterFull) this._drawBacktest(this._scatterFull);
+    this._redraw();
   },
 
-  // Which side's win/loss the dot colors represent -- the geometry (spread vs. delta) never
-  // changes, only which favorite each point is graded against.
+  // Which side's win/loss the dot colors represent -- the geometry (spread vs. delta/margin)
+  // never changes, only which favorite each point is graded against.
   toggleColorBy() {
     this._colorBy = this._colorBy === 'model' ? 'market' : 'model';
     const btn = document.getElementById('backtest-colorby-toggle');
     if (btn) btn.textContent = `Color by: ${this._colorBy === 'model' ? "model's picks" : "market's picks"}`;
-    if (this._scatterFull) this._drawBacktest(this._scatterFull);
+    this._redraw();
+  },
+
+  setYAxisMode(mode) { this._yAxisMode = mode; this._redraw(); },
+  setTeamFilter(team) { this._teamFilter = team; this._redraw(); },
+
+  setSeasonRange(from, to) {
+    this._seasonFrom = from === '' ? null : Number(from);
+    this._seasonTo = to === '' ? null : Number(to);
+    this._redraw();
+  },
+  setWeekRange(from, to) {
+    this._weekFrom = from === '' ? null : Number(from);
+    this._weekTo = to === '' ? null : Number(to);
+    this._redraw();
+  },
+
+  setMinSpread(v) {
+    this._minSpread = Number(v);
+    const lbl = document.getElementById('backtest-min-spread-val');
+    if (lbl) lbl.textContent = this._minSpread.toFixed(1);
+    this._redraw();
+  },
+  setMinDelta(v) {
+    this._minDelta = Number(v);
+    const lbl = document.getElementById('backtest-min-delta-val');
+    if (lbl) lbl.textContent = this._minDelta.toFixed(2);
+    this._redraw();
+  },
+
+  // Set by clicking a cell in the season/week heatmap below the scatter (cross-filter);
+  // cleared by the × on its chip or by Reset all filters.
+  setCellFilter(season, week) { this._cellFilter = { season, week }; this._redraw(); },
+  clearCellFilter() { this._cellFilter = null; this._redraw(); },
+
+  resetAllFilters() {
+    this._hideAgreements = false;
+    this._colorBy = 'model';
+    this._yAxisMode = 'delta';
+    this._teamFilter = '';
+    this._minSpread = 0;
+    this._minDelta = 0;
+    this._seasonFrom = null; this._seasonTo = null;
+    this._weekFrom = null; this._weekTo = null;
+    this._cellFilter = null;
+    this._syncControlsToState();
+    this._redraw();
+  },
+
+  _redraw() { if (this._scatterFull) this._drawBacktest(this._scatterFull); },
+
+  // Pushes current state back into the control DOM elements -- only needed after
+  // resetAllFilters(), since every other setter is driven BY a control's own event and
+  // already reflects what the user just did.
+  _syncControlsToState() {
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+    const text = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+    const agreeBtn = document.getElementById('backtest-agree-toggle');
+    if (agreeBtn) agreeBtn.textContent = 'Hide games where market & model agreed';
+    const colorBtn = document.getElementById('backtest-colorby-toggle');
+    if (colorBtn) colorBtn.textContent = "Color by: model's picks";
+    set('backtest-yaxis-select', 'delta');
+    set('backtest-team-filter', '');
+    set('backtest-min-spread', 0); text('backtest-min-spread-val', '0.0');
+    set('backtest-min-delta', 0); text('backtest-min-delta-val', '0.00');
+    set('backtest-season-from', ''); set('backtest-season-to', '');
+    set('backtest-week-from', ''); set('backtest-week-to', '');
   },
 
   render(ctx) {
@@ -90,11 +169,29 @@ const Historical = {
       return;
     }
 
-    // Shell (table container + chart container) is built ONCE -- rebuilding it every sort
-    // click or 90s auto-reload would tear down the Plotly chart underneath it, resetting any
-    // zoom/pan the user had. Only the table's own innerHTML gets replaced on every render.
+    // Shell (table container + chart controls/containers) is built ONCE -- rebuilding it
+    // every sort click or 90s auto-reload would tear down the Plotly charts underneath it,
+    // resetting any zoom/pan the user had, and re-wiring every control's listeners again.
+    // Only the table's own innerHTML gets replaced on every render.
     if (!this._shellBuilt) {
       const firstSeason = data.seasons[0], lastSeason = data.seasons[data.seasons.length - 1];
+      const scatter = data.backtest_scatter || [];
+      const seasonOpts = [];
+      const weekOpts = [];
+      const teamOpts = [];
+      if (scatter.length) {
+        const seasonLo = Math.min(...scatter.map(r => r.season)), seasonHi = Math.max(...scatter.map(r => r.season));
+        const weekLo = Math.min(...scatter.map(r => r.week)), weekHi = Math.max(...scatter.map(r => r.week));
+        this._weekYearRange = {
+          seasons: Array.from({ length: seasonHi - seasonLo + 1 }, (_, i) => seasonLo + i),
+          weeks: Array.from({ length: weekHi - weekLo + 1 }, (_, i) => weekLo + i),
+        };
+        this._weekYearRange.seasons.forEach(s => seasonOpts.push(`<option value="${s}">${s}</option>`));
+        this._weekYearRange.weeks.forEach(w => weekOpts.push(`<option value="${w}">${w}</option>`));
+        const teams = Array.from(new Set(scatter.flatMap(r => [r.home, r.away]))).sort();
+        teams.forEach(t => teamOpts.push(`<option value="${esc(t)}">${esc(t)}</option>`));
+      }
+
       el.innerHTML = `
         <div class="panel">
           <h2>Historical Power Rankings</h2>
@@ -119,22 +216,52 @@ const Historical = {
             rating). Positive = home favored by that measure.
             <span class="result-good">Green</span>/<span class="result-bad">red</span>/
             <span class="chip warn" style="padding:1px 7px;">amber</span> = the currently
-            selected side's favorite won / lost / the game tied -- toggle which side below.
-            Scroll/drag to zoom, hover a point for details, click to pin it below.</p>
-          <div class="btns" style="margin-bottom:8px; flex-wrap:wrap;">
-            <button data-act="historical-toggle-agree" id="backtest-agree-toggle">Hide games where market &amp; model agreed</button>
-            <button data-act="historical-toggle-colorby" id="backtest-colorby-toggle">Color by: model's picks</button>
-            <span id="backtest-agree-stat" class="muted small"></span>
+            selected side's favorite won / lost / the game tied. Scroll/drag to zoom, hover a
+            point for details, click to pin it below.</p>
+
+          <div class="backtest-controls">
+            <div class="backtest-control-row">
+              <button data-act="historical-toggle-agree" id="backtest-agree-toggle">Hide games where market &amp; model agreed</button>
+              <button data-act="historical-toggle-colorby" id="backtest-colorby-toggle">Color by: model's picks</button>
+              <button data-act="historical-reset-filters">Reset all filters</button>
+            </div>
+            <div class="backtest-control-row">
+              <label>Seasons
+                <select id="backtest-season-from"><option value="">any</option>${seasonOpts.join('')}</select>
+                to
+                <select id="backtest-season-to"><option value="">any</option>${seasonOpts.join('')}</select>
+              </label>
+              <label>Weeks
+                <select id="backtest-week-from"><option value="">any</option>${weekOpts.join('')}</select>
+                to
+                <select id="backtest-week-to"><option value="">any</option>${weekOpts.join('')}</select>
+              </label>
+              <label>Team <select id="backtest-team-filter"><option value="">All teams</option>${teamOpts.join('')}</select></label>
+            </div>
+            <div class="backtest-control-row">
+              <label>Min |spread| <input type="range" id="backtest-min-spread" min="0" max="${BACKTEST_MIN_SPREAD_MAX}" step="0.5" value="0"><span id="backtest-min-spread-val" class="num">0.0</span></label>
+              <label>Min |model &Delta;| <input type="range" id="backtest-min-delta" min="0" max="${BACKTEST_MIN_DELTA_MAX}" step="0.05" value="0"><span id="backtest-min-delta-val" class="num">0.00</span></label>
+              <label>Y-axis <select id="backtest-yaxis-select">
+                <option value="delta">Power ranking delta</option>
+                <option value="margin">Actual margin of victory</option>
+              </select></label>
+            </div>
+            <div class="backtest-control-row">
+              <span id="backtest-agree-stat" class="muted small"></span>
+              <span id="backtest-cell-chip"></span>
+            </div>
           </div>
+
           <div id="backtest-chart"></div>
           <div id="backtest-selected" class="muted small"></div>
           <h2 style="margin-top:18px;">When those games happened</h2>
-          <p class="muted small">Count of the games shown above, by season and week -- follows
-            the agree/disagree toggle automatically, so this always reflects whatever's
-            currently plotted, not the full dataset.</p>
+          <p class="muted small">Count of the games currently shown above, by season and week --
+            every filter and toggle above applies here automatically, and clicking a cell here
+            filters the scatter down to just that season/week (clear it with the chip above).</p>
           <div id="backtest-weekyear"></div>
         </div>`;
       this._shellBuilt = true;
+      this._wireBacktestControls();
     }
 
     const rows = all.map(r => ({ team: r.team, season: r.season, rank: r.rank, score: r.score_display, sos: r.sos_display, ...r.ratings_display }));
@@ -169,14 +296,59 @@ const Historical = {
     }
   },
 
+  // Wired exactly once, right where these elements are created -- the shell (and these
+  // controls) only exist for one `_shellBuilt` lifetime, independent of how many times the
+  // underlying dataset itself gets (re)rendered.
+  _wireBacktestControls() {
+    const on = (id, evt, fn) => { const el = document.getElementById(id); if (el) el.addEventListener(evt, fn); };
+    const seasonFrom = () => document.getElementById('backtest-season-from').value;
+    const seasonTo = () => document.getElementById('backtest-season-to').value;
+    const weekFrom = () => document.getElementById('backtest-week-from').value;
+    const weekTo = () => document.getElementById('backtest-week-to').value;
+    on('backtest-season-from', 'change', () => this.setSeasonRange(seasonFrom(), seasonTo()));
+    on('backtest-season-to', 'change', () => this.setSeasonRange(seasonFrom(), seasonTo()));
+    on('backtest-week-from', 'change', () => this.setWeekRange(weekFrom(), weekTo()));
+    on('backtest-week-to', 'change', () => this.setWeekRange(weekFrom(), weekTo()));
+    on('backtest-team-filter', 'change', e => this.setTeamFilter(e.target.value));
+    on('backtest-min-spread', 'input', e => this.setMinSpread(e.target.value));
+    on('backtest-min-delta', 'input', e => this.setMinDelta(e.target.value));
+    on('backtest-yaxis-select', 'change', e => this.setYAxisMode(e.target.value));
+  },
+
+  // Every active filter composes via AND. Order doesn't affect the result, only performance
+  // (cheap either way at ~5k rows), so it just reads top-to-bottom as the controls do.
+  _applyFilters(scatter) {
+    let rows = scatter;
+    if (this._seasonFrom != null) rows = rows.filter(r => r.season >= this._seasonFrom);
+    if (this._seasonTo != null) rows = rows.filter(r => r.season <= this._seasonTo);
+    if (this._weekFrom != null) rows = rows.filter(r => r.week >= this._weekFrom);
+    if (this._weekTo != null) rows = rows.filter(r => r.week <= this._weekTo);
+    if (this._teamFilter) rows = rows.filter(r => r.home === this._teamFilter || r.away === this._teamFilter);
+    if (this._minSpread > 0) rows = rows.filter(r => Math.abs(r.spread) >= this._minSpread);
+    if (this._minDelta > 0) rows = rows.filter(r => Math.abs(r.delta) >= this._minDelta);
+    // "Agreement" = market and model favor the same side (spread and delta share a sign).
+    if (this._hideAgreements) rows = rows.filter(r => r.spread * r.delta <= 0);
+    if (this._cellFilter) rows = rows.filter(r => r.season === this._cellFilter.season && r.week === this._cellFilter.week);
+    return rows;
+  },
+
+  _renderCellFilterChip() {
+    const el = document.getElementById('backtest-cell-chip');
+    if (!el) return;
+    if (!this._cellFilter) { el.innerHTML = ''; return; }
+    el.innerHTML = `<span class="chip">Season ${this._cellFilter.season}, wk ${this._cellFilter.week} ` +
+      `<button data-act="historical-clear-cell" style="margin-left:6px; padding:0 6px;">&times;</button></span>`;
+  },
+
   // Market-favorite-won %, over just the games shown when "hide agreements" is on (i.e. the
   // games where market and model picked opposite sides) -- the only games where one of them
   // could have been righter than the other. Excludes spread === 0 (no market favorite to
-  // grade) and tie/push outcomes.
+  // grade) and tie/push outcomes. Reflects every OTHER active filter too, since it's computed
+  // from `shown`, not the raw dataset.
   _renderAgreeStat(shown) {
     const el = document.getElementById('backtest-agree-stat');
     if (!el) return;
-    if (!this._hideAgreements) { el.textContent = ''; return; }
+    if (!this._hideAgreements) { el.textContent = `${shown.length} games shown.`; return; }
     const decided = shown.filter(r => (r.outcome === 'hit' || r.outcome === 'miss') && r.spread !== 0);
     if (!decided.length) { el.textContent = `${shown.length} games shown.`; return; }
     const marketRight = decided.filter(r => (r.spread > 0) === (r.home_score > r.away_score)).length;
@@ -194,24 +366,27 @@ const Historical = {
       hit: cssVar('--good'), miss: cssVar('--bad'), tie: cssVar('--warn'), accent: cssVar('--accent'),
     };
 
-    // "Agreement" = market and model favor the same side (spread and delta share a sign).
-    // Hiding those isolates the only games where the market and the model could have
-    // actually differed on the winner.
-    const shown = this._hideAgreements ? scatter.filter(r => r.spread * r.delta <= 0) : scatter;
+    const shown = this._applyFilters(scatter);
     this._renderAgreeStat(shown);
+    this._renderCellFilterChip();
 
     // Color mode only changes which favorite each point is graded against for coloring --
-    // the geometry (spread vs. delta) and the agreement filter above are unaffected.
+    // the geometry and every filter above are unaffected.
     const colorOf = this._colorBy === 'market' ? marketOutcome : r => r.outcome;
     const groups = { hit: [], miss: [], tie: [], push: [] };
     shown.forEach(r => groups[colorOf(r)].push(r));
+
+    const marginMode = this._yAxisMode === 'margin';
+    const yOf = marginMode ? (r => r.home_score - r.away_score) : (r => r.delta);
+    const yTitle = marginMode ? 'Actual margin → home won by' : 'Power ranking Δ → home favored';
+    const yHover = marginMode ? 'Margin %{y:+.0f}' : 'Model Δ %{y:+.2f}';
 
     const traces = ['hit', 'miss', 'tie'].filter(k => groups[k].length).map(key => {
       const pts = groups[key];
       return {
         name: `${BACKTEST_OUTCOME_LABEL[key]} (${pts.length})`,
         x: pts.map(r => r.spread),
-        y: pts.map(r => r.delta),
+        y: pts.map(yOf),
         customdata: pts.map(r => [r.date, r.away, r.home, r.away_score, r.home_score, r.season, r.week, BACKTEST_OUTCOME_LABEL[key]]),
         mode: 'markers',
         type: 'scattergl',
@@ -220,7 +395,7 @@ const Historical = {
           '<b>%{customdata[1]} @ %{customdata[2]}</b><br>' +
           '%{customdata[0]} (wk %{customdata[6]}, %{customdata[5]})<br>' +
           'Final: %{customdata[1]} %{customdata[3]} – %{customdata[2]} %{customdata[4]}<br>' +
-          'Spread %{x:+.1f} · Model Δ %{y:+.2f} · %{customdata[7]}' +
+          'Spread %{x:+.1f} · ' + yHover + ' · %{customdata[7]}' +
           '<extra></extra>',
       };
     });
@@ -231,19 +406,19 @@ const Historical = {
     };
     const layout = {
       autosize: true,
-      margin: { l: 52, r: 16, t: 8, b: 48 },
+      margin: { l: 56, r: 16, t: 8, b: 48 },
       paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
       font: { color: colors.text, size: 12 },
       xaxis: Object.assign({ title: { text: 'Market spread → home favored' } }, axisCommon),
-      yaxis: Object.assign({ title: { text: 'Power ranking Δ → home favored' } }, axisCommon),
+      yaxis: Object.assign({ title: { text: yTitle } }, axisCommon),
       legend: { orientation: 'h', x: 0, y: 1.08, font: { color: colors.text, size: 12 } },
       hoverlabel: { bgcolor: colors.panel, bordercolor: colors.line, font: { color: colors.text, size: 12 } },
       dragmode: 'zoom',
     };
 
     // react(), not newPlot(), even on the first call -- it's a safe drop-in that also
-    // preserves the user's current zoom/pan on later calls (e.g. toggling the button)
-    // instead of resetting the view every time.
+    // preserves the user's current zoom/pan on later calls (e.g. toggling a filter) instead
+    // of resetting the view every time.
     Plotly.react('backtest-chart', traces, layout, {
       responsive: true, scrollZoom: true, displaylogo: false,
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
@@ -252,11 +427,12 @@ const Historical = {
     this._drawWeekYearDist(shown, colors);
   },
 
-  // Season x week heatmap of `shown` -- always the SAME agree/disagree-toggled set the
-  // scatter above is currently plotting, recomputed from scratch alongside it so the two
-  // can never fall out of sync. Axis ranges are fixed to the FULL dataset's own season/week
-  // span (captured once in _renderBacktestChart), not to whatever's currently shown, so
-  // toggling doesn't make the grid itself jump around -- only the counts inside it change.
+  // Season x week heatmap of `shown` -- always the SAME fully-filtered set the scatter above
+  // is currently plotting, recomputed alongside it every time so the two can never fall out
+  // of sync. Axis ranges are fixed to the FULL dataset's own season/week span (captured once
+  // in render()), not to whatever's currently shown, so filtering doesn't make the grid
+  // itself resize -- only the counts (and which cells go to zero) change, which is exactly
+  // what makes a season/week range filter visually confirm itself here.
   _drawWeekYearDist(shown, colors) {
     const { seasons, weeks } = this._weekYearRange;
     const counts = seasons.map(() => weeks.map(() => 0));
@@ -287,14 +463,6 @@ const Historical = {
 
   _renderBacktestChart(scatter) {
     this._scatterFull = scatter;
-    // Fixed once, from the FULL dataset -- the week/year grid's own axes shouldn't resize
-    // every time the agree/disagree toggle changes which cells have counts in them.
-    const seasonLo = Math.min(...scatter.map(r => r.season)), seasonHi = Math.max(...scatter.map(r => r.season));
-    const weekLo = Math.min(...scatter.map(r => r.week)), weekHi = Math.max(...scatter.map(r => r.week));
-    this._weekYearRange = {
-      seasons: Array.from({ length: seasonHi - seasonLo + 1 }, (_, i) => seasonLo + i),
-      weeks: Array.from({ length: weekHi - weekLo + 1 }, (_, i) => weekLo + i),
-    };
     const panel = document.getElementById('backtest-panel');
     panel.hidden = false;
     this._drawBacktest(scatter);
@@ -311,6 +479,14 @@ const Historical = {
       document.getElementById('backtest-selected').innerHTML =
         `<strong>${esc(away)} ${awayScore} @ ${esc(home)} ${homeScore}</strong> — ${esc(dateStr)}, ` +
         `${season} wk ${week} — <span class="${cls}">${esc(label)}</span>`;
+    });
+
+    // Cross-filter: clicking a cell in the week/year heatmap narrows the scatter (and the
+    // heatmap itself) down to just that season/week.
+    const heatmapEl = document.getElementById('backtest-weekyear');
+    heatmapEl.on('plotly_click', ev => {
+      if (!ev.points || !ev.points[0]) return;
+      this.setCellFilter(Number(ev.points[0].y), Number(ev.points[0].x));
     });
   },
 };

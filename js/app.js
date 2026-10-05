@@ -17,6 +17,8 @@ const App = {
       if (b.dataset.act === 'historical-sort') Historical.sortBy(b.dataset.col);
       if (b.dataset.act === 'historical-toggle-agree') Historical.toggleAgreement();
       if (b.dataset.act === 'historical-toggle-colorby') Historical.toggleColorBy();
+      if (b.dataset.act === 'historical-reset-filters') Historical.resetAllFilters();
+      if (b.dataset.act === 'historical-clear-cell') Historical.clearCellFilter();
     });
     await this.reload();
     // Track the cron without a manual reload.
