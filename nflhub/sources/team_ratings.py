@@ -113,18 +113,27 @@ ORIENTATION = {
 }
 
 # Non-negative joint logistic-regression weights vs. historical home_win, L2=0.3, walk-forward
-# validated (research/edge_signal_test_v8_power_weights.py, 4436 games, 2007-2025). Apply as
+# validated (research/edge_signal_test_v13_new_window_weights.py, 4927 games, 2007-2025).
+# Re-fit here against the CURRENT season_prior-fade rating windowing (see SEASON_PRIOR_GAMES)
+# -- the original v8 fit (4436 games) used the old forever-decaying carryover mechanism,
+# a different predictor, so its weights weren't technically valid for this one. The refit
+# landed very close to the old values (same relative ranking, turnovers_def_forced again
+# optimizing to exactly 0.0) and the same best L2=0.3, so the windowing change didn't
+# meaningfully change which stats matter -- reassuring, not a coincidence worth skipping.
+# Walk-forward AUC: composite alone 0.6746, market spread alone 0.7224, both together 0.7226
+# -- same conclusion as before, just confirmed under the new windowing: doesn't beat the
+# market, and adding it to the market doesn't move the needle. Apply as
 # POWER_WEIGHTS[m] * ORIENTATION[m] * z-score -- these are all >= 0 by construction (see
 # module docstring). Recompute that script and update these if you want to refresh the fit;
 # not refit automatically.
 POWER_WEIGHTS = {
-    "rush_off_epa": 0.0772,
-    "pass_off_epa": 0.1543,
-    "rush_def_epa_allowed": 0.0791,
-    "pass_def_epa_allowed": 0.0600,
-    "points_off": 0.1603,
-    "points_def_allowed": 0.1021,
-    "turnovers_off": 0.0195,
+    "rush_off_epa": 0.0850,
+    "pass_off_epa": 0.1536,
+    "rush_def_epa_allowed": 0.0572,
+    "pass_def_epa_allowed": 0.0578,
+    "points_off": 0.1587,
+    "points_def_allowed": 0.1006,
+    "turnovers_off": 0.0217,
     "turnovers_def_forced": 0.0000,
 }
 
@@ -942,9 +951,11 @@ def refresh(store, force: bool = False) -> str:
         "power_ranking_meta": {
             "method": "L2-regularized (L2=0.3) logistic regression, coefficients constrained "
                       ">= 0, jointly fit across all 8 stats at once against real game outcomes "
-                      "(2007-2025, 4436 games), chosen by walk-forward out-of-sample validation "
-                      "-- not an in-sample fit. Does not beat the closing market spread at "
-                      "predicting winners; shown as descriptive context only.",
+                      "(2007-2025, 4927 games), chosen by walk-forward out-of-sample validation "
+                      "-- not an in-sample fit, and re-fit against this rating's own season-"
+                      "prior-fade windowing (not the old forever-decaying one). Walk-forward "
+                      "AUC 0.6746 vs. 0.7224 for the closing market spread alone -- does not "
+                      "beat the market at predicting winners; shown as descriptive context only.",
             "weights": {m: round(POWER_WEIGHTS[m] * ORIENTATION[m], 4) for m in RATING_METRICS},
         },
     }))
