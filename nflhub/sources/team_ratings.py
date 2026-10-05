@@ -306,11 +306,23 @@ def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict
     observed at any point in the replayed history, used to anchor the fixed 0-100 display
     scale (see module docstring) instead of a per-season min/max that would make a mediocre
     season's best team look inflated."""
+    # Both sides of this join need normalize_team(): the play-by-play files (the source of
+    # `teams` below) retroactively relabel relocated franchises as LA/LAC/LV for every
+    # season back to 2007, while games.csv's home/away columns correctly use the
+    # contemporary code (STL/SD/OAK) for those years -- joining on the raw codes silently
+    # dropped every St. Louis/San Diego/Oakland-era game entirely, for that team AND
+    # whoever they played that week (same bug found and fixed in
+    # compute_historical_season_averages(); see that function's comment for the full
+    # verification against the committed parquet caches).
     by_game: dict[str, dict[str, dict]] = defaultdict(dict)
     seasons_needed = sorted({int(g["season"]) for g in played_games})
     for season in seasons_needed:
         for row in _phase_stats_for_season(season, current_season).to_dict("records"):
-            by_game[row["game_id"]][row["team"]] = row
+            try:
+                team_key = normalize_team(row["team"])
+            except UnknownTeamError:
+                continue
+            by_game[row["game_id"]][team_key] = row
 
     games_by_id = {g["game_id"]: g for g in played_games}
     running_mean = {"rush_off_epa": _RunningMean(), "pass_off_epa": _RunningMean()}
@@ -335,7 +347,10 @@ def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict
         if not g or len(teams) != 2:
             continue
         season = int(g["season"])
-        home, away = g["home_team"], g["away_team"]
+        try:
+            home, away = normalize_team(g["home_team"]), normalize_team(g["away_team"])
+        except UnknownTeamError:
+            continue
         if home not in teams or away not in teams:
             continue
         try:
