@@ -192,3 +192,4 @@ summary { cursor:pointer; }
 
 #backtest-chart { width:100%; height:520px; }
 #backtest-selected { margin-top:8px; min-height:1.2em; }
+#backtest-weekyear { width:100%; height:440px; }

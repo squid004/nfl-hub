@@ -106,6 +106,11 @@ const Historical = {
           </div>
           <div id="backtest-chart"></div>
           <div id="backtest-selected" class="muted small"></div>
+          <h2 style="margin-top:18px;">When those games happened</h2>
+          <p class="muted small">Count of the games shown above, by season and week -- follows
+            the agree/disagree toggle automatically, so this always reflects whatever's
+            currently plotted, not the full dataset.</p>
+          <div id="backtest-weekyear"></div>
         </div>`;
       this._shellBuilt = true;
     }
@@ -164,7 +169,7 @@ const Historical = {
     const cssVar = name => cs.getPropertyValue(name).trim();
     const colors = {
       text: cssVar('--text'), dim: cssVar('--dim'), line: cssVar('--line'), panel: cssVar('--panel2'),
-      hit: cssVar('--good'), miss: cssVar('--bad'), tie: cssVar('--warn'),
+      hit: cssVar('--good'), miss: cssVar('--bad'), tie: cssVar('--warn'), accent: cssVar('--accent'),
     };
 
     // "Agreement" = market and model favor the same side (spread and delta share a sign).
@@ -218,10 +223,53 @@ const Historical = {
       responsive: true, scrollZoom: true, displaylogo: false,
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
     });
+
+    this._drawWeekYearDist(shown, colors);
+  },
+
+  // Season x week heatmap of `shown` -- always the SAME agree/disagree-toggled set the
+  // scatter above is currently plotting, recomputed from scratch alongside it so the two
+  // can never fall out of sync. Axis ranges are fixed to the FULL dataset's own season/week
+  // span (captured once in _renderBacktestChart), not to whatever's currently shown, so
+  // toggling doesn't make the grid itself jump around -- only the counts inside it change.
+  _drawWeekYearDist(shown, colors) {
+    const { seasons, weeks } = this._weekYearRange;
+    const counts = seasons.map(() => weeks.map(() => 0));
+    const seasonIdx = new Map(seasons.map((s, i) => [s, i]));
+    const weekIdx = new Map(weeks.map((w, i) => [w, i]));
+    shown.forEach(r => {
+      const si = seasonIdx.get(r.season), wi = weekIdx.get(r.week);
+      if (si != null && wi != null) counts[si][wi]++;
+    });
+
+    Plotly.react('backtest-weekyear', [{
+      type: 'heatmap',
+      x: weeks, y: seasons, z: counts,
+      colorscale: [[0, colors.panel], [1, colors.accent]],
+      showscale: true,
+      colorbar: { tickfont: { color: colors.dim, size: 10 }, outlinewidth: 0, len: 1 },
+      hovertemplate: 'Season %{y}, week %{x}: %{z} game(s)<extra></extra>',
+      xgap: 2, ygap: 2,
+    }], {
+      autosize: true,
+      margin: { l: 52, r: 16, t: 8, b: 40 },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+      font: { color: colors.text, size: 12 },
+      xaxis: { title: { text: 'NFL week' }, dtick: 1, color: colors.dim, tickfont: { size: 11 } },
+      yaxis: { title: { text: 'Season' }, dtick: 1, color: colors.dim, tickfont: { size: 11 }, autorange: 'reversed' },
+    }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] });
   },
 
   _renderBacktestChart(scatter) {
     this._scatterFull = scatter;
+    // Fixed once, from the FULL dataset -- the week/year grid's own axes shouldn't resize
+    // every time the agree/disagree toggle changes which cells have counts in them.
+    const seasonLo = Math.min(...scatter.map(r => r.season)), seasonHi = Math.max(...scatter.map(r => r.season));
+    const weekLo = Math.min(...scatter.map(r => r.week)), weekHi = Math.max(...scatter.map(r => r.week));
+    this._weekYearRange = {
+      seasons: Array.from({ length: seasonHi - seasonLo + 1 }, (_, i) => seasonLo + i),
+      weeks: Array.from({ length: weekHi - weekLo + 1 }, (_, i) => weekLo + i),
+    };
     const panel = document.getElementById('backtest-panel');
     panel.hidden = false;
     this._drawBacktest(scatter);
