@@ -8,13 +8,18 @@ Ported from research/*.py in this repo, where the methodology was validated: wal
 backtesting (2007-2025) showed none of these, alone or combined, beats the closing market
 spread at predicting winners (see research/output/ and the AUC comparisons in
 research/edge_signal_test*.py). They're stored as descriptive context for pool decisions and
-as inputs to the power ranking below, not a betting model.
+as inputs to the power ranking below, not a betting model. NOTE: that backtest validated the
+OLD season-boundary mechanism (every research/edge_signal_test*.py script still carries its
+own CARRYOVER=0.65 regression-to-league-mean, unchanged) -- compute_ratings() below now uses
+a different, more aggressive forgetting rule (see SEASON_PRIOR_GAMES) that hasn't itself been
+re-backtested. The "doesn't beat the market" finding is unlikely to flip (if anything a
+faster-forgetting rating is more responsive, not less), but it's not literally re-validated.
 
 Strength of schedule (`sos` in compute_ratings' output): an EWMA-weighted average of each
-opponent's OWN composite power score at the time that specific game was played, with the same
-decay/season-carryover as every other rating here -- older opponents count for less, exactly
-like older games do for a team's own ratings. Purely descriptive, not folded into the
-composite score itself.
+opponent's OWN composite power score at the time that specific game was played, fading out
+the SAME way every other rating here does at a season boundary -- last season's SOS is this
+season's starting prior, gone entirely (not just diluted) by SEASON_PRIOR_GAMES games into
+the new season. Purely descriptive, not folded into the composite score itself.
 
 Power ranking: a single composite score per team, `POWER_WEIGHTS[m] * ORIENTATION[m] *
 z-score(team, m)` summed across all 8 stats. Weights come from ONE joint model across all 8
@@ -72,7 +77,15 @@ PBP_URL = "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_
 TIMEOUT = 30
 FIRST_SEASON = 2007
 EWMA_ALPHA = 0.2  # ~4-game half-life; reused convention, not independently tuned
-CARRYOVER = 0.65  # season-boundary regression-to-mean weight (matches ELWAY_BLEND_WEIGHT elsewhere)
+# A new season's rating starts as last season's own ending rating (NOT a multi-generation
+# blend that still carries a sliver of every season back to 2007 forever, which is what the
+# old league-mean-regression carryover did -- a decade-old season should have ZERO path to
+# this year's rating once last season is itself fully behind us, not just an ever-shrinking
+# nonzero weight). That prior fades out linearly as this season's own games accumulate,
+# reaching exactly zero weight once SEASON_PRIOR_GAMES have been played -- "the sample size
+# is too small to trust yet" is a real, finite problem (solved by ~5 games), not a reason to
+# keep leaning on history forever.
+SEASON_PRIOR_GAMES = 5
 WP_LO, WP_HI = 0.05, 0.95  # garbage-time filter: drop plays outside this win-probability band
 RATING_METRICS = (
     "rush_off_epa", "pass_off_epa", "rush_def_epa_allowed", "pass_def_epa_allowed",
@@ -286,18 +299,6 @@ def _phase_stats_for_season(season: int, current_season: int) -> pd.DataFrame:
     return out.dropna(subset=["rush_off_epa", "pass_off_epa"])
 
 
-class _RunningMean:
-    """Online mean over data seen so far only -- safe as a season-boundary regression target
-    with no look-ahead."""
-
-    def __init__(self) -> None:
-        self.n, self.mean = 0, 0.0
-
-    def update(self, x: float) -> None:
-        self.n += 1
-        self.mean += (x - self.mean) / self.n
-
-
 def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict[str, dict[str, float]], dict[str, tuple[float, float]]]:
     """`played_games`: nflverse games.csv REG rows with a result, any seasons needed.
     Returns ({team: {metric: rating}} as of the most recent game passed in, historical_bounds)
@@ -325,18 +326,20 @@ def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict
             by_game[row["game_id"]][team_key] = row
 
     games_by_id = {g["game_id"]: g for g in played_games}
-    running_mean = {"rush_off_epa": _RunningMean(), "pass_off_epa": _RunningMean()}
 
-    running_mean.update({"points_off": _RunningMean(), "turnovers_off": _RunningMean()})
-    running_mean["opp_composite"] = _RunningMean()  # league-average opponent strength, for SOS's own season-boundary carryover
-
-    def league_mean(metric: str) -> float:
-        base = metric.replace("_def_epa_allowed", "_off_epa") \
-            .replace("_def_allowed", "_off").replace("_def_forced", "_off")
-        return running_mean[base].mean
-
+    # `rating`/`sos` are the BLENDED values everything else reads (bounds tracking, SOS
+    # opponent lookups, the final return value) -- a mix of last season's own ending value
+    # (season_prior/sos_prior, frozen at the moment a new season starts) and this season's
+    # own EWMA so far (season_ewma/sos_ewma, reset to None at every season boundary, so it
+    # NEVER carries anything from two or more seasons back). See SEASON_PRIOR_GAMES above
+    # for the fade-out schedule.
     rating: dict[str, dict] = defaultdict(lambda: {m: None for m in RATING_METRICS})
+    season_ewma: dict[str, dict] = defaultdict(lambda: {m: None for m in RATING_METRICS})
+    season_prior: dict[str, dict] = defaultdict(lambda: {m: None for m in RATING_METRICS})
     sos: dict[str, float | None] = defaultdict(lambda: None)
+    sos_ewma: dict[str, float | None] = defaultdict(lambda: None)
+    sos_prior: dict[str, float | None] = defaultdict(lambda: None)
+    games_played: dict[str, int] = defaultdict(int)
     last_season: dict[str, int] = {}
     epa_bounds = {m: [float("inf"), float("-inf")] for m in EPA_DISPLAY_METRICS}
     composite_bounds = [float("inf"), float("-inf")]
@@ -370,17 +373,22 @@ def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict
         home_raw["turnovers_def_forced"] = away_raw["turnovers_off"]
         away_raw["turnovers_def_forced"] = home_raw["turnovers_off"]
 
+        # Season boundary: freeze whatever season_ewma/sos_ewma ended the PREVIOUS season at
+        # as this new season's starting prior, then reset them to None -- a team's rating
+        # two or more seasons back has no path into season_prior at all, by construction.
+        # prior_w is computed here (not per-metric below) so the SOS blend and the rating
+        # blend for this exact game use the identical fade schedule.
+        prior_w: dict[str, float] = {}
         for team in (home, away):
             if last_season.get(team) is not None and last_season[team] != season:
-                for m in RATING_METRICS:
-                    r = rating[team][m]
-                    if r is not None:
-                        lm = league_mean(m)
-                        rating[team][m] = lm + CARRYOVER * (r - lm)
-                if sos[team] is not None:
-                    lm = running_mean["opp_composite"].mean
-                    sos[team] = lm + CARRYOVER * (sos[team] - lm)
+                season_prior[team] = dict(season_ewma[team])
+                season_ewma[team] = {m: None for m in RATING_METRICS}
+                sos_prior[team] = sos_ewma[team]
+                sos_ewma[team] = None
+                games_played[team] = 0
             last_season[team] = season
+            games_played[team] += 1
+            prior_w[team] = max(0.0, (SEASON_PRIOR_GAMES - games_played[team]) / SEASON_PRIOR_GAMES)
 
         # Cross-sectional composite-score snapshot of the league as it stood right BEFORE this
         # game (i.e. not yet touched by either team's result today) -- used to (a) feed each
@@ -403,23 +411,27 @@ def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict
             pre_home_score, pre_away_score = composite_snap.get(home), composite_snap.get(away)
 
         if pre_away_score is not None:
-            sos[home] = pre_away_score if sos[home] is None else (1 - EWMA_ALPHA) * sos[home] + EWMA_ALPHA * pre_away_score
-            running_mean["opp_composite"].update(pre_away_score)
+            prev = sos_ewma[home]
+            sos_ewma[home] = pre_away_score if prev is None else (1 - EWMA_ALPHA) * prev + EWMA_ALPHA * pre_away_score
         if pre_home_score is not None:
-            sos[away] = pre_home_score if sos[away] is None else (1 - EWMA_ALPHA) * sos[away] + EWMA_ALPHA * pre_home_score
-            running_mean["opp_composite"].update(pre_home_score)
+            prev = sos_ewma[away]
+            sos_ewma[away] = pre_home_score if prev is None else (1 - EWMA_ALPHA) * prev + EWMA_ALPHA * pre_home_score
         for team in (home, away):
+            pv, ev = sos_prior[team], sos_ewma[team]
+            sos[team] = (prior_w[team] * pv + (1 - prior_w[team]) * ev) if (pv is not None and ev is not None) else ev
             if sos[team] is not None:
                 if sos[team] < sos_bounds[0]: sos_bounds[0] = sos[team]
                 if sos[team] > sos_bounds[1]: sos_bounds[1] = sos[team]
 
-        for m in ("rush_off_epa", "pass_off_epa", "points_off", "turnovers_off"):
-            running_mean[m].update(home_raw[m])
-            running_mean[m].update(away_raw[m])
         for team, raw in ((home, home_raw), (away, away_raw)):
             for m in RATING_METRICS:
-                prev = rating[team][m]
-                rating[team][m] = raw[m] if prev is None else (1 - EWMA_ALPHA) * prev + EWMA_ALPHA * raw[m]
+                prev = season_ewma[team][m]
+                season_ewma[team][m] = raw[m] if prev is None else (1 - EWMA_ALPHA) * prev + EWMA_ALPHA * raw[m]
+                prior_val = season_prior[team].get(m)
+                rating[team][m] = (
+                    prior_w[team] * prior_val + (1 - prior_w[team]) * season_ewma[team][m]
+                    if prior_val is not None else season_ewma[team][m]
+                )
                 if m in epa_bounds:
                     oriented = ORIENTATION[m] * rating[team][m]
                     b = epa_bounds[m]
@@ -592,10 +604,11 @@ def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict
 
     `sos`/`sos_display`: strength of schedule -- an EWMA-weighted average of opponents' own
     composite scores AT THE TIME each game was played (so a team that's since gotten better or
-    worse doesn't retroactively change how tough it was to play them back then), same decay/
-    season-carryover as every other rating here, computed once in compute_ratings' single
-    historical replay and just passed through on `ratings[t]["sos"]`. Descriptive only -- not
-    folded into the composite score weighting above."""
+    worse doesn't retroactively change how tough it was to play them back then), fading the
+    same way every other rating here does at a season boundary (see SEASON_PRIOR_GAMES),
+    computed once in compute_ratings' single historical replay and just passed through on
+    `ratings[t]["sos"]`. Descriptive only -- not folded into the composite score weighting
+    above."""
     if len(ratings) < 4:
         return {}
     z: dict[str, dict[str, float]] = defaultdict(dict)
