@@ -308,14 +308,25 @@ def _phase_stats_for_season(season: int, current_season: int) -> pd.DataFrame:
     return out.dropna(subset=["rush_off_epa", "pass_off_epa"])
 
 
-def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict[str, dict[str, float]], dict[str, tuple[float, float]]]:
+def compute_ratings(
+    played_games: list[dict], current_season: int, game_log: list[dict] | None = None
+) -> tuple[dict[str, dict[str, float]], dict[str, tuple[float, float]]]:
     """`played_games`: nflverse games.csv REG rows with a result, any seasons needed.
     Returns ({team: {metric: rating}} as of the most recent game passed in, historical_bounds)
     where historical_bounds is {metric: (min, max)} (oriented, higher=better) for the 4 EPA
     metrics plus "composite" for the power-ranking score -- each the most extreme value ever
     observed at any point in the replayed history, used to anchor the fixed 0-100 display
     scale (see module docstring) instead of a per-season min/max that would make a mediocre
-    season's best team look inflated."""
+    season's best team look inflated.
+
+    If `game_log` is given, every game with a complete pre-game rating for both teams gets
+    appended to it as {game_id, season, week, gameday, home, away, home_score, away_score,
+    spread_line, diffs} -- `diffs[m]` is the SAME oriented home-minus-away rating diff
+    build_dataset() in research/edge_signal_test_v13_new_window_weights.py computes, using
+    the rating as it stood immediately BEFORE this game (no lookahead). This is the single
+    source of truth for that per-game rating walk -- the Historical Power tab's backtest
+    scatter (compute_backtest_scatter() below) reuses this instead of its own copy, so it
+    can never drift from what the live rating actually did."""
     # Both sides of this join need normalize_team(): the play-by-play files (the source of
     # `teams` below) retroactively relabel relocated franchises as LA/LAC/LV for every
     # season back to 2007, while games.csv's home/away columns correctly use the
@@ -431,6 +442,20 @@ def compute_ratings(played_games: list[dict], current_season: int) -> tuple[dict
             if sos[team] is not None:
                 if sos[team] < sos_bounds[0]: sos_bounds[0] = sos[team]
                 if sos[team] > sos_bounds[1]: sos_bounds[1] = sos[team]
+
+        if game_log is not None and all(rating[home][m] is not None and rating[away][m] is not None for m in RATING_METRICS):
+            try:
+                spread_line = float(g["spread_line"])
+            except (ValueError, TypeError):
+                spread_line = None
+            if spread_line is not None:
+                game_log.append({
+                    "game_id": gid, "season": season, "week": int(g.get("week") or 0),
+                    "gameday": g.get("gameday", ""), "home": home, "away": away,
+                    "home_score": int(home_pts), "away_score": int(away_pts),
+                    "spread_line": spread_line,
+                    "diffs": {m: ORIENTATION[m] * (rating[home][m] - rating[away][m]) for m in RATING_METRICS},
+                })
 
         for team, raw in ((home, home_raw), (away, away_raw)):
             for m in RATING_METRICS:
@@ -831,6 +856,38 @@ def historical_power_rankings(
     return out
 
 
+def compute_backtest_scatter(game_log: list[dict]) -> list[dict]:
+    """Turns compute_ratings()'s optional `game_log` into ready-to-plot rows for the
+    Historical Power tab's backtest scatter: market spread vs. the CURRENT production
+    POWER_WEIGHTS applied to each game's pre-game rating diffs, standardized ONCE across the
+    whole dataset (not walk-forward -- this isn't re-deriving weights, just showing what
+    today's weights would have said about each past game), colored by whether the model's
+    favorite actually won. Same idea as research/edge_signal_test_v13_new_window_weights.py's
+    final "fit on all data" step, applied for display instead of re-fitting."""
+    if not game_log:
+        return []
+    mu = {m: float(np.mean([r["diffs"][m] for r in game_log])) for m in RATING_METRICS}
+    sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in RATING_METRICS}
+
+    out = []
+    for r in game_log:
+        delta = sum(POWER_WEIGHTS[m] * ((r["diffs"][m] - mu[m]) / sd[m]) for m in RATING_METRICS)
+        if r["home_score"] == r["away_score"]:
+            outcome = "tie"
+        else:
+            actual_fav = "home" if r["home_score"] > r["away_score"] else "away"
+            predicted_fav = "home" if delta > 0 else "away" if delta < 0 else None
+            outcome = "push" if predicted_fav is None else ("hit" if predicted_fav == actual_fav else "miss")
+        out.append({
+            "season": r["season"], "week": r["week"], "date": r["gameday"],
+            "home": r["home"], "away": r["away"],
+            "home_score": r["home_score"], "away_score": r["away_score"],
+            "spread": round(r["spread_line"], 1), "delta": round(delta, 4),
+            "outcome": outcome,
+        })
+    return out
+
+
 def refresh_historical(store, force: bool = False) -> str:
     """Rebuild the full historical (every completed season, pooled) power rankings dataset.
     Cheap after the first run -- every completed season's play-by-play is already cached as
@@ -854,13 +911,26 @@ def refresh_historical(store, force: bool = False) -> str:
     rankings = historical_power_rankings(season_avgs, opponents)
     seasons_covered = sorted({s for _, s in season_avgs})
 
+    # Per-game backtest log for the scatter plot below the table -- same compute_ratings()
+    # the live tab uses, just asked to also record its own pre-game snapshot of every game
+    # along the way (see that function's `game_log` param) instead of only returning the
+    # final state.
+    game_log: list[dict] = []
+    compute_ratings(played, current_season, game_log=game_log)
+    scatter = compute_backtest_scatter(game_log)
+
     store.kv_set("historical_power_rankings", json.dumps({
         "generated": datetime.now(timezone.utc).isoformat(),
         "seasons": seasons_covered,
         "rankings": rankings,
+        "backtest_scatter": scatter,
     }))
     store.kv_set("historical_power_date", today)
-    return f"built ({len(rankings)} team-seasons, {seasons_covered[0] if seasons_covered else '?'}-{seasons_covered[-1] if seasons_covered else '?'})"
+    return (
+        f"built ({len(rankings)} team-seasons, "
+        f"{seasons_covered[0] if seasons_covered else '?'}-{seasons_covered[-1] if seasons_covered else '?'}, "
+        f"{len(scatter)} backtest games)"
+    )
 
 
 def _refresh_parlay_snapshot(store, season: int, week: int, power: dict[str, dict], all_rows: list[dict]) -> None:
