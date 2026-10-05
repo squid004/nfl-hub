@@ -13,19 +13,28 @@
 // INSTEAD of the live ctx.teamRatings numbers specifically so a matchup flagged before
 // kickoff doesn't quietly stop qualifying once that same game finishes and gets folded into
 // team_ratings' own always-moving EWMA.
-const ABOVE_GROUPS = new Set(['elite', 'above']);
-const BELOW_GROUPS = new Set(['below', 'weak']);
 const GROUP_LABELS = { elite: 'Elite', above: 'Above average', below: 'Below average', weak: 'Weak' };
 // Elite/Weak count double for sort purposes -- an Elite-offense-vs-Weak-defense pairing
 // reads as a bigger story than an Above-average-vs-Below-average one, even though both
 // qualify as "opposite sides of average".
 const GROUP_STRENGTH = { elite: 2, above: 1, below: 1, weak: 2 };
 
-// Every one of this week's games where one side's group (from the frozen snapshot) is on
-// the opposite side of the league average from the other -- Elite/Above-average offense
-// vs. Below-average/Weak defense, or the reverse. No top-N cap: every qualifying game shows,
-// same "call out all of them" rule as the ELWAY-vs-total section below. A team in the
-// "Average" group never qualifies either side -- that's the whole point of the band.
+// Every one of this week's games where one side is Elite or Weak AND the other side clears
+// the matching threshold for a real mismatch -- Elite needs an opponent that's at least
+// Below average (Below average or Weak); Weak needs an opponent that's at least Above
+// average (Above average or Elite). A plain Above-average-vs-Below-average pairing (neither
+// side actually Elite or Weak) no longer qualifies -- too mild to call out, even though it's
+// technically on opposite sides of the league average. No top-N cap: every qualifying game
+// shows, same "call out all of them" rule as the ELWAY-vs-total section below.
+function isRealMismatch(groupA, groupB) {
+  const extremeNeeds = (extreme, other) => {
+    if (extreme === 'elite') return other === 'below' || other === 'weak';
+    if (extreme === 'weak') return other === 'above' || other === 'elite';
+    return false;
+  };
+  return extremeNeeds(groupA, groupB) || extremeNeeds(groupB, groupA);
+}
+
 function phaseMismatches(ctx, phase) {
   const snap = ctx.parlaySnapshot;
   if (!snap || !snap.teams) return [];
@@ -43,12 +52,8 @@ function phaseMismatches(ctx, phase) {
     [[g.home, g.away], [g.away, g.home]].forEach(([offTeam, defTeam]) => {
       const offGroup = offGroupOf.get(offTeam);
       const defGroup = defGroupOf.get(defTeam);
-      if (!offGroup || !defGroup) return;
-      const favorsOffense = ABOVE_GROUPS.has(offGroup) && BELOW_GROUPS.has(defGroup);
-      const favorsDefense = BELOW_GROUPS.has(offGroup) && ABOVE_GROUPS.has(defGroup);
-      if (favorsOffense || favorsDefense) {
-        rows.push({ g, offTeam, defTeam, offGroup, defGroup, favorsOffense });
-      }
+      if (!offGroup || !defGroup || !isRealMismatch(offGroup, defGroup)) return;
+      rows.push({ g, offTeam, defTeam, offGroup, defGroup });
     });
   });
   rows.sort((a, b) => (GROUP_STRENGTH[b.offGroup] + GROUP_STRENGTH[b.defGroup])
@@ -140,13 +145,15 @@ const Parlays = {
         ${edgeRows('pass', 'Pass')}
         <h3>Run</h3>
         ${edgeRows('rush', 'Run')}
-        <p class="tablefoot muted">Every matchup where one side's group is on the opposite
-          side of the league average from the other — <strong class="result-good">Elite</strong>/
-          <strong class="mild-good">Above average</strong> meeting
-          <strong class="mild-bad">Below average</strong>/<strong class="result-bad">Weak</strong>
-          — using the same Elite/Above/Average/Below/Weak groups as the Power Rankings
-          distribution panel. Frozen at this week's first kickoff, so a matchup called out
-          here stays put even after the game it describes is final — descriptive only, not a
+        <p class="tablefoot muted">Only real mismatches: one side has to be
+          <strong class="result-good">Elite</strong> or <strong class="result-bad">Weak</strong>,
+          and the other side has to clear the matching bar — Elite needs an opponent that's at
+          least <strong class="mild-bad">Below average</strong>, Weak needs an opponent that's
+          at least <strong class="mild-good">Above average</strong>. A plain Above-average-vs-
+          Below-average pairing no longer qualifies, even though it's technically on opposite
+          sides of the mean — using the same Elite/Above/Average/Below/Weak groups as the Power
+          Rankings distribution panel. Frozen at this week's first kickoff, so a matchup called
+          out here stays put even after the game it describes is final — descriptive only, not a
           betting edge.</p>
       </div>
       <div class="panel">
