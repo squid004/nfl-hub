@@ -607,6 +607,156 @@ def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict
     }
 
 
+def compute_historical_season_averages(played_games: list[dict], current_season: int) -> dict[tuple[str, int], dict[str, float]]:
+    """One row per (team, season) for every FULLY COMPLETED season in `played_games`
+    (season < current_season) -- the simple, equally-weighted average of that team's own
+    games THAT SEASON for each of the 8 RATING_METRICS, deliberately NOT the EWMA-decayed
+    rolling rating compute_ratings() produces for the live dashboard. A live rating is a
+    point-in-time snapshot answering "how good is this team right now, weighted toward
+    recent form" -- correct for a live pick'em tool, but wrong for "how good was the 2007
+    Patriots": that question wants the whole season weighted equally, not decayed toward
+    whatever they looked like at the specific week the rating happened to be measured.
+    Reuses _phase_stats_for_season()'s own per-season parquet cache (nflhub/data/
+    team_ratings/, already committed for every completed season through 2025), so this is
+    cheap -- no new downloads for any season that's already in that cache."""
+    by_game: dict[str, dict[str, dict]] = defaultdict(dict)
+    seasons_needed = sorted({int(g["season"]) for g in played_games if int(g["season"]) < current_season})
+    for season in seasons_needed:
+        for row in _phase_stats_for_season(season, current_season).to_dict("records"):
+            by_game[row["game_id"]][row["team"]] = row
+
+    games_by_id = {g["game_id"]: g for g in played_games}
+    sums: dict[tuple[str, int], dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    counts: dict[tuple[str, int], int] = defaultdict(int)
+
+    for gid, teams in by_game.items():
+        g = games_by_id.get(gid)
+        if not g or len(teams) != 2:
+            continue
+        season = int(g["season"])
+        if season >= current_season:
+            continue
+        home, away = g["home_team"], g["away_team"]
+        if home not in teams or away not in teams:
+            continue
+        try:
+            home_pts, away_pts = float(g["home_score"]), float(g["away_score"])
+        except (ValueError, TypeError):
+            continue
+
+        home_raw, away_raw = dict(teams[home]), dict(teams[away])
+        home_raw["rush_def_epa_allowed"] = away_raw["rush_off_epa"]
+        away_raw["rush_def_epa_allowed"] = home_raw["rush_off_epa"]
+        home_raw["pass_def_epa_allowed"] = away_raw["pass_off_epa"]
+        away_raw["pass_def_epa_allowed"] = home_raw["pass_off_epa"]
+        home_raw["points_off"], away_raw["points_off"] = home_pts, away_pts
+        home_raw["points_def_allowed"], away_raw["points_def_allowed"] = away_pts, home_pts
+        home_raw["turnovers_off"] = home_raw.pop("turnovers_committed")
+        away_raw["turnovers_off"] = away_raw.pop("turnovers_committed")
+        home_raw["turnovers_def_forced"] = away_raw["turnovers_off"]
+        away_raw["turnovers_def_forced"] = home_raw["turnovers_off"]
+
+        for team_code, raw in ((home, home_raw), (away, away_raw)):
+            try:
+                team = normalize_team(team_code)
+            except UnknownTeamError:
+                continue  # a relocated franchise's old code -- the current code already covers it
+            key = (team, season)
+            counts[key] += 1
+            for m in RATING_METRICS:
+                sums[key][m] += raw[m]
+
+    return {
+        key: {m: round(sums[key][m] / n, 4) for m in RATING_METRICS}
+        for key, n in counts.items()
+    }
+
+
+def historical_power_rankings(team_season_avgs: dict[tuple[str, int], dict[str, float]]) -> list[dict]:
+    """Composite Power Score for every (team, season) in `team_season_avgs`, z-scored and
+    ranked against the WHOLE pooled historical dataset at once -- every team-season from
+    every completed year, not cross-sectionally within just that one season's 32 teams. That
+    pooling is the entire point: comparing "2023 KC's offense" against "2007 NE's offense"
+    directly needs one shared scale across eras, not 19 separate single-season scales that
+    can't be compared to each other. Same POWER_WEIGHTS/ORIENTATION as the live power
+    ranking (power_rankings() above); the 4 EPA columns get a fresh 0-100 scale anchored to
+    THIS pooled dataset's own extremes (the best/worst full-season average ever recorded),
+    analogous to team_ratings.py's module-level historical_bounds but computed from season
+    averages, not point-in-time EWMA snapshots. No SOS here -- a season's strength of
+    schedule needs opponents' own season-long composite scores, which is circular within a
+    single pass like this one; omitted rather than faked."""
+    if len(team_season_avgs) < 4:
+        return []
+    z: dict[tuple, dict[str, float]] = defaultdict(dict)
+    for m in RATING_METRICS:
+        vals = {k: r[m] for k, r in team_season_avgs.items() if r.get(m) is not None}
+        zm, _ = _rank_and_z(vals)
+        for k, v in zm.items():
+            z[k][m] = v
+
+    scores = {k: sum(POWER_WEIGHTS[m] * ORIENTATION[m] * z[k].get(m, 0.0) for m in RATING_METRICS) for k in team_season_avgs}
+    composite_lo, composite_hi = min(scores.values()), max(scores.values())
+
+    epa_bounds: dict[str, tuple[float, float]] = {}
+    for m in EPA_DISPLAY_METRICS:
+        oriented_vals = [ORIENTATION[m] * r[m] for r in team_season_avgs.values() if r.get(m) is not None]
+        if oriented_vals:
+            epa_bounds[m] = (min(oriented_vals), max(oriented_vals))
+
+    order = sorted(scores, key=lambda k: -scores[k])
+    out = []
+    for i, key in enumerate(order):
+        team, season = key
+        r = team_season_avgs[key]
+        ratings_display: dict[str, float] = {}
+        for m in EPA_DISPLAY_METRICS:
+            if r.get(m) is not None and m in epa_bounds:
+                lo, hi = epa_bounds[m]
+                ratings_display[m] = _normalize_fixed(ORIENTATION[m] * r[m], lo, hi)
+        for m in COUNTABLE_METRICS:
+            if r.get(m) is not None:
+                ratings_display[m] = round(r[m], 2)
+        out.append({
+            "team": team, "season": season, "rank": i + 1,
+            "score": round(scores[key], 4),
+            "score_display": _normalize_fixed(scores[key], composite_lo, composite_hi),
+            "ratings": r, "ratings_display": ratings_display,
+        })
+    return out
+
+
+def refresh_historical(store, force: bool = False) -> str:
+    """Rebuild the full historical (every completed season, pooled) power rankings dataset.
+    Cheap after the first run -- every completed season's play-by-play is already cached as
+    parquet (see _phase_stats_for_season), so this just re-aggregates small local files, not
+    re-downloading anything. Rebuilt at most once/day anyway (same cadence as refresh()
+    above), since completed seasons' data never changes except once a year at season end."""
+    today = date.today().isoformat()
+    if not force and store.kv_get("historical_power_date") == today:
+        return "cached"
+
+    from . import nfl_schedule  # local import: avoid a hard dependency for callers that don't need it
+
+    current_season, _current_week = nfl_schedule.current_week()
+
+    resp = requests.get(GAMES_URL, timeout=TIMEOUT)
+    resp.raise_for_status()
+    all_rows = [r for r in csv.DictReader(io.StringIO(resp.text)) if r["game_type"] == "REG"]
+    played = [r for r in all_rows if r.get("result") not in ("", "NA", None) and int(r["season"]) >= FIRST_SEASON]
+
+    season_avgs = compute_historical_season_averages(played, current_season)
+    rankings = historical_power_rankings(season_avgs)
+    seasons_covered = sorted({s for _, s in season_avgs})
+
+    store.kv_set("historical_power_rankings", json.dumps({
+        "generated": datetime.now(timezone.utc).isoformat(),
+        "seasons": seasons_covered,
+        "rankings": rankings,
+    }))
+    store.kv_set("historical_power_date", today)
+    return f"built ({len(rankings)} team-seasons, {seasons_covered[0] if seasons_covered else '?'}-{seasons_covered[-1] if seasons_covered else '?'})"
+
+
 def _refresh_parlay_snapshot(store, season: int, week: int, power: dict[str, dict], all_rows: list[dict]) -> None:
     """Freeze this week's team EPA display-ratings for the Parlays tab's matchup identifier,
     independent of team_ratings' own always-moving numbers -- those shift as each of this

@@ -166,6 +166,16 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return null; }
   },
 
+  // { seasons: [2007...2025], rankings: [{team, season, rank, score_display, ratings_display}, ...] }
+  // -- every (team, season) from every fully completed regular season, pooled into one
+  // dataset (written by nflhub.refresh; see team_ratings.py's refresh_historical()/
+  // historical_power_rankings()). Full-season averages, not the live tab's EWMA rating.
+  async historicalPower() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'historical_power_rankings').maybeSingle();
+    if (!data) return null;
+    try { return JSON.parse(data.value); } catch { return null; }
+  },
+
   async spreadHistory(week) {
     try {
       const { data, error } = await this._c().from('spread_history').select('game_id,captured_at,spread_home')

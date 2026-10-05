@@ -14,6 +14,7 @@ const App = {
       if (b.dataset.act === 'atspick') Pickem.atspick(b.dataset.week, b.dataset.game, b.dataset.team, b.dataset.spread);
       if (b.dataset.act === 'refresh') App.requestRefresh();
       if (b.dataset.act === 'power-sort') Power.sortBy(b.dataset.col);
+      if (b.dataset.act === 'historical-sort') Historical.sortBy(b.dataset.col);
     });
     await this.reload();
     // Track the cron without a manual reload.
@@ -28,7 +29,7 @@ const App = {
       const season = parseInt(seasonRaw || '2025', 10);
       const [games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks, refreshReq, lastRefresh, hist, bSnap,
              edgeLog, edgeBias, edgeLeaderboard, injuries, spreadHist, elwayQb1,
-             teamRatings, qbDepthChart, parlaySnapshot] =
+             teamRatings, qbDepthChart, parlaySnapshot, historicalPower] =
         await Promise.all([
           DB.weekGames(week), DB.weekOdds(week), DB.bestPriceOdds(week), DB.bookOdds(week), DB.elwayOdds(week),
           DB.latestRoster('yahoo'), DB.latestRoster('espn'),
@@ -36,12 +37,12 @@ const App = {
           DB.refreshRequest(), DB.kv('last_refresh'), DB.hist(), DB.budgetSnapshot(week),
           DB.edgeRecommendationLog(season, week), DB.edgeBiasAll(), DB.edgeLeaderboard(),
           DB.injuries(), DB.spreadHistory(week), DB.elwayQb1(),
-          DB.teamRatings(), DB.qbDepthChart(), DB.parlayRatingsSnapshot(),
+          DB.teamRatings(), DB.qbDepthChart(), DB.parlayRatingsSnapshot(), DB.historicalPower(),
         ]);
       const ctx = { week, season, games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks,
                     refreshReq, lastRefresh, hist, bSnap,
                     edgeLog, edgeBias, edgeLeaderboard,
-                    injuries, spreadHist, elwayQb1, teamRatings, qbDepthChart, parlaySnapshot };
+                    injuries, spreadHist, elwayQb1, teamRatings, qbDepthChart, parlaySnapshot, historicalPower };
       this._ctx = ctx;
       Deadlines.render(ctx);
       Pickem.render(ctx, 'ml');
@@ -54,6 +55,7 @@ const App = {
       Odds.render(ctx);
       Power.render(ctx);
       Parlays.render(ctx);
+      Historical.render(ctx);
       this.renderStatus(ctx);
     } catch (e) {
       document.getElementById('status').textContent = 'Error: ' + e.message;

@@ -213,6 +213,14 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         log.exception("team_ratings refresh failed")
         summary["errors"].append(f"team_ratings: {exc}")
 
+    # 4b3. every completed season's team ratings, pooled into one dataset for the
+    # Historical Power tab -- independent try/except, unrelated to the live rating above
+    try:
+        summary["historical_power"] = team_ratings.refresh_historical(store)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("historical power rankings refresh failed")
+        summary["errors"].append(f"historical_power: {exc}")
+
     # 4c. freeze this week's "take N" suggestion until first kickoff (year-end analysis)
     try:
         dist_raw = store.kv_get("hist_distribution")
