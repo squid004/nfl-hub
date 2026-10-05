@@ -154,6 +154,18 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return null; }
   },
 
+  // { season, week, teams: {TEAM: {rush_off_epa, pass_off_epa, rush_def_epa_allowed,
+  //   pass_def_epa_allowed}} } -- this week's EPA display-ratings, frozen at first kickoff
+  // (written by nflhub.refresh; see team_ratings.py's _refresh_parlay_snapshot). The
+  // Parlays tab's matchup identifier reads this INSTEAD of teamRatings() so a call-out made
+  // before kickoff doesn't quietly stop qualifying once team_ratings' own live numbers move
+  // on from incorporating the very game it described.
+  async parlayRatingsSnapshot() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'parlay_ratings_snapshot').maybeSingle();
+    if (!data) return null;
+    try { return JSON.parse(data.value); } catch { return null; }
+  },
+
   async spreadHistory(week) {
     try {
       const { data, error } = await this._c().from('spread_history').select('game_id,captured_at,spread_home')

@@ -91,12 +91,6 @@ MIN_TEAMS_FOR_HISTORICAL_SNAPSHOT = 28
 PBP_COLS = ["game_id", "season", "week", "season_type", "posteam", "defteam", "play_type",
             "epa", "wp", "interception", "fumble_lost"]
 MISMATCH_Z_THRESHOLD = 1.5  # combined (offense z + opposing defense-allowed z) needed to flag a callout
-# rush_edge/pass_edge (used by the Parlays tab's "biggest matchups") require an actual
-# top-8-offense-vs-bottom-8-defense pairing, not just the week's largest z-score gap --
-# two decent-ish units with an unremarkable but comparatively-largest gap shouldn't
-# qualify as a "genuine mismatch". Rank threshold, not a z-score one, by design: rank is
-# what "top 8" / "bottom 8" actually means.
-EDGE_RANK_GATE = 8
 
 # +1 if higher is already better, -1 if the raw stat needs flipping to be "higher=better"
 # before weighting (allowed/committed stats).
@@ -482,12 +476,10 @@ def display_ratings(ratings: dict[str, dict[str, float]], historical_bounds: dic
 def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict], historical_bounds: dict[str, tuple[float, float]]) -> dict[str, dict]:
     """For each upcoming game (already normalized home/away team codes), rule-based sentences
     for any offense-vs-opposing-defense pairing whose combined z-score clears
-    MISMATCH_Z_THRESHOLD -- a real strength meeting a real weakness, not just noise. Also
-    returns rush_edge/pass_edge: the biggest same-phase edge that's an actual top-8-offense-
-    vs-bottom-8-defense pairing (EDGE_RANK_GATE), or None if neither direction in this game
-    qualifies -- a stricter "genuine mismatch" gate than the callouts' z-score-only bar,
-    meant for ranking across a whole week (Parlays tab) rather than describing one game.
-    Keyed "AWAY@HOME" so the frontend can look it up directly from its own game row."""
+    MISMATCH_Z_THRESHOLD -- a real strength meeting a real weakness, not just noise. Keyed
+    "AWAY@HOME" so the frontend can look it up directly from its own game row. (The Parlays
+    tab's own matchup identifier no longer reads anything from here -- it classifies teams
+    into tiers off a frozen ratings_display snapshot instead; see refresh()'s snapshot step.)"""
     n_teams = len(ratings)
     if n_teams < 4:
         return {}
@@ -516,26 +508,15 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict],
         if home not in ratings or away not in ratings:
             continue
         callouts = []
-        # rush_edge/pass_edge: the single biggest |combined z| direction for that phase in
-        # THIS game, stored unconditionally (unlike `callouts`, which only keeps sentences
-        # that clear MISMATCH_Z_THRESHOLD) -- lets a caller rank every game's edge across a
-        # whole week (e.g. "3 biggest pass matchups this week") instead of just knowing
-        # whether any one game cleared a fixed bar.
-        edges: dict[str, dict | None] = {}
         for phase in ("rush", "pass"):
             off_m, def_m = f"{phase}_off_epa", f"{phase}_def_epa_allowed"
-            best_edge = None
             for off_team, def_team in ((home, away), (away, home)):
                 if off_m not in z.get(off_team, {}) or def_m not in z.get(def_team, {}):
                     continue
                 combined = z[off_team][off_m] + z[def_team][def_m]
-                off_rank, def_rank = display_rank[off_team][off_m], display_rank[def_team][def_m]
-                genuine_mismatch = off_rank <= EDGE_RANK_GATE and def_rank > n_teams - EDGE_RANK_GATE
-                if genuine_mismatch and (best_edge is None or abs(combined) > abs(best_edge["z"])):
-                    best_edge = {"team": off_team, "opponent": def_team, "z": round(combined, 3),
-                                 "off_rank": off_rank, "def_rank": def_rank}
                 if abs(combined) < MISMATCH_Z_THRESHOLD:
                     continue
+                off_rank, def_rank = display_rank[off_team][off_m], display_rank[def_team][def_m]
                 favors_offense = combined > 0
                 verdict = "a lopsided matchup on paper" if favors_offense else "a tough matchup on paper"
                 callouts.append(
@@ -543,7 +524,6 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict],
                     f"{'faces' if favors_offense else 'runs into'} {def_team}'s {phase} defense "
                     f"({_ordinal(def_rank)}) -- {verdict}."
                 )
-            edges[f"{phase}_edge"] = best_edge
         weather = None
         gameday = g.get("gameday")
         # skip the forecast fetch entirely for games outside its ~16-day reliable window --
@@ -574,7 +554,6 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict],
             "home_ratings": ratings[home], "away_ratings": ratings[away],
             "home_ratings_display": ratings_display.get(home), "away_ratings_display": ratings_display.get(away),
             "callouts": callouts,
-            **edges,
             "predicted_home_points": predicted_home_points,
             "predicted_away_points": predicted_away_points,
             "weather": weather,
@@ -628,6 +607,42 @@ def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict
     }
 
 
+def _refresh_parlay_snapshot(store, season: int, week: int, power: dict[str, dict], all_rows: list[dict]) -> None:
+    """Freeze this week's team EPA display-ratings for the Parlays tab's matchup identifier,
+    independent of team_ratings' own always-moving numbers -- those shift as each of this
+    week's games gets folded into the EWMA the moment it finishes, which would otherwise make
+    a matchup flagged before kickoff silently stop qualifying once the very game it described
+    is in the books. Recomputed every refresh until this week's first kickoff (by nflverse's
+    own `gameday`, date granularity -- good enough for a freeze point), then left untouched;
+    resets fresh the moment the week number changes. Same freeze pattern as refresh_all's own
+    odds/elway_odds handling and history.py's budget_snapshot. The very first time this runs,
+    `prev` is None so `same_week` is False regardless of how far into the week we already are
+    -- meaning a brand-new deploy mid-week backfills immediately off current data instead of
+    waiting for a week boundary that already passed."""
+    existing = store.kv_get("parlay_ratings_snapshot")
+    try:
+        prev = json.loads(existing) if existing else None
+    except (TypeError, ValueError):
+        prev = None
+    same_week = bool(prev) and prev.get("season") == season and prev.get("week") == week
+
+    this_week_days = [
+        r.get("gameday") for r in all_rows
+        if int(r["season"]) == season and str(r.get("week")) == str(week) and r.get("gameday")
+    ]
+    first_day = min(this_week_days) if this_week_days else None
+    still_pregame = first_day is None or date.today().isoformat() < first_day
+
+    if same_week and not still_pregame:
+        return  # this week's snapshot is locked in -- don't touch it
+
+    teams = {
+        t: {m: info["ratings_display"].get(m) for m in EPA_DISPLAY_METRICS}
+        for t, info in power.items() if info.get("ratings_display")
+    }
+    store.kv_set("parlay_ratings_snapshot", json.dumps({"season": season, "week": week, "teams": teams}))
+
+
 def refresh(store, force: bool = False) -> str:
     """Rebuild team EPA ratings at most once per day."""
     today = date.today().isoformat()
@@ -668,6 +683,7 @@ def refresh(store, force: bool = False) -> str:
             continue
     matchups = matchup_callouts(ratings, upcoming, historical_bounds)
     power = power_rankings(ratings, historical_bounds)
+    _refresh_parlay_snapshot(store, current_season, current_week, power, all_rows)
 
     store.kv_set("team_ratings", json.dumps({
         "generated": datetime.now(timezone.utc).isoformat(),

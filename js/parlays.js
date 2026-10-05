@@ -1,37 +1,66 @@
 'use strict';
 
 // Rule-based, non-wagering "biggest statistical trends" board -- no payout/odds math, just
-// three call-outs per week: the biggest EPA offense-vs-defense mismatches, the biggest
-// ELWAY-vs-market total disagreements, and games where weather is worth real points. All
-// three reuse data already computed elsewhere (team_ratings.py's matchup_callouts, the
-// elway_odds/odds tables) -- nothing new is fetched for this tab.
+// three call-outs per week: EPA offense-vs-defense mismatches on opposite sides of the
+// league average, ELWAY-vs-market total disagreements, and games where weather is worth
+// real points. All three reuse data already computed elsewhere (team_ratings.py's weekly
+// snapshot/matchups, the elway_odds/odds tables) -- nothing new is fetched for this tab.
 
-// Top `n` games this week by |z| for one phase's edge (rush_edge/pass_edge), biggest first.
-function biggestEdges(ctx, phase, n = 3) {
-  if (!ctx.teamRatings) return [];
+// Reads js/power.js's shared classifyTeams()/buildTiers() -- loaded before this file in
+// index.html -- so the Power Rankings tab and this one agree on exactly what "Elite"/
+// "Above average"/"Below average"/"Weak" mean. The frozen weekly snapshot
+// (ctx.parlaySnapshot, nflhub.sources.team_ratings._refresh_parlay_snapshot) is used here
+// INSTEAD of the live ctx.teamRatings numbers specifically so a matchup flagged before
+// kickoff doesn't quietly stop qualifying once that same game finishes and gets folded into
+// team_ratings' own always-moving EWMA.
+const ABOVE_GROUPS = new Set(['elite', 'above']);
+const BELOW_GROUPS = new Set(['below', 'weak']);
+const GROUP_LABELS = { elite: 'Elite', above: 'Above average', below: 'Below average', weak: 'Weak' };
+// Elite/Weak count double for sort purposes -- an Elite-offense-vs-Weak-defense pairing
+// reads as a bigger story than an Above-average-vs-Below-average one, even though both
+// qualify as "opposite sides of average".
+const GROUP_STRENGTH = { elite: 2, above: 1, below: 1, weak: 2 };
+
+// Every one of this week's games where one side's group (from the frozen snapshot) is on
+// the opposite side of the league average from the other -- Elite/Above-average offense
+// vs. Below-average/Weak defense, or the reverse. No top-N cap: every qualifying game shows,
+// same "call out all of them" rule as the ELWAY-vs-total section below. A team in the
+// "Average" group never qualifies either side -- that's the whole point of the band.
+function phaseMismatches(ctx, phase) {
+  const snap = ctx.parlaySnapshot;
+  if (!snap || !snap.teams) return [];
+  const offMetric = `${phase}_off_epa`, defMetric = `${phase}_def_epa_allowed`;
+  const toVals = metric => Object.entries(snap.teams)
+    .filter(([, r]) => r[metric] != null)
+    .map(([team, r]) => ({ team, value: r[metric] }));
+  const offVals = toVals(offMetric), defVals = toVals(defMetric);
+  if (offVals.length < 4 || defVals.length < 4) return [];
+  const offGroupOf = classifyTeams(offVals).groupOf;
+  const defGroupOf = classifyTeams(defVals).groupOf;
+
   const rows = [];
   (ctx.games || []).forEach(g => {
-    const matchup = matchupFor(ctx.teamRatings, g.home, g.away);
-    const edge = matchup && matchup[`${phase}_edge`];
-    if (edge) rows.push({ g, edge });
+    [[g.home, g.away], [g.away, g.home]].forEach(([offTeam, defTeam]) => {
+      const offGroup = offGroupOf.get(offTeam);
+      const defGroup = defGroupOf.get(defTeam);
+      if (!offGroup || !defGroup) return;
+      const favorsOffense = ABOVE_GROUPS.has(offGroup) && BELOW_GROUPS.has(defGroup);
+      const favorsDefense = BELOW_GROUPS.has(offGroup) && ABOVE_GROUPS.has(defGroup);
+      if (favorsOffense || favorsDefense) {
+        rows.push({ g, offTeam, defTeam, offGroup, defGroup, favorsOffense });
+      }
+    });
   });
-  rows.sort((a, b) => Math.abs(b.edge.z) - Math.abs(a.edge.z));
-  return rows.slice(0, n);
+  rows.sort((a, b) => (GROUP_STRENGTH[b.offGroup] + GROUP_STRENGTH[b.defGroup])
+    - (GROUP_STRENGTH[a.offGroup] + GROUP_STRENGTH[a.defGroup]));
+  return rows;
 }
 
-// 1st/2nd/3rd/4th/...th -- same convention as team_ratings.py's _ordinal().
-function ordinal(n) {
-  if (n == null) return '—';
-  const rem100 = n % 100;
-  if (rem100 >= 10 && rem100 <= 20) return `${n}th`;
-  return `${n}${ { 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th' }`;
-}
-
-// "TEAM phase offense (Nth) vs OPPONENT phase defense (Nth)" -- league rank (of 32), not the
-// raw/display EPA number, so it reads the same as the matchup sentences used elsewhere.
-function edgeSentence(phase, edge) {
-  return `${edge.team} ${phase} offense (${ordinal(edge.off_rank)}) vs `
-    + `${edge.opponent} ${phase} defense (${ordinal(edge.def_rank)})`;
+// "TEAM phase offense (Elite) vs OPPONENT phase defense (Weak)" -- the same group vocabulary
+// as the Power Rankings distribution panel, not a raw EPA number or rank.
+function mismatchSentence(phase, row) {
+  return `${row.offTeam} ${phase} offense (${GROUP_LABELS[row.offGroup]}) vs `
+    + `${row.defTeam} ${phase} defense (${GROUP_LABELS[row.defGroup]})`;
 }
 
 // Every game this week with a DraftKings total AND an ELWAY total that disagree by >=3
@@ -76,11 +105,12 @@ const Parlays = {
     if (!el) return;
 
     const edgeRows = (phase, label) => {
-      const rows = biggestEdges(ctx, phase, 3);
-      if (!rows.length) return `<p class="muted small">No ${label.toLowerCase()} mismatches big enough to call out this week.</p>`;
-      return `<ol>${rows.map(({ g, edge }) =>
-        `<li>${esc(edgeSentence(phase, edge))}
-           <span class="muted small">(${esc(g.away)} @ ${esc(g.home)}, ${fmtLocal(g.kickoff, false)})</span></li>`
+      const rows = phaseMismatches(ctx, phase);
+      if (!ctx.parlaySnapshot) return `<p class="muted small">No frozen ratings snapshot yet for this week.</p>`;
+      if (!rows.length) return `<p class="muted small">No ${label.toLowerCase()} matchup on opposite sides of the average this week.</p>`;
+      return `<ol>${rows.map(row =>
+        `<li>${esc(mismatchSentence(phase, row))}
+           <span class="muted small">(${esc(row.g.away)} @ ${esc(row.g.home)}, ${fmtLocal(row.g.kickoff, false)})</span></li>`
       ).join('')}</ol>`;
     };
 
@@ -110,10 +140,14 @@ const Parlays = {
         ${edgeRows('pass', 'Pass')}
         <h3>Run</h3>
         ${edgeRows('rush', 'Run')}
-        <p class="tablefoot muted">Only genuine mismatches: a top-8 offense against a
-          bottom-8 defense in that phase, ranked by combined z-score against the rest of the
-          league. Same underlying model as the matchup table on each Moneyline card —
-          descriptive only, not a betting edge (see Power Rankings methodology).</p>
+        <p class="tablefoot muted">Every matchup where one side's group is on the opposite
+          side of the league average from the other — <strong class="result-good">Elite</strong>/
+          <strong class="mild-good">Above average</strong> meeting
+          <strong class="mild-bad">Below average</strong>/<strong class="result-bad">Weak</strong>
+          — using the same Elite/Above/Average/Below/Weak groups as the Power Rankings
+          distribution panel. Frozen at this week's first kickoff, so a matchup called out
+          here stays put even after the game it describes is final — descriptive only, not a
+          betting edge.</p>
       </div>
       <div class="panel">
         <h2>ELWAY vs. the total</h2>

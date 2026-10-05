@@ -65,6 +65,37 @@ function buildTiers(teamVals) {
   return tiers;
 }
 
+// Within this many 0-100 scale points of the league mean counts as "Average" -- otherwise
+// every team would land in either "Above" or "Below" average (ties basically never happen
+// with real EPA data), which defeats the point of having a middle group at all.
+const AVG_BAND = 3;
+
+// Classifies every team into exactly one of five groups for one metric's 0-100 values:
+// Elite/Weak (a real, gap-isolated tier via buildTiers() -- genuinely cut off from
+// everyone else, not just best/worst by rank), or, for the rest ("the pack"), Above
+// average / Average / Below average by plain distance from the mean. Shared by the Power
+// Rankings distribution panel (live data) and the Parlays matchup identifier (a frozen
+// weekly snapshot) so both read the exact same definition of "real" -- see power.js's
+// render() vs parlays.js's use of ctx.parlaySnapshot.
+function classifyTeams(teamVals) {
+  const avg = teamVals.reduce((s, t) => s + t.value, 0) / teamVals.length;
+  const tiers = buildTiers(teamVals).map(teams => ({
+    teams, avg: teams.reduce((s, t) => s + t.value, 0) / teams.length,
+  }));
+  const packIdx = tiers.reduce((best, t, i) => t.teams.length > tiers[best].teams.length ? i : best, 0);
+  const byValueDesc = (a, b) => b.value - a.value;
+  const elite = tiers.filter((t, i) => i !== packIdx && t.avg > avg).flatMap(t => t.teams).sort(byValueDesc);
+  const weak = tiers.filter((t, i) => i !== packIdx && t.avg < avg).flatMap(t => t.teams).sort(byValueDesc);
+  const pack = tiers[packIdx].teams;
+  const above = pack.filter(t => t.value - avg > AVG_BAND).sort(byValueDesc);
+  const average = pack.filter(t => Math.abs(t.value - avg) <= AVG_BAND).sort(byValueDesc);
+  const below = pack.filter(t => avg - t.value > AVG_BAND).sort(byValueDesc);
+  const groupOf = new Map();
+  [['elite', elite], ['above', above], ['average', average], ['below', below], ['weak', weak]]
+    .forEach(([key, teams]) => teams.forEach(t => groupOf.set(t.team, key)));
+  return { avg, elite, above, average, below, weak, groupOf };
+}
+
 function fmtPowerVal(key, v) {
   if (v == null) return '—';
   if (key === 'team' || key === 'rank') return v;
@@ -138,32 +169,18 @@ const Power = {
 
   // One number-line strip per EPA stat, every team positioned at its actual 0-100 value (not
   // just rank order) so clustering vs. real gaps is visible as literal physical distance, not
-  // just color or order. Every team lands in exactly one of four groups: Elite/Weak (a real,
-  // gap-isolated group via buildTiers() -- genuinely cut off from everyone else, not just
-  // "best/worst by rank") or, failing that, Above/Below average (plain comparison to the
-  // league mean) -- so a team that's considerably worse than average but NOT isolated from
-  // its similarly-bad neighbors (a gradual bottom cluster, not a cliff) still shows up as
-  // Below average instead of disappearing into an undifferentiated middle pack.
+  // just color or order. See classifyTeams() above for the five groups every team lands in.
   _distributionPanel(rows) {
     const metricHtml = ([key, label]) => {
       const teamVals = rows.filter(r => r[key] != null).map(r => ({ team: r.team, value: r[key] }));
       if (teamVals.length < 4) return '';
-      const avg = teamVals.reduce((s, t) => s + t.value, 0) / teamVals.length;
-      const tiers = buildTiers(teamVals).map(teams => ({
-        teams, avg: teams.reduce((s, t) => s + t.value, 0) / teams.length,
-      }));
-      const packIdx = tiers.reduce((best, t, i) => t.teams.length > tiers[best].teams.length ? i : best, 0);
-
-      const byValueDesc = (a, b) => b.value - a.value;
-      const elite = tiers.filter((t, i) => i !== packIdx && t.avg > avg).flatMap(t => t.teams).sort(byValueDesc);
-      const weak = tiers.filter((t, i) => i !== packIdx && t.avg < avg).flatMap(t => t.teams).sort(byValueDesc);
-      const aboveAvg = tiers[packIdx].teams.filter(t => t.value > avg).sort(byValueDesc);
-      const belowAvg = tiers[packIdx].teams.filter(t => t.value <= avg).sort(byValueDesc);
+      const { avg, elite, above, average, below, weak } = classifyTeams(teamVals);
 
       const GROUPS = [
         { key: 'elite', teams: elite, label: 'Elite', cls: 'outlier-good', textCls: 'result-good', labelDots: true },
-        { key: 'above', teams: aboveAvg, label: 'Above average', cls: 'above-avg', textCls: 'mild-good', labelDots: false },
-        { key: 'below', teams: belowAvg, label: 'Below average', cls: 'below-avg', textCls: 'mild-bad', labelDots: false },
+        { key: 'above', teams: above, label: 'Above average', cls: 'above-avg', textCls: 'mild-good', labelDots: false },
+        { key: 'average', teams: average, label: 'Average', cls: '', textCls: 'muted', labelDots: false },
+        { key: 'below', teams: below, label: 'Below average', cls: 'below-avg', textCls: 'mild-bad', labelDots: false },
         { key: 'weak', teams: weak, label: 'Weak', cls: 'outlier-bad', textCls: 'result-bad', labelDots: true },
       ];
       const groupOf = new Map();
@@ -171,7 +188,7 @@ const Power = {
 
       const ticks = teamVals.map(t => {
         const g = groupOf.get(t.team);
-        return `<div class="dist-tick${g ? ' ' + g.cls : ''}" style="left:${t.value}%"
+        return `<div class="dist-tick${g && g.cls ? ' ' + g.cls : ''}" style="left:${t.value}%"
             title="${esc(t.team)}: ${t.value.toFixed(1)}/100 (${g ? g.label.toLowerCase() : ''})">${g && g.labelDots ? `<span class="dist-tick-label ${g.cls}">${esc(t.team)}</span>` : ''}</div>`;
       }).join('');
 
@@ -204,13 +221,15 @@ const Power = {
         <h2>EPA distribution &amp; tiers</h2>
         <p class="muted small">Every team's 0-100 EPA score (same scale as the table above),
           positioned on a line so clustering is visible at a glance, not just rank. Every team
-          falls into one of four groups: <strong class="result-good">Elite</strong>/
+          falls into one of five groups: <strong class="result-good">Elite</strong>/
           <strong class="result-bad">Weak</strong> when a real gap (not just rank) cuts a group
-          off from everyone else, however small; otherwise just
+          off from everyone else, however small; otherwise
           <strong class="mild-good">Above</strong>/<strong class="mild-bad">Below average</strong>
-          -- so a cluster of similarly-bad teams that's nonetheless well below average still
-          shows up as a real group instead of disappearing into an undifferentiated middle.
-          The thin vertical line is the league average.</p>
+          if it's meaningfully off the mean, or just <strong class="muted">Average</strong> if
+          it's within a few points of it -- so a cluster of similarly-bad teams that's
+          nonetheless well below average still shows up as a real group instead of
+          disappearing into an undifferentiated middle. The thin vertical line is the league
+          average.</p>
         ${metrics}
       </div>`;
   },
