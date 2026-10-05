@@ -16,6 +16,7 @@ const App = {
       if (b.dataset.act === 'power-sort') Power.sortBy(b.dataset.col);
       if (b.dataset.act === 'historical-sort') Historical.sortBy(b.dataset.col);
       if (b.dataset.act === 'historical-toggle-agree') Historical.toggleAgreement();
+      if (b.dataset.act === 'historical-toggle-colorby') Historical.toggleColorBy();
     });
     await this.reload();
     // Track the cron without a manual reload.

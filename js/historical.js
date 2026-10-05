@@ -26,6 +26,16 @@ const HIST_COLS = [
 const HIST_0_100_COLS = new Set(['score', 'sos', 'rush_off_epa', 'pass_off_epa', 'rush_def_epa_allowed', 'pass_def_epa_allowed']);
 const BACKTEST_OUTCOME_LABEL = { hit: 'Hit', miss: 'Miss', tie: 'Tie', push: 'Push' };
 
+// r.outcome (from the backend) is always MODEL-relative. This recomputes the same hit/miss/
+// tie/push classification relative to the MARKET favorite instead, from fields already on
+// every point (spread, scores) -- no server round-trip needed to re-color by the other side.
+function marketOutcome(r) {
+  if (r.home_score === r.away_score) return 'tie';
+  if (r.spread === 0) return 'push'; // no market favorite to grade
+  const marketFavoredHome = r.spread > 0;
+  return marketFavoredHome === (r.home_score > r.away_score) ? 'hit' : 'miss';
+}
+
 function fmtHistVal(key, v) {
   if (v == null) return '—';
   if (key === 'team' || key === 'rank' || key === 'season') return v;
@@ -40,6 +50,7 @@ const Historical = {
   _scatterGenerated: null,
   _scatterFull: null,
   _hideAgreements: false,
+  _colorBy: 'model',
 
   sortBy(col) {
     if (this._sort.col === col) this._sort.dir *= -1;
@@ -56,6 +67,15 @@ const Historical = {
     if (btn) btn.textContent = this._hideAgreements
       ? 'Show all games'
       : 'Hide games where market & model agreed';
+    if (this._scatterFull) this._drawBacktest(this._scatterFull);
+  },
+
+  // Which side's win/loss the dot colors represent -- the geometry (spread vs. delta) never
+  // changes, only which favorite each point is graded against.
+  toggleColorBy() {
+    this._colorBy = this._colorBy === 'model' ? 'market' : 'model';
+    const btn = document.getElementById('backtest-colorby-toggle');
+    if (btn) btn.textContent = `Color by: ${this._colorBy === 'model' ? "model's picks" : "market's picks"}`;
     if (this._scatterFull) this._drawBacktest(this._scatterFull);
   },
 
@@ -96,12 +116,14 @@ const Historical = {
           <h2>Model vs. market, every graded game</h2>
           <p class="muted small">Market spread against the live Power Rankings model's own
             weighted delta for that matchup (today's weights, applied to each game's pre-game
-            rating) -- <span class="result-good">green</span> = the model's favorite won,
-            <span class="result-bad">red</span> = it lost, <span class="chip warn" style="padding:1px 7px;">amber</span> = the game
-            tied. Positive = home favored by that measure. Scroll/drag to zoom, hover a point
-            for details, click to pin it below.</p>
-          <div class="btns" style="margin-bottom:8px;">
+            rating). Positive = home favored by that measure.
+            <span class="result-good">Green</span>/<span class="result-bad">red</span>/
+            <span class="chip warn" style="padding:1px 7px;">amber</span> = the currently
+            selected side's favorite won / lost / the game tied -- toggle which side below.
+            Scroll/drag to zoom, hover a point for details, click to pin it below.</p>
+          <div class="btns" style="margin-bottom:8px; flex-wrap:wrap;">
             <button data-act="historical-toggle-agree" id="backtest-agree-toggle">Hide games where market &amp; model agreed</button>
+            <button data-act="historical-toggle-colorby" id="backtest-colorby-toggle">Color by: model's picks</button>
             <span id="backtest-agree-stat" class="muted small"></span>
           </div>
           <div id="backtest-chart"></div>
@@ -178,8 +200,11 @@ const Historical = {
     const shown = this._hideAgreements ? scatter.filter(r => r.spread * r.delta <= 0) : scatter;
     this._renderAgreeStat(shown);
 
+    // Color mode only changes which favorite each point is graded against for coloring --
+    // the geometry (spread vs. delta) and the agreement filter above are unaffected.
+    const colorOf = this._colorBy === 'market' ? marketOutcome : r => r.outcome;
     const groups = { hit: [], miss: [], tie: [], push: [] };
-    shown.forEach(r => groups[r.outcome].push(r));
+    shown.forEach(r => groups[colorOf(r)].push(r));
 
     const traces = ['hit', 'miss', 'tie'].filter(k => groups[k].length).map(key => {
       const pts = groups[key];
