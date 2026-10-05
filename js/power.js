@@ -96,6 +96,17 @@ function classifyTeams(teamVals) {
   return { avg, elite, above, average, below, weak, groupOf };
 }
 
+// Shared display metadata per group, used both to color the main table's EPA cells and to
+// build the distribution strips below -- one definition so the two can never drift apart.
+const GROUP_META = {
+  elite:   { label: 'Elite',         dotCls: 'outlier-good', textCls: 'result-good', labelDots: true },
+  above:   { label: 'Above average', dotCls: 'above-avg',    textCls: 'mild-good',    labelDots: false },
+  average: { label: 'Average',       dotCls: '',              textCls: 'muted',        labelDots: false },
+  below:   { label: 'Below average', dotCls: 'below-avg',    textCls: 'mild-bad',     labelDots: false },
+  weak:    { label: 'Weak',          dotCls: 'outlier-bad',  textCls: 'result-bad',   labelDots: true },
+};
+const GROUP_ORDER = ['elite', 'above', 'average', 'below', 'weak'];
+
 function fmtPowerVal(key, v) {
   if (v == null) return '—';
   if (key === 'team' || key === 'rank') return v;
@@ -132,14 +143,27 @@ const Power = {
       return dir * ((a[col] ?? 0) - (b[col] ?? 0)) || a.team.localeCompare(b.team);
     });
 
+    // One classification per EPA stat, shared by the table's cell coloring below and the
+    // distribution panel -- computed once so the two can never disagree about which group a
+    // team is in.
+    const classifications = {};
+    DIST_METRICS.forEach(([key]) => {
+      const teamVals = rows.filter(r => r[key] != null).map(r => ({ team: r.team, value: r[key] }));
+      if (teamVals.length >= 4) classifications[key] = classifyTeams(teamVals);
+    });
+
     const header = POWER_COLS.map(([key, label, title]) => {
       const active = col === key;
       const arrow = active ? (dir === 1 ? ' ▲' : ' ▼') : '';
       return `<th class="num"${title ? ` title="${esc(title)}"` : ''}><button data-act="power-sort" data-col="${key}" class="sort-btn${active ? ' active' : ''}">${label}${arrow}</button></th>`;
     }).join('');
 
-    const body = rows.map(r => `<tr>${POWER_COLS.map(([key]) =>
-      `<td class="num">${fmtPowerVal(key, r[key])}</td>`).join('')}</tr>`).join('');
+    const body = rows.map(r => `<tr data-team="${esc(r.team)}">${POWER_COLS.map(([key]) => {
+      const c = classifications[key];
+      const g = c ? c.groupOf.get(r.team) : null;
+      const cls = g ? GROUP_META[g].textCls : '';
+      return `<td class="num${cls ? ' ' + cls : ''}">${fmtPowerVal(key, r[key])}</td>`;
+    }).join('')}</tr>`).join('');
 
     const statLabel = key => (POWER_COLS.find(([k]) => k === key) || [null, key])[1];
     const weightsList = meta
@@ -157,58 +181,71 @@ const Power = {
           best/worst ever recorded across the full 2007-present dataset (not just this season's
           32 teams), so higher is always better and a weak season's best team won't look
           inflated. Points and turnover columns show the actual per-game average for the window
-          evaluated. Click a column header to sort.</p>
+          evaluated. The 4 EPA columns are colored by the same Elite/Above/Average/Below/Weak
+          groups as the distribution panel below -- hover a row to highlight that team's dot
+          on each strip. Click a column header to sort.</p>
         ${meta ? `<details class="power-methodology">
           <summary class="muted small">Weights used (click to expand)</summary>
           <ul class="power-weights">${weightsList}</ul>
         </details>` : ''}
         <table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>
       </div>
-      ${this._distributionPanel(rows)}`;
+      ${this._distributionPanel(rows, classifications)}`;
+
+    // Delegated, wired once -- #power itself survives every re-render (only its innerHTML's
+    // children get replaced), so this never needs rewiring on sort/reload.
+    if (!this._hoverWired) {
+      const highlight = (team, on) => {
+        el.querySelectorAll(`.dist-tick[data-team="${team}"]`).forEach(t => t.classList.toggle('dist-tick-hover', on));
+      };
+      el.addEventListener('mouseover', e => {
+        const tr = e.target.closest('tr[data-team]');
+        if (tr) highlight(tr.dataset.team, true);
+      });
+      el.addEventListener('mouseout', e => {
+        const tr = e.target.closest('tr[data-team]');
+        if (tr) highlight(tr.dataset.team, false);
+      });
+      this._hoverWired = true;
+    }
   },
 
   // One number-line strip per EPA stat, every team positioned at its actual 0-100 value (not
   // just rank order) so clustering vs. real gaps is visible as literal physical distance, not
   // just color or order. See classifyTeams() above for the five groups every team lands in.
-  _distributionPanel(rows) {
+  _distributionPanel(rows, classifications) {
     const metricHtml = ([key, label]) => {
-      const teamVals = rows.filter(r => r[key] != null).map(r => ({ team: r.team, value: r[key] }));
-      if (teamVals.length < 4) return '';
-      const { avg, elite, above, average, below, weak } = classifyTeams(teamVals);
+      const c = classifications[key];
+      if (!c) return '';
+      const groupOf = c.groupOf;
 
-      const GROUPS = [
-        { key: 'elite', teams: elite, label: 'Elite', cls: 'outlier-good', textCls: 'result-good', labelDots: true },
-        { key: 'above', teams: above, label: 'Above average', cls: 'above-avg', textCls: 'mild-good', labelDots: false },
-        { key: 'average', teams: average, label: 'Average', cls: '', textCls: 'muted', labelDots: false },
-        { key: 'below', teams: below, label: 'Below average', cls: 'below-avg', textCls: 'mild-bad', labelDots: false },
-        { key: 'weak', teams: weak, label: 'Weak', cls: 'outlier-bad', textCls: 'result-bad', labelDots: true },
-      ];
-      const groupOf = new Map();
-      GROUPS.forEach(g => g.teams.forEach(t => groupOf.set(t.team, g)));
-
-      const ticks = teamVals.map(t => {
-        const g = groupOf.get(t.team);
-        return `<div class="dist-tick${g && g.cls ? ' ' + g.cls : ''}" style="left:${t.value}%"
-            title="${esc(t.team)}: ${t.value.toFixed(1)}/100 (${g ? g.label.toLowerCase() : ''})">${g && g.labelDots ? `<span class="dist-tick-label ${g.cls}">${esc(t.team)}</span>` : ''}</div>`;
+      const ticks = rows.filter(r => r[key] != null).map(r => {
+        const g = groupOf.get(r.team);
+        const meta = g ? GROUP_META[g] : null;
+        return `<div class="dist-tick${meta && meta.dotCls ? ' ' + meta.dotCls : ''}" data-team="${esc(r.team)}" style="left:${r[key]}%"
+            title="${esc(r.team)}: ${r[key].toFixed(1)}/100 (${meta ? meta.label.toLowerCase() : ''})">${meta && meta.labelDots ? `<span class="dist-tick-label ${meta.dotCls}">${esc(r.team)}</span>` : ''}</div>`;
       }).join('');
 
-      const groupLine = g => {
-        if (!g.teams.length) return '';
-        const names = g.teams.map(t => t.team).join(', ');
-        const gavg = g.teams.reduce((s, t) => s + t.value, 0) / g.teams.length;
-        const diff = Math.abs(gavg - avg).toFixed(1);
-        const dir = gavg > avg ? 'above' : 'below';
-        const isolation = g.key === 'elite' || g.key === 'weak' ? ', cut off from the rest of the pack by a real gap' : '';
-        return `<li><strong class="${g.textCls}">${g.label}</strong> `
-          + `(${g.teams.length}: ${esc(names)}) — avg ${gavg.toFixed(1)}/100, ${diff}pts ${dir} `
-          + `the league average${isolation}.</li>`;
-      };
-      const lines = GROUPS.map(groupLine).filter(Boolean).join('');
+      // Piecewise boundaries instead of team lists: each group's own lowest value is its
+      // cutoff, chained against the next-better group's cutoff -- exactly the step function
+      // buildTiers()/classifyTeams() actually computed, just read back as thresholds instead
+      // of membership.
+      const nonEmpty = GROUP_ORDER.map(k => ({ key: k, teams: c[k], ...GROUP_META[k] })).filter(g => g.teams.length);
+      const lines = nonEmpty.map((g, i) => {
+        const min = Math.min(...g.teams.map(t => t.value));
+        const prevMin = i > 0 ? Math.min(...nonEmpty[i - 1].teams.map(t => t.value)) : null;
+        let cond;
+        if (nonEmpty.length === 1) cond = 'the whole league';
+        else if (i === 0) cond = `v &ge; ${min.toFixed(1)}`;
+        else if (i === nonEmpty.length - 1) cond = `v &lt; ${prevMin.toFixed(1)}`;
+        else cond = `${min.toFixed(1)} &le; v &lt; ${prevMin.toFixed(1)}`;
+        return `<li><strong class="${g.textCls}">${g.label}</strong>: ${cond}</li>`;
+      }).join('');
 
       return `<div class="dist-metric">
         <div class="dist-label">${esc(label)}</div>
         <div class="dist-strip">
-          <div class="dist-mean-line" style="left:${avg}%" title="League average: ${avg.toFixed(1)}/100"></div>
+          <div class="dist-mean-line" style="left:${c.avg}%" title="League average: ${c.avg.toFixed(1)}/100"></div>
           ${ticks}
         </div>
         <ul class="dist-tiers">${lines}</ul>
@@ -228,8 +265,9 @@ const Power = {
           if it's meaningfully off the mean, or just <strong class="muted">Average</strong> if
           it's within a few points of it -- so a cluster of similarly-bad teams that's
           nonetheless well below average still shows up as a real group instead of
-          disappearing into an undifferentiated middle. The thin vertical line is the league
-          average.</p>
+          disappearing into an undifferentiated middle. Each group's own cutoff value is
+          listed below it instead of its team list -- hover a team in the table above to find
+          it here. The thin vertical line is the league average.</p>
         ${metrics}
       </div>`;
   },
