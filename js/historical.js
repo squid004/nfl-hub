@@ -38,11 +38,25 @@ const Historical = {
   _sort: { col: 'rank', dir: 1 },
   _shellBuilt: false,
   _scatterGenerated: null,
+  _scatterFull: null,
+  _hideAgreements: false,
 
   sortBy(col) {
     if (this._sort.col === col) this._sort.dir *= -1;
     else this._sort = { col, dir: (col === 'rank' || col === 'season') ? 1 : -1 };
     this.render(App._ctx);
+  },
+
+  // "Agreement" = market and model favor the SAME side (spread and delta share a sign) --
+  // those games can't show the market beating the model or vice versa, since both picked
+  // the same team. Hiding them isolates the only games where the two could have differed.
+  toggleAgreement() {
+    this._hideAgreements = !this._hideAgreements;
+    const btn = document.getElementById('backtest-agree-toggle');
+    if (btn) btn.textContent = this._hideAgreements
+      ? 'Show all games'
+      : 'Hide games where market & model agreed';
+    if (this._scatterFull) this._drawBacktest(this._scatterFull);
   },
 
   render(ctx) {
@@ -86,6 +100,10 @@ const Historical = {
             <span class="result-bad">red</span> = it lost, <span class="chip warn" style="padding:1px 7px;">amber</span> = the game
             tied. Positive = home favored by that measure. Scroll/drag to zoom, hover a point
             for details, click to pin it below.</p>
+          <div class="btns" style="margin-bottom:8px;">
+            <button data-act="historical-toggle-agree" id="backtest-agree-toggle">Hide games where market &amp; model agreed</button>
+            <span id="backtest-agree-stat" class="muted small"></span>
+          </div>
           <div id="backtest-chart"></div>
           <div id="backtest-selected" class="muted small"></div>
         </div>`;
@@ -124,9 +142,24 @@ const Historical = {
     }
   },
 
-  _renderBacktestChart(scatter) {
-    const panel = document.getElementById('backtest-panel');
-    panel.hidden = false;
+  // Market-favorite-won %, over just the games shown when "hide agreements" is on (i.e. the
+  // games where market and model picked opposite sides) -- the only games where one of them
+  // could have been righter than the other. Excludes spread === 0 (no market favorite to
+  // grade) and tie/push outcomes.
+  _renderAgreeStat(shown) {
+    const el = document.getElementById('backtest-agree-stat');
+    if (!el) return;
+    if (!this._hideAgreements) { el.textContent = ''; return; }
+    const decided = shown.filter(r => (r.outcome === 'hit' || r.outcome === 'miss') && r.spread !== 0);
+    if (!decided.length) { el.textContent = `${shown.length} games shown.`; return; }
+    const marketRight = decided.filter(r => (r.spread > 0) === (r.home_score > r.away_score)).length;
+    const modelRight = decided.filter(r => r.outcome === 'hit').length;
+    el.textContent = `${shown.length} games shown — market's pick won ` +
+      `${(100 * marketRight / decided.length).toFixed(1)}% · model's pick won ` +
+      `${(100 * modelRight / decided.length).toFixed(1)}%`;
+  },
+
+  _drawBacktest(scatter) {
     const cs = getComputedStyle(document.documentElement);
     const cssVar = name => cs.getPropertyValue(name).trim();
     const colors = {
@@ -134,8 +167,14 @@ const Historical = {
       hit: cssVar('--good'), miss: cssVar('--bad'), tie: cssVar('--warn'),
     };
 
+    // "Agreement" = market and model favor the same side (spread and delta share a sign).
+    // Hiding those isolates the only games where the market and the model could have
+    // actually differed on the winner.
+    const shown = this._hideAgreements ? scatter.filter(r => r.spread * r.delta <= 0) : scatter;
+    this._renderAgreeStat(shown);
+
     const groups = { hit: [], miss: [], tie: [], push: [] };
-    scatter.forEach(r => groups[r.outcome].push(r));
+    shown.forEach(r => groups[r.outcome].push(r));
 
     const traces = ['hit', 'miss', 'tie'].filter(k => groups[k].length).map(key => {
       const pts = groups[key];
@@ -172,10 +211,20 @@ const Historical = {
       dragmode: 'zoom',
     };
 
-    Plotly.newPlot('backtest-chart', traces, layout, {
+    // react(), not newPlot(), even on the first call -- it's a safe drop-in that also
+    // preserves the user's current zoom/pan on later calls (e.g. toggling the button)
+    // instead of resetting the view every time.
+    Plotly.react('backtest-chart', traces, layout, {
       responsive: true, scrollZoom: true, displaylogo: false,
       modeBarButtonsToRemove: ['lasso2d', 'select2d'],
     });
+  },
+
+  _renderBacktestChart(scatter) {
+    this._scatterFull = scatter;
+    const panel = document.getElementById('backtest-panel');
+    panel.hidden = false;
+    this._drawBacktest(scatter);
 
     const chartEl = document.getElementById('backtest-chart');
     chartEl.on('plotly_click', ev => {
