@@ -38,6 +38,30 @@ function marketOutcome(r) {
   return marketFavoredHome === (r.home_score > r.away_score) ? 'hit' : 'miss';
 }
 
+// Standard ongoing monitoring metric (added 2026-10) for the QB/skill health adjustment
+// baked into `delta` -- see nflhub.sources.team_ratings.compute_calibration_stats()'s own
+// docstring for the full reasoning. Hit-rate (old vs. new) is shown for completeness, but
+// the number that actually matters is the confidence-reduction RATE comparison: a working
+// adjustment reduces |delta| more often on games the old model missed than on games it got
+// right (that gap, not the raw hit-rate, is the point of this feature -- honest uncertainty,
+// not a better point pick).
+function calibrationSummaryHtml(cal) {
+  if (!cal) return '';
+  const sig = cal.calibration_p != null && cal.calibration_p < 0.05;
+  const missPct = cal.miss_confidence_reduced_rate != null ? (cal.miss_confidence_reduced_rate * 100).toFixed(1) : '—';
+  const hitPct = cal.hit_confidence_reduced_rate != null ? (cal.hit_confidence_reduced_rate * 100).toFixed(1) : '—';
+  const pLabel = cal.calibration_p != null ? (cal.calibration_p < 0.0001 ? 'p<0.0001' : `p=${cal.calibration_p.toFixed(4)}`) : '—';
+  return `<p class="lean" title="Computed fresh every refresh from this same chart's delta/delta_raw -- never a stale, separately-run report.">
+    <strong>Model calibration check:</strong> hit rate ${(cal.old_hit_rate*100).toFixed(1)}%
+    (pre-adjustment) &rarr; ${(cal.new_hit_rate*100).toFixed(1)}% (current), ${cal.net_games >= 0 ? '+' : ''}${cal.net_games}
+    games over ${cal.n} graded (${cal.flips} picks changed: ${cal.improvements} improved, ${cal.regressions} regressed).
+    On games the pre-adjustment model <strong>missed</strong>, confidence was reduced
+    ${missPct}% of the time, vs <strong>${hitPct}%</strong> on games it got right (${pLabel})
+    &mdash; ${sig
+      ? 'a real, statistically significant tendency to be more honestly uncertain specifically where the model is wrong.'
+      : 'not yet a statistically significant difference.'}</p>`;
+}
+
 function fmtHistVal(key, v) {
   if (v == null) return '—';
   if (key === 'team' || key === 'rank' || key === 'season') return v;
@@ -222,6 +246,7 @@ const Historical = {
             <span class="chip warn" style="padding:1px 7px;">amber</span> = the currently
             selected side's favorite won / lost / the game tied. Scroll/drag to zoom, hover a
             point for details, click to pin it below.</p>
+          ${calibrationSummaryHtml(data.calibration)}
 
           <div class="backtest-controls">
             <div class="backtest-control-row">

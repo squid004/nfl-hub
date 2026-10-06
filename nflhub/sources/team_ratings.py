@@ -52,6 +52,20 @@ in nflhub/data/team_ratings/ (~390KB total for 2007-2025) so this doesn't re-dow
 re-crunch ~350MB of historical play-by-play every run. Only the CURRENT season is fetched
 fresh from nflverse each time this rebuilds, since it's still accumulating games. Rebuilt at
 most once/day (see `refresh`), same cadence as sources/history.py's hist_distribution.
+
+QB/skill-position health adjustment: `delta` (the composite's whole point -- fed into both
+the Historical Power tab's backtest scatter and the Moneyline Pick'em tab's Power Model pick)
+is NOT pure POWER_WEIGHTS output anymore. It's that 8-stat composite PLUS two small,
+data-driven corrections for information those 8 stats have zero visibility into (who's
+actually playing THIS week): QB_QUALITY_GAP_WEIGHT * qb_quality_gap (see
+qb_quality_gap_data()) and SKILL_EPA_OUT_WEIGHT * skill_epa_out (see
+skill_epa_out_by_team_week()). Both weights were fit once offline (research/edge_signal_
+test_v26_production_weights.py) and are real, statistically significant effects -- but
+walk-forward backtesting of their effect on raw hit-rate came back flat (research/edge_
+signal_test_v23/v24/v25_*.py all found net change indistinguishable from zero). The point of
+including them isn't to flip more picks right; it's so `delta` -- and therefore delta_win_
+prob()'s displayed confidence -- honestly reflects known health context instead of silently
+ignoring it. `delta_raw` is kept alongside `delta` everywhere, for comparison.
 """
 from __future__ import annotations
 
@@ -59,7 +73,9 @@ import csv
 import io
 import json
 import logging
+import math
 import os
+import re
 from collections import defaultdict
 from datetime import date, datetime, timezone
 
@@ -75,9 +91,11 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "tea
 GAMES_URL = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
 PBP_URL = "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_{season}.csv.gz"
 INJURIES_URL = "https://github.com/nflverse/nflverse-data/releases/download/injuries/injuries_{season}.csv"
+PLAYER_STATS_URL = "https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats.csv"
 TIMEOUT = 30
 FIRST_SEASON = 2007
 FIRST_INJURY_SEASON = 2009  # nflverse's injury reports start here; 2007/2008 return 404
+SKILL_POSITIONS = {"RB", "WR", "TE", "FB"}
 EWMA_ALPHA = 0.2  # ~4-game half-life; reused convention, not independently tuned
 # A new season's rating starts as last season's own ending rating (NOT a multi-generation
 # blend that still carries a sliver of every season back to 2007 forever, which is what the
@@ -161,6 +179,281 @@ def delta_win_prob(delta: float) -> float:
         return 0.5
     p = 1.0 / (1.0 + np.exp(-(DELTA_CALIBRATION_INTERCEPT + DELTA_CALIBRATION_SLOPE * abs(delta))))
     return min(p, DELTA_PROB_MAX)
+
+
+# Converts two current-week injury signals -- QB_QUALITY_GAP (see qb_quality_gap_data()
+# below) and SKILL_EPA_OUT (see skill_epa_out_by_team_week() below) -- into the SAME units
+# as the composite `delta`, so they can be added directly to it. Both are real EPA-unit
+# measurements (not binary flags), computed from nflverse's own play-by-play/player-stats
+# data: QB_QUALITY_GAP is the difference between a team's normal starter's trailing EPA/
+# dropback and whoever's actually expected to play; SKILL_EPA_OUT is the summed trailing
+# EPA/game of every RB/WR/TE/FB currently listed Out/Doubtful. Fit ONCE offline
+# (research/edge_signal_test_v26_production_weights.py, 4431 games 2009-2025): one joint
+# logistic regression of home_win ~ delta + qb_quality_gap_diff + skill_epa_out_diff, all
+# three features in their RAW native units (not standardized) -- the ratio of each gap's own
+# coefficient to delta's own IS directly "how many delta-equivalent units this gap is worth."
+# Both terms came back significant with the expected sign (QB z=-3.63, skill z=-2.46 --
+# more missing value lowers delta, as it should). This does NOT touch POWER_WEIGHTS or the
+# underlying 8-stat composite at all -- it's a purely additive correction on top, informed
+# by current-week injury context those 8 inputs have zero visibility into (they only know
+# how a team has actually performed with whoever played, never who's playing THIS week).
+# Walk-forward backtests of this adjustment's effect on raw hit-rate (research/edge_signal_
+# test_v23/v24/v25_*.py) came back statistically flat (net change indistinguishable from
+# zero, ~50/50 split of improved vs. regressed picks) -- the point of including it isn't to
+# flip more picks, it's so `delta` (and therefore delta_win_prob's displayed confidence)
+# honestly reflects known health context instead of silently ignoring it. Computed once
+# offline, not refit daily.
+QB_QUALITY_GAP_WEIGHT = -0.5903
+SKILL_EPA_OUT_WEIGHT = -0.0362
+
+
+def _norm_player_name(name: str) -> str:
+    """Lowercase, strip punctuation/suffixes -- same normalization on both sides of every
+    name-matched join below (injury report <-> player_stats.csv), since neither shares a
+    common ID with the other (gsis_id vs. no stable id in player_stats' name columns)."""
+    name = (name or "").lower().strip()
+    name = re.sub(r"[.'`]", "", name)
+    name = re.sub(r"\s+(jr|sr|ii|iii|iv|v)\.?$", "", name)
+    return re.sub(r"\s+", " ", name)
+
+
+def _passer_game_stats(season: int, current_season: int) -> pd.DataFrame:
+    """One row per (game_id, team, passer_player_id): pass attempts and EPA sum that game
+    (REG season, garbage time excluded -- same WP_LO/WP_HI filter as _phase_stats_for_
+    season). NOT reusable from that function's own cache -- it doesn't carry passer
+    identity. Completed seasons cached (nflhub/data/team_ratings/passer_game_{season}.
+    parquet, same convention as _phase_stats_for_season); only the current season
+    re-downloads play-by-play fresh."""
+    if season < current_season:
+        path = os.path.join(DATA_DIR, f"passer_game_{season}.parquet")
+        if os.path.exists(path):
+            return pd.read_parquet(path)
+    cols = ["game_id", "season", "week", "season_type", "posteam", "play_type", "epa", "wp", "passer_player_id"]
+    df = pd.read_csv(PBP_URL.format(season=season), compression="gzip", usecols=cols, low_memory=False)
+    df = df[(df["season_type"] == "REG") & (df["play_type"] == "pass")]
+    df = df.dropna(subset=["wp", "epa", "posteam", "passer_player_id"])
+    df = df[(df["wp"] >= WP_LO) & (df["wp"] <= WP_HI)]
+    out = df.groupby(["game_id", "posteam", "passer_player_id"]).agg(
+        attempts=("epa", "size"), epa_sum=("epa", "sum")
+    ).reset_index().rename(columns={"posteam": "team"})
+    if season < current_season:
+        out.to_parquet(os.path.join(DATA_DIR, f"passer_game_{season}.parquet"))
+    return out
+
+
+def qb_quality_gap_data(played_games: list[dict], current_season: int):
+    """One chronological walk over every passer's pass attempts/EPA (FIRST_INJURY_SEASON
+    through current_season -- matches the window QB_QUALITY_GAP_WEIGHT was fit against)
+    that serves TWO callers from the same state, so they can never drift apart:
+      - `gap_by_team_week` {(team, season, week): gap}: for every HISTORICAL game, the
+        team's primary starter's own trailing EPA/dropback minus the ACTUAL passer's own
+        trailing EPA/dropback -- 0 when the normal starter played, positive when whoever
+        played was worse than usual. Feeds compute_backtest_scatter()'s adjusted delta.
+      - `current_primary` {team: passer_id} / `current_trailing_epa` {passer_id: EPA/
+        dropback} / `league_avg_epa`: the LATEST state as of the most recent game each team/
+        passer has played -- "who's QB1 right now" and "how have they (and everyone else)
+        been throwing." Feeds the live, UPCOMING-game adjustment in refresh() (no actual
+        passer exists yet for a future game, so that path infers "league-average backup" if
+        the live injury report has the primary starter Out/Doubtful, else assumes the
+        healthy primary plays -- see refresh()'s own qb_gap_upcoming construction).
+    `primary_so_far` is cumulative attempts THIS season so far, falling back to last
+    season's leader before this season's first pass -- no lookahead, no full-season
+    hindsight."""
+    frames = []
+    for season in range(FIRST_INJURY_SEASON, current_season + 1):
+        try:
+            df = _passer_game_stats(season, current_season)
+        except Exception:  # noqa: BLE001 -- best-effort, same soft-fail convention as the rest of this module
+            log.warning("passer_game_stats failed for %s", season, exc_info=True)
+            continue
+        df = df.copy()
+        df["season"] = season
+        frames.append(df)
+    if not frames:
+        return {}, {}, {}, 0.0
+    passer_df = pd.concat(frames, ignore_index=True)
+
+    games_by_id = {g["game_id"]: g for g in played_games}
+
+    def week_of(gid):
+        g = games_by_id.get(gid)
+        if g is not None:
+            try:
+                return int(g["week"])
+            except (TypeError, ValueError):
+                pass
+        try:
+            return int(gid.split("_")[1])
+        except (IndexError, ValueError):
+            return None
+
+    passer_df["week"] = [week_of(gid) for gid in passer_df["game_id"]]
+    passer_df = passer_df.dropna(subset=["week"])
+    passer_df["week"] = passer_df["week"].astype(int)
+
+    actual_passer: dict[tuple[str, str], str] = {}
+    game_team_epa: dict[tuple[str, str], tuple[float, int]] = {}
+    for (gid, team), grp in passer_df.groupby(["game_id", "team"]):
+        row = grp.loc[grp["attempts"].idxmax()]
+        actual_passer[(gid, team)] = row["passer_player_id"]
+        game_team_epa[(gid, team)] = (row["epa_sum"], row["attempts"])
+
+    gt_meta = passer_df[["game_id", "team", "season", "week"]].drop_duplicates().sort_values(["season", "week", "game_id", "team"])
+    game_order = list(gt_meta.itertuples(index=False, name=None))
+
+    season_attempts: dict[tuple[str, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    last_season_leader: dict[str, str] = {}
+    last_season_num: dict[str, int] = {}
+    primary_so_far: dict[tuple[str, str], str] = {}
+    passer_hist: dict[str, list[float]] = defaultdict(list)
+    trailing_epa: dict[tuple[str, str], float | None] = {}
+    league_avg: list[float] = []
+
+    for gid, team, season, week in game_order:
+        if last_season_num.get(team) is not None and last_season_num[team] != season and season_attempts[(team, season - 1)]:
+            last_season_leader[team] = max(season_attempts[(team, season - 1)].items(), key=lambda kv: kv[1])[0]
+        last_season_num[team] = season
+        this_season = season_attempts[(team, season)]
+        if this_season:
+            primary_so_far[(team, gid)] = max(this_season.items(), key=lambda kv: kv[1])[0]
+        elif team in last_season_leader:
+            primary_so_far[(team, gid)] = last_season_leader[team]
+        else:
+            primary_so_far[(team, gid)] = actual_passer.get((gid, team))
+
+        ap = actual_passer.get((gid, team))
+        if ap is not None:
+            hist = passer_hist[ap]
+            trailing_epa[(ap, gid)] = (sum(hist) / len(hist)) if hist else None
+            epa_sum, attempts = game_team_epa[(gid, team)]
+            if attempts:
+                per_play = epa_sum / attempts
+                hist.append(per_play)
+                league_avg.append(per_play)
+            this_season[ap] += attempts
+
+    league_avg_epa = (sum(league_avg) / len(league_avg)) if league_avg else 0.0
+
+    gap_by_team_week: dict[tuple[str, int, int], float] = {}
+    for gid, team, season, week in game_order:
+        primary = primary_so_far.get((team, gid))
+        actual = actual_passer.get((gid, team))
+        if primary is None or actual is None:
+            continue
+        tp = trailing_epa.get((primary, gid))
+        ta = trailing_epa.get((actual, gid))
+        tp = tp if tp is not None else league_avg_epa
+        ta = ta if ta is not None else league_avg_epa
+        gap_by_team_week[(team, season, week)] = tp - ta
+
+    current_primary: dict[str, str] = {}
+    for team, season in season_attempts:
+        if season != last_season_num.get(team):
+            continue
+        this_season = season_attempts[(team, season)]
+        if this_season:
+            current_primary[team] = max(this_season.items(), key=lambda kv: kv[1])[0]
+        elif team in last_season_leader:
+            current_primary[team] = last_season_leader[team]
+    current_trailing_epa = {p: ((sum(h) / len(h)) if h else league_avg_epa) for p, h in passer_hist.items()}
+
+    return gap_by_team_week, current_primary, current_trailing_epa, league_avg_epa
+
+
+def skill_epa_history(current_season: int) -> tuple[dict[str, list], float]:
+    """{name_norm: [(season, week, epa), ...]} sorted chronologically (rushing_epa +
+    receiving_epa per game, nflverse's player_stats.csv, RB/WR/TE/FB only), plus the
+    league-average fallback for a player with no tracked history yet. nflverse serves
+    player_stats as ONE file covering every season (no per-season URL) -- every refresh
+    still downloads the whole file, but completed seasons' rows are cached as their own
+    small parquet (nflhub/data/team_ratings/skill_epa_{season}.parquet) and only the
+    CURRENT season's rows get re-parsed from the fresh download each time."""
+    frames = []
+    missing = [s for s in range(FIRST_INJURY_SEASON, current_season + 1)
+               if s == current_season or not os.path.exists(os.path.join(DATA_DIR, f"skill_epa_{s}.parquet"))]
+    for s in range(FIRST_INJURY_SEASON, current_season + 1):
+        if s in missing:
+            continue
+        frames.append(pd.read_parquet(os.path.join(DATA_DIR, f"skill_epa_{s}.parquet")))
+    if missing:
+        resp = requests.get(PLAYER_STATS_URL, timeout=90)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text), low_memory=False)
+        df = df[(df["position"].isin(SKILL_POSITIONS)) & (df["season_type"] == "REG")]
+        df["epa"] = df["rushing_epa"].fillna(0) + df["receiving_epa"].fillna(0)
+        df["name_norm"] = df["player_display_name"].fillna(df.get("player_name")).map(_norm_player_name)
+        df = df[["name_norm", "season", "week", "epa"]].dropna(subset=["name_norm"])
+        for s in missing:
+            season_df = df[df["season"] == s]
+            if s != current_season:
+                season_df.to_parquet(os.path.join(DATA_DIR, f"skill_epa_{s}.parquet"))
+            frames.append(season_df)
+
+    full = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=["name_norm", "season", "week", "epa"])
+    player_games: dict[str, list] = defaultdict(list)
+    for row in full.sort_values(["season", "week"]).itertuples(index=False):
+        player_games[row.name_norm].append((row.season, row.week, row.epa))
+    league_avg_epa = float(full["epa"].mean()) if len(full) else 0.0
+    return dict(player_games), league_avg_epa
+
+
+def _skill_injury_rows(current_season: int) -> list[dict]:
+    """Every Out/Doubtful RB/WR/TE/FB report row -- same cached injuries_{season}.csv files
+    as _qb_out_doubtful_by_week (shared cache, different position filter, no extra network
+    cost beyond what that function already pays within the same refresh)."""
+    out = []
+    for season in range(FIRST_INJURY_SEASON, current_season + 1):
+        cache_path = os.path.join(DATA_DIR, f"injuries_{season}.csv")
+        if season < current_season and os.path.exists(cache_path):
+            with open(cache_path, encoding="utf-8") as f:
+                text = f.read()
+        else:
+            resp = requests.get(INJURIES_URL.format(season=season), timeout=TIMEOUT)
+            if resp.status_code == 404:
+                continue
+            resp.raise_for_status()
+            text = resp.text
+            if season < current_season:
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    f.write(text)
+        for row in csv.DictReader(io.StringIO(text)):
+            if row.get("game_type") != "REG" or row.get("position") not in SKILL_POSITIONS:
+                continue
+            if row.get("report_status") not in ("Out", "Doubtful"):
+                continue
+            try:
+                team = normalize_team(row["team"])
+                week = int(row["week"])
+            except (UnknownTeamError, ValueError, TypeError):
+                continue
+            out.append({"team": team, "season": season, "week": week, "name": _norm_player_name(row.get("full_name", ""))})
+    return out
+
+
+def skill_epa_out_by_team_week(current_season: int) -> dict[tuple[str, int, int], float]:
+    """{(team, season, week): sum of each flagged RB/WR/TE/FB's own trailing (career-to-
+    date, no lookahead) rushing+receiving EPA per game} -- "how much known offensive value
+    is unavailable this week," zero in a healthy week, scaling with both how many are out
+    AND how productive they normally are. Each player's weight is a DISCRETE value (their
+    own trailing EPA), just summed in aggregate across however many are flagged -- not a
+    unit-wide average. Works unchanged for both historical weeks (full backtest) and the
+    CURRENT week (live picks), since it's defined purely in terms of who's flagged + their
+    own history, no "who's the normal starter" ambiguity the way QB's 1-for-1 swap has."""
+    import bisect
+    player_games, league_avg_epa = skill_epa_history(current_season)
+    injury_rows = _skill_injury_rows(current_season)
+    out: dict[tuple[str, int, int], float] = defaultdict(float)
+    for r in injury_rows:
+        games = player_games.get(r["name"])
+        weight = league_avg_epa
+        if games:
+            keys = [(s, w) for s, w, _ in games]
+            idx = bisect.bisect_left(keys, (r["season"], r["week"]))
+            prior = games[:idx]
+            if prior:
+                weight = sum(e for _, _, e in prior) / len(prior)
+        out[(r["team"], r["season"], r["week"])] += max(weight, 0.0)  # a below-average player's "loss" isn't negative value
+    return dict(out)
 
 
 # Points prediction: predicted_points(team) = POINTS_INTERCEPT + sum(POINTS_WEIGHTS[k] * value),
@@ -563,6 +856,8 @@ def display_ratings(ratings: dict[str, dict[str, float]], historical_bounds: dic
 def matchup_callouts(
     ratings: dict[str, dict[str, float]], upcoming: list[dict], historical_bounds: dict[str, tuple[float, float]],
     diff_mu: dict[str, float] | None = None, diff_sd: dict[str, float] | None = None,
+    qb_gap_upcoming: dict[tuple[str, int], float] | None = None,
+    skill_out_upcoming: dict[tuple[str, int], float] | None = None,
 ) -> dict[str, dict]:
     """For each upcoming game (already normalized home/away team codes), rule-based sentences
     for any offense-vs-opposing-defense pairing whose combined z-score clears
@@ -575,8 +870,13 @@ def matchup_callouts(
     oriented home-minus-away diff, same standardization compute_backtest_scatter() uses for
     the Historical Power tab's backtest -- applying it here to each upcoming game's CURRENT
     rating diff gives the exact same composite `delta` that chart plots, just prospectively.
-    When given, each entry also gets a `power_model` block ({favorite, prob, delta}) for the
-    Moneyline Pick'em tab's Power Model pick (see delta_win_prob())."""
+
+    `qb_gap_upcoming`/`skill_out_upcoming` (optional, keyed (team, week) -- always this
+    week's data, since that's as far as the live injury report goes): QB_QUALITY_GAP_WEIGHT/
+    SKILL_EPA_OUT_WEIGHT applied to these adjust `delta` the same way compute_backtest_
+    scatter() does, before it's used to pick a favorite or fed to delta_win_prob(). When
+    given, each entry gets a `power_model` block ({favorite, prob, delta, delta_raw}) for
+    the Moneyline Pick'em tab's Power Model pick."""
     n_teams = len(ratings)
     if n_teams < 4:
         return {}
@@ -602,6 +902,7 @@ def matchup_callouts(
     out: dict[str, dict] = {}
     for g in upcoming:
         home, away = g.get("home_team"), g.get("away_team")
+        week = g.get("week")
         if home not in ratings or away not in ratings:
             continue
         callouts = []
@@ -652,9 +953,13 @@ def matchup_callouts(
             ratings[home].get(m) is not None and ratings[away].get(m) is not None for m in RATING_METRICS
         ):
             diffs = {m: ORIENTATION[m] * (ratings[home][m] - ratings[away][m]) for m in RATING_METRICS}
-            delta = sum(POWER_WEIGHTS[m] * ((diffs[m] - diff_mu[m]) / diff_sd[m]) for m in RATING_METRICS)
+            delta_raw = sum(POWER_WEIGHTS[m] * ((diffs[m] - diff_mu[m]) / diff_sd[m]) for m in RATING_METRICS)
+            qb_diff = (qb_gap_upcoming or {}).get((home, week), 0.0) - (qb_gap_upcoming or {}).get((away, week), 0.0)
+            skill_diff = (skill_out_upcoming or {}).get((home, week), 0.0) - (skill_out_upcoming or {}).get((away, week), 0.0)
+            delta = delta_raw + QB_QUALITY_GAP_WEIGHT * qb_diff + SKILL_EPA_OUT_WEIGHT * skill_diff
             fav = home if delta > 0 else away if delta < 0 else None
-            power_model = {"favorite": fav, "prob": round(delta_win_prob(delta), 4), "delta": round(delta, 4)}
+            power_model = {"favorite": fav, "prob": round(delta_win_prob(delta), 4),
+                            "delta": round(delta, 4), "delta_raw": round(delta_raw, 4)}
 
         out[f"{away}@{home}"] = {
             "home": home, "away": away,
@@ -944,7 +1249,11 @@ def _qb_out_doubtful_by_week(current_season: int) -> dict[tuple[str, int, int], 
     return out
 
 
-def compute_backtest_scatter(game_log: list[dict], qb_out: dict[tuple[str, int, int], bool] | None = None) -> list[dict]:
+def compute_backtest_scatter(
+    game_log: list[dict], qb_out: dict[tuple[str, int, int], bool] | None = None,
+    qb_gap: dict[tuple[str, int, int], float] | None = None,
+    skill_out: dict[tuple[str, int, int], float] | None = None,
+) -> list[dict]:
     """Turns compute_ratings()'s optional `game_log` into ready-to-plot rows for the
     Historical Power tab's backtest scatter: market spread vs. the CURRENT production
     POWER_WEIGHTS applied to each game's pre-game rating diffs, standardized ONCE across the
@@ -954,17 +1263,27 @@ def compute_backtest_scatter(game_log: list[dict], qb_out: dict[tuple[str, int, 
     final "fit on all data" step, applied for display instead of re-fitting.
 
     `qb_out` (from _qb_out_doubtful_by_week, optional): tags each row with whether the home/
-    away team had a QB Out/Doubtful that week, so the frontend can filter on it -- the model
-    itself has no live awareness of this, it's purely descriptive context for the chart."""
+    away team had a QB Out/Doubtful that week, so the frontend can filter on it.
+
+    `qb_gap`/`skill_out` (from qb_quality_gap_data()/skill_epa_out_by_team_week(), optional):
+    QB_QUALITY_GAP_WEIGHT/SKILL_EPA_OUT_WEIGHT applied to these ADD to the pure 8-stat
+    composite below, producing the `delta` this function actually returns -- `delta_raw`
+    keeps the unadjusted composite for comparison. See QB_QUALITY_GAP_WEIGHT's own docstring
+    for why this is a real, data-driven correction and not just a flag."""
     if not game_log:
         return []
     qb_out = qb_out or {}
+    qb_gap = qb_gap or {}
+    skill_out = skill_out or {}
     mu = {m: float(np.mean([r["diffs"][m] for r in game_log])) for m in RATING_METRICS}
     sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in RATING_METRICS}
 
     out = []
     for r in game_log:
-        delta = sum(POWER_WEIGHTS[m] * ((r["diffs"][m] - mu[m]) / sd[m]) for m in RATING_METRICS)
+        delta_raw = sum(POWER_WEIGHTS[m] * ((r["diffs"][m] - mu[m]) / sd[m]) for m in RATING_METRICS)
+        qb_gap_diff = qb_gap.get((r["home"], r["season"], r["week"]), 0.0) - qb_gap.get((r["away"], r["season"], r["week"]), 0.0)
+        skill_diff = skill_out.get((r["home"], r["season"], r["week"]), 0.0) - skill_out.get((r["away"], r["season"], r["week"]), 0.0)
+        delta = delta_raw + QB_QUALITY_GAP_WEIGHT * qb_gap_diff + SKILL_EPA_OUT_WEIGHT * skill_diff
         if r["home_score"] == r["away_score"]:
             outcome = "tie"
         else:
@@ -975,7 +1294,7 @@ def compute_backtest_scatter(game_log: list[dict], qb_out: dict[tuple[str, int, 
             "season": r["season"], "week": r["week"], "date": r["gameday"],
             "home": r["home"], "away": r["away"],
             "home_score": r["home_score"], "away_score": r["away_score"],
-            "spread": round(r["spread_line"], 1), "delta": round(delta, 4),
+            "spread": round(r["spread_line"], 1), "delta": round(delta, 4), "delta_raw": round(delta_raw, 4),
             "outcome": outcome,
             "home_qb_out": qb_out.get((r["home"], r["season"], r["week"]), False),
             "away_qb_out": qb_out.get((r["away"], r["season"], r["week"]), False),
@@ -983,12 +1302,89 @@ def compute_backtest_scatter(game_log: list[dict], qb_out: dict[tuple[str, int, 
     return out
 
 
+def compute_calibration_stats(scatter: list[dict]) -> dict | None:
+    """Old (delta_raw) vs. new (delta) model comparison, computed fresh every refresh from
+    the same backtest_scatter rows so it can never drift from what the chart itself shows.
+    Standard ongoing monitoring metric as of 2026-10 (see the module docstring's QB/skill
+    health adjustment section) -- NOT just hit-rate, which the adjustment was never expected
+    to move much (walk-forward backtests all came back statistically flat, research/
+    edge_signal_test_v23/v24/v25_*.py), but whether it's SELECTIVELY reducing confidence
+    (|delta|) on games the old model actually got wrong, vs. games it got right. That's the
+    real goal of folding current-week health context into delta -- honest uncertainty, not a
+    better point pick. A working adjustment shows a HIGHER confidence-reduction rate on
+    misses than on hits; a meaningless one shows the same rate on both, since adding ANY
+    nonzero-variance correction mechanically inflates average |delta| a little either way
+    (adding noise to a number tends to push its magnitude up, regardless of direction) --
+    the RATE comparison is what's actually diagnostic, not the raw before/after magnitude.
+
+    Returns None if there's nothing gradeable yet (e.g. a fresh/empty dataset). Every count
+    here includes every graded game ever (2007+), not just seasons with QB/skill data --
+    pre-2009 games have delta == delta_raw by construction (no injury data exists to adjust
+    with), so they correctly land in neither the "reduced" nor "increased" bucket and dilute
+    both rates toward whatever the no-adjustment baseline is, same as leaving them out of the
+    denominator entirely would NOT do -- they're real games this model graded, counted
+    honestly as "nothing changed" rather than quietly excluded."""
+    def pick(delta: float) -> str | None:
+        return "home" if delta > 0 else ("away" if delta < 0 else None)
+
+    def winner(r: dict) -> str:
+        return "home" if r["home_score"] > r["away_score"] else "away"
+
+    graded = [r for r in scatter if r["home_score"] != r["away_score"] and r["delta_raw"] != 0 and r["delta"] != 0]
+    if not graded:
+        return None
+
+    old_correct = [pick(r["delta_raw"]) == winner(r) for r in graded]
+    new_correct = [pick(r["delta"]) == winner(r) for r in graded]
+    n = len(graded)
+    old_hits, new_hits = sum(old_correct), sum(new_correct)
+
+    flips = [(r, oc, nc) for r, oc, nc in zip(graded, old_correct, new_correct) if pick(r["delta_raw"]) != pick(r["delta"])]
+    improvements = sum(1 for _, oc, nc in flips if nc and not oc)
+    regressions = sum(1 for _, oc, nc in flips if oc and not nc)
+
+    misses = [r for r, oc in zip(graded, old_correct) if not oc]
+    hits = [r for r, oc in zip(graded, old_correct) if oc]
+
+    def reduced_rate(rows: list[dict]) -> tuple[int, int]:
+        return sum(1 for r in rows if abs(r["delta"]) < abs(r["delta_raw"])), len(rows)
+
+    miss_reduced, miss_n = reduced_rate(misses)
+    hit_reduced, hit_n = reduced_rate(hits)
+
+    z = p_value = None
+    if miss_n >= 10 and hit_n >= 10:
+        p1, p2 = miss_reduced / miss_n, hit_reduced / hit_n
+        p_pool = (miss_reduced + hit_reduced) / (miss_n + hit_n)
+        se = math.sqrt(p_pool * (1 - p_pool) * (1 / miss_n + 1 / hit_n))
+        if se > 0:
+            z = (p1 - p2) / se
+            p_value = math.erfc(abs(z) / math.sqrt(2))  # two-tailed normal p-value, no scipy dependency needed here
+
+    return {
+        "n": n,
+        "old_hits": old_hits, "old_hit_rate": round(old_hits / n, 4),
+        "new_hits": new_hits, "new_hit_rate": round(new_hits / n, 4),
+        "net_games": new_hits - old_hits,
+        "flips": len(flips), "improvements": improvements, "regressions": regressions,
+        "miss_confidence_reduced": miss_reduced, "miss_confidence_n": miss_n,
+        "miss_confidence_reduced_rate": round(miss_reduced / miss_n, 4) if miss_n else None,
+        "hit_confidence_reduced": hit_reduced, "hit_confidence_n": hit_n,
+        "hit_confidence_reduced_rate": round(hit_reduced / hit_n, 4) if hit_n else None,
+        "calibration_z": round(z, 3) if z is not None else None,
+        "calibration_p": round(p_value, 4) if p_value is not None else None,
+    }
+
+
 def refresh_historical(store, force: bool = False) -> str:
     """Rebuild the full historical (every completed season, pooled) power rankings dataset.
-    Cheap after the first run -- every completed season's play-by-play is already cached as
-    parquet (see _phase_stats_for_season), so this just re-aggregates small local files, not
-    re-downloading anything. Rebuilt at most once/day anyway (same cadence as refresh()
-    above), since completed seasons' data never changes except once a year at season end."""
+    Cheap after the first run -- every completed season's play-by-play (and passer-game
+    data, see qb_quality_gap_data()) is already cached as parquet, so this just re-aggregates
+    small local files for everything except skill_epa_history()'s player_stats.csv pull
+    (nflverse serves that as one file covering every season, with no per-season URL to cache
+    around -- see that function's own docstring). Rebuilt at most once/day anyway (same
+    cadence as refresh() above), since completed seasons' data never changes except once a
+    year at season end."""
     today = date.today().isoformat()
     if not force and store.kv_get("historical_power_date") == today:
         return "cached"
@@ -1013,13 +1409,17 @@ def refresh_historical(store, force: bool = False) -> str:
     game_log: list[dict] = []
     compute_ratings(played, current_season, game_log=game_log)
     qb_out = _qb_out_doubtful_by_week(current_season)
-    scatter = compute_backtest_scatter(game_log, qb_out)
+    qb_gap, _primary, _trailing, _league_avg = qb_quality_gap_data(played, current_season)
+    skill_out = skill_epa_out_by_team_week(current_season)
+    scatter = compute_backtest_scatter(game_log, qb_out, qb_gap, skill_out)
+    calibration = compute_calibration_stats(scatter)
 
     store.kv_set("historical_power_rankings", json.dumps({
         "generated": datetime.now(timezone.utc).isoformat(),
         "seasons": seasons_covered,
         "rankings": rankings,
         "backtest_scatter": scatter,
+        "calibration": calibration,
     }))
     store.kv_set("historical_power_date", today)
     return (
@@ -1108,10 +1508,31 @@ def refresh(store, force: bool = False) -> str:
     for r in upcoming_raw:
         try:
             upcoming.append({"home_team": normalize_team(r["home_team"]), "away_team": normalize_team(r["away_team"]),
-                              "gameday": r.get("gameday")})
-        except UnknownTeamError:
+                              "gameday": r.get("gameday"), "week": int(r.get("week") or 0)})
+        except (UnknownTeamError, ValueError, TypeError):
             continue
-    matchups = matchup_callouts(ratings, upcoming, historical_bounds, diff_mu, diff_sd)
+
+    # QB/skill health adjustment for the Power Model pick (see QB_QUALITY_GAP_WEIGHT's own
+    # docstring) -- qb_gap_upcoming only has entries for THIS week's teams with a QB
+    # currently Out/Doubtful (no actual passer exists yet for a future game, so "league-
+    # average backup" is the best available estimate of who plays; a healthy primary
+    # starter gets gap=0, same as compute_backtest_scatter()'s historical rows).
+    qb_out_live = _qb_out_doubtful_by_week(current_season)
+    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa = qb_quality_gap_data(played, current_season)
+    qb_gap_upcoming: dict[tuple[str, int], float] = {}
+    for (team, season, week), is_out in qb_out_live.items():
+        if season != current_season or not is_out:
+            continue
+        primary = current_primary.get(team)
+        if primary is None:
+            continue
+        tp = current_trailing_epa.get(primary, league_avg_epa)
+        qb_gap_upcoming[(team, week)] = tp - league_avg_epa
+    skill_out_by_tw = skill_epa_out_by_team_week(current_season)
+    skill_out_upcoming = {(team, week): v for (team, season, week), v in skill_out_by_tw.items() if season == current_season}
+
+    matchups = matchup_callouts(ratings, upcoming, historical_bounds, diff_mu, diff_sd,
+                                 qb_gap_upcoming, skill_out_upcoming)
     power = power_rankings(ratings, historical_bounds)
     _refresh_parlay_snapshot(store, current_season, current_week, power, all_rows)
 
