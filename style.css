@@ -84,7 +84,7 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 .line-move-chip { margin-left:auto; }
 .rank-badge { color:var(--dim); font-weight:700; font-size:.8em; }
 .game-card-body {
-  display:grid; grid-template-columns:repeat(4, 1fr); gap:10px;
+  display:grid; grid-template-columns:repeat(5, 1fr); gap:10px;
   padding:10px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line);
 }
 @media (max-width:760px) { .game-card-body { grid-template-columns:1fr 1fr; } }

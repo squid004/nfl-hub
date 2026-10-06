@@ -74,8 +74,10 @@ log = logging.getLogger(__name__)
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "team_ratings")
 GAMES_URL = "https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv"
 PBP_URL = "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_{season}.csv.gz"
+INJURIES_URL = "https://github.com/nflverse/nflverse-data/releases/download/injuries/injuries_{season}.csv"
 TIMEOUT = 30
 FIRST_SEASON = 2007
+FIRST_INJURY_SEASON = 2009  # nflverse's injury reports start here; 2007/2008 return 404
 EWMA_ALPHA = 0.2  # ~4-game half-life; reused convention, not independently tuned
 # A new season's rating starts as last season's own ending rating (NOT a multi-generation
 # blend that still carries a sliver of every season back to 2007 forever, which is what the
@@ -136,6 +138,30 @@ POWER_WEIGHTS = {
     "turnovers_off": 0.0217,
     "turnovers_def_forced": 0.0000,
 }
+
+# Calibrates the composite power-ranking delta into "P(the model's favorite wins)" for the
+# Moneyline Pick'em tab's Power Model pick, shown alongside ELWAY/History. Plain unconstrained
+# 2-parameter logistic fit, P(correct) = sigmoid(a + b*|delta|) -- 1 feature, thousands of
+# games, no regularization needed. Fit on the CLEAN (non-backup-QB) backtest games only (the
+# QB-injury blind spot is shown as its own separate filter on the Historical Power tab, not
+# baked into this curve), walk-forward validated (research/edge_signal_test_v15_delta_
+# calibration.py, 4296 games, 2007-2025): beat a flat-baseline log-loss in 14 of 15 held-out
+# seasons. DELTA_PROB_MAX clips the output -- the highest-confidence bin ever actually
+# observed in that backtest was ~77%, so the raw curve's extrapolation past ~85% at rare
+# extreme deltas isn't trusted blindly. Computed once offline, not refit daily.
+DELTA_CALIBRATION_INTERCEPT = 0.0484
+DELTA_CALIBRATION_SLOPE = 1.4497
+DELTA_PROB_MAX = 0.85
+
+
+def delta_win_prob(delta: float) -> float:
+    """Calibrated P(the side `delta` favors wins) -- exactly 0.5 if delta is 0 (no favorite,
+    a dead-even composite rating -- vanishingly rare but not impossible)."""
+    if delta == 0:
+        return 0.5
+    p = 1.0 / (1.0 + np.exp(-(DELTA_CALIBRATION_INTERCEPT + DELTA_CALIBRATION_SLOPE * abs(delta))))
+    return min(p, DELTA_PROB_MAX)
+
 
 # Points prediction: predicted_points(team) = POINTS_INTERCEPT + sum(POINTS_WEIGHTS[k] * value),
 # where `value` is the TEAM's own rating for an "own_*" key and the OPPONENT's rating for an
@@ -534,13 +560,23 @@ def display_ratings(ratings: dict[str, dict[str, float]], historical_bounds: dic
     return out
 
 
-def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict], historical_bounds: dict[str, tuple[float, float]]) -> dict[str, dict]:
+def matchup_callouts(
+    ratings: dict[str, dict[str, float]], upcoming: list[dict], historical_bounds: dict[str, tuple[float, float]],
+    diff_mu: dict[str, float] | None = None, diff_sd: dict[str, float] | None = None,
+) -> dict[str, dict]:
     """For each upcoming game (already normalized home/away team codes), rule-based sentences
     for any offense-vs-opposing-defense pairing whose combined z-score clears
     MISMATCH_Z_THRESHOLD -- a real strength meeting a real weakness, not just noise. Keyed
     "AWAY@HOME" so the frontend can look it up directly from its own game row. (The Parlays
     tab's own matchup identifier no longer reads anything from here -- it classifies teams
-    into tiers off a frozen ratings_display snapshot instead; see refresh()'s snapshot step.)"""
+    into tiers off a frozen ratings_display snapshot instead; see refresh()'s snapshot step.)
+
+    `diff_mu`/`diff_sd` (optional, from refresh()'s own game_log): per-metric mean/std of the
+    oriented home-minus-away diff, same standardization compute_backtest_scatter() uses for
+    the Historical Power tab's backtest -- applying it here to each upcoming game's CURRENT
+    rating diff gives the exact same composite `delta` that chart plots, just prospectively.
+    When given, each entry also gets a `power_model` block ({favorite, prob, delta}) for the
+    Moneyline Pick'em tab's Power Model pick (see delta_win_prob())."""
     n_teams = len(ratings)
     if n_teams < 4:
         return {}
@@ -610,6 +646,16 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict],
                 weather_points_delta = round(
                     (predicted_home_points - base_home) + (predicted_away_points - base_away), 2
                 )
+
+        power_model = None
+        if diff_mu is not None and diff_sd is not None and all(
+            ratings[home].get(m) is not None and ratings[away].get(m) is not None for m in RATING_METRICS
+        ):
+            diffs = {m: ORIENTATION[m] * (ratings[home][m] - ratings[away][m]) for m in RATING_METRICS}
+            delta = sum(POWER_WEIGHTS[m] * ((diffs[m] - diff_mu[m]) / diff_sd[m]) for m in RATING_METRICS)
+            fav = home if delta > 0 else away if delta < 0 else None
+            power_model = {"favorite": fav, "prob": round(delta_win_prob(delta), 4), "delta": round(delta, 4)}
+
         out[f"{away}@{home}"] = {
             "home": home, "away": away,
             "home_ratings": ratings[home], "away_ratings": ratings[away],
@@ -619,6 +665,7 @@ def matchup_callouts(ratings: dict[str, dict[str, float]], upcoming: list[dict],
             "predicted_away_points": predicted_away_points,
             "weather": weather,
             "weather_points_delta": weather_points_delta,
+            "power_model": power_model,
         }
     return out
 
@@ -856,16 +903,62 @@ def historical_power_rankings(
     return out
 
 
-def compute_backtest_scatter(game_log: list[dict]) -> list[dict]:
+def _qb_out_doubtful_by_week(current_season: int) -> dict[tuple[str, int, int], bool]:
+    """{(team, season, week): True} for every (team, season, week) where that team had a QB
+    listed Out or Doubtful on nflverse's weekly injury report -- a proxy for "the backup
+    probably played" (the dataset has no direct starter-confirmation field, so this is the
+    closest available signal). Keys are only ever present when True; absence means either
+    "healthy that week" or "no report available" (seasons before FIRST_INJURY_SEASON, which
+    404 and are silently skipped) -- both read the same way downstream (no flag raised).
+    Completed seasons are cached locally (nflhub/data/team_ratings/injuries_{season}.csv),
+    same convention as _phase_stats_for_season's play-by-play cache; only the CURRENT season
+    is fetched fresh every call. Same contemporary-team-code convention as games.csv (STL/SD/
+    OAK pre-relocation, WAS not WSH) -- normalize_team() handles it, same as everywhere else
+    in this module."""
+    out: dict[tuple[str, int, int], bool] = {}
+    for season in range(FIRST_INJURY_SEASON, current_season + 1):
+        cache_path = os.path.join(DATA_DIR, f"injuries_{season}.csv")
+        if season < current_season and os.path.exists(cache_path):
+            with open(cache_path, encoding="utf-8") as f:
+                text = f.read()
+        else:
+            resp = requests.get(INJURIES_URL.format(season=season), timeout=TIMEOUT)
+            if resp.status_code == 404:
+                continue  # no report published for this season
+            resp.raise_for_status()
+            text = resp.text
+            if season < current_season:
+                with open(cache_path, "w", encoding="utf-8") as f:
+                    f.write(text)
+        for row in csv.DictReader(io.StringIO(text)):
+            if row.get("game_type") != "REG" or row.get("position") != "QB":
+                continue
+            if row.get("report_status") not in ("Out", "Doubtful"):
+                continue
+            try:
+                team = normalize_team(row["team"])
+                week = int(row["week"])
+            except (UnknownTeamError, ValueError, TypeError):
+                continue
+            out[(team, season, week)] = True
+    return out
+
+
+def compute_backtest_scatter(game_log: list[dict], qb_out: dict[tuple[str, int, int], bool] | None = None) -> list[dict]:
     """Turns compute_ratings()'s optional `game_log` into ready-to-plot rows for the
     Historical Power tab's backtest scatter: market spread vs. the CURRENT production
     POWER_WEIGHTS applied to each game's pre-game rating diffs, standardized ONCE across the
     whole dataset (not walk-forward -- this isn't re-deriving weights, just showing what
     today's weights would have said about each past game), colored by whether the model's
     favorite actually won. Same idea as research/edge_signal_test_v13_new_window_weights.py's
-    final "fit on all data" step, applied for display instead of re-fitting."""
+    final "fit on all data" step, applied for display instead of re-fitting.
+
+    `qb_out` (from _qb_out_doubtful_by_week, optional): tags each row with whether the home/
+    away team had a QB Out/Doubtful that week, so the frontend can filter on it -- the model
+    itself has no live awareness of this, it's purely descriptive context for the chart."""
     if not game_log:
         return []
+    qb_out = qb_out or {}
     mu = {m: float(np.mean([r["diffs"][m] for r in game_log])) for m in RATING_METRICS}
     sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in RATING_METRICS}
 
@@ -884,6 +977,8 @@ def compute_backtest_scatter(game_log: list[dict]) -> list[dict]:
             "home_score": r["home_score"], "away_score": r["away_score"],
             "spread": round(r["spread_line"], 1), "delta": round(delta, 4),
             "outcome": outcome,
+            "home_qb_out": qb_out.get((r["home"], r["season"], r["week"]), False),
+            "away_qb_out": qb_out.get((r["away"], r["season"], r["week"]), False),
         })
     return out
 
@@ -917,7 +1012,8 @@ def refresh_historical(store, force: bool = False) -> str:
     # final state.
     game_log: list[dict] = []
     compute_ratings(played, current_season, game_log=game_log)
-    scatter = compute_backtest_scatter(game_log)
+    qb_out = _qb_out_doubtful_by_week(current_season)
+    scatter = compute_backtest_scatter(game_log, qb_out)
 
     store.kv_set("historical_power_rankings", json.dumps({
         "generated": datetime.now(timezone.utc).isoformat(),
@@ -984,7 +1080,15 @@ def refresh(store, force: bool = False) -> str:
     all_rows = [r for r in csv.DictReader(io.StringIO(resp.text)) if r["game_type"] == "REG"]
     played = [r for r in all_rows if r.get("result") not in ("", "NA", None) and int(r["season"]) >= FIRST_SEASON]
 
-    raw_ratings, historical_bounds = compute_ratings(played, current_season)
+    # game_log (same param compute_backtest_scatter() consumes on the Historical Power tab)
+    # doubles here as the standardization basis for the Power Model pick below -- same mu/sd
+    # per metric, just computed live instead of from refresh_historical()'s own full sweep.
+    game_log: list[dict] = []
+    raw_ratings, historical_bounds = compute_ratings(played, current_season, game_log=game_log)
+    diff_mu = diff_sd = None
+    if game_log:
+        diff_mu = {m: float(np.mean([r["diffs"][m] for r in game_log])) for m in RATING_METRICS}
+        diff_sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in RATING_METRICS}
 
     # nflverse spells some current teams differently than nfl-hub's own canonical codes
     # (e.g. "LA" for the Rams, "WAS" for Washington) -- normalize so the frontend can look
@@ -1007,7 +1111,7 @@ def refresh(store, force: bool = False) -> str:
                               "gameday": r.get("gameday")})
         except UnknownTeamError:
             continue
-    matchups = matchup_callouts(ratings, upcoming, historical_bounds)
+    matchups = matchup_callouts(ratings, upcoming, historical_bounds, diff_mu, diff_sd)
     power = power_rankings(ratings, historical_bounds)
     _refresh_parlay_snapshot(store, current_season, current_week, power, all_rows)
 

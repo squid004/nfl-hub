@@ -288,6 +288,7 @@ const Pickem = {
     const cards = games.map(g => {
       const o = odds[g.game_id] || {};
       const matchup = matchupFor(teamRatings, g.home, g.away);
+      const pm = matchup && matchup.power_model;
       const move = lineMovement(spreadHist[g.game_id]);
       const staleHome = elwayStaleQb(g.home, elwayQb1, injuries);
       const staleAway = elwayStaleQb(g.away, elwayQb1, injuries);
@@ -316,6 +317,7 @@ const Pickem = {
       const postGame = g.state === 'post';
       const elwayHit = postGame && elwayFav && result !== 'TIE' ? elwayFav.team === result : null;
       const histHit = postGame && histCell && favTeam && result !== 'TIE' ? favTeam === result : null;
+      const pmHit = postGame && pm && pm.favorite && result !== 'TIE' ? pm.favorite === result : null;
       const pickHit = postGame && mine && result !== 'TIE' ? mine === result : null;
       const resultClass = v => v === true ? 'result-good' : v === false ? 'result-bad' : '';
       // Once final, "O/U 44.5" (which side of the number nobody picked yet) stops being the
@@ -398,6 +400,11 @@ const Pickem = {
             <div class="muted">${bucketLabel ? `${bucketLabel} bucket` : ' '}</div>
           </div>
           <div class="stat-block">
+            <div class="stat-label" title="The Power Rankings composite (8 EPA/points/turnover stats) applied to this matchup, calibrated into a win probability from backtested accuracy at that confidence level (QB-injury games excluded from calibration). Backtesting found this does NOT beat the market -- a third data point alongside ELWAY/History, not a replacement.">Power Model</div>
+            <div class="${resultClass(pmHit)}">${pm && pm.favorite ? `${pm.favorite} ${pct(pm.prob)}` : '<span class="muted">&mdash;</span>'}</div>
+            <div class="muted">${pm ? `&Delta; ${pm.delta >= 0 ? '+' : ''}${pm.delta.toFixed(2)}` : ' '}</div>
+          </div>
+          <div class="stat-block">
             <div class="stat-label">Pool edge</div>
             <div>${edgeChip}</div>
           </div>
@@ -450,7 +457,14 @@ const Pickem = {
             &ge;20mph wind, &ge;10mm precip, any snow, or sub-20&deg;F highs. Milder forecasts
             don't get a chip, but still silently adjust the projected score (and say so) in
             each card's "Details" section, where the full forecast always shows when available.
-            Once a game is final, the ELWAY/History numbers turn <span class="result-good">green</span>
+            <span class="stat-label" style="display:inline;text-transform:none;font-weight:600;">Power Model</span>
+            is the Power Rankings composite (same 8 EPA/points/turnover stats as the Power
+            Rankings tab) applied to this matchup, with its margin (&Delta;) converted into a
+            win probability from a calibration curve fit against real backtested accuracy at
+            each confidence level (games where either team's QB was Out/Doubtful excluded from
+            that fit). Like ELWAY and History, backtesting found it does not beat the market
+            spread at picking winners -- a third independent data point, not a replacement.
+            Once a game is final, the ELWAY/History/Power Model numbers turn <span class="result-good">green</span>
             if the side they favored actually won or <span class="result-bad">red</span> if it
             didn't, the whole card gets a light green/red tint if your own pick hit or missed,
             and O/U swaps to the actual Over/Under result. The market line itself is frozen at

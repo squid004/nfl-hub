@@ -64,6 +64,7 @@ const Historical = {
   _seasonFrom: null, _seasonTo: null,  // null = unbounded on that side
   _weekFrom: null, _weekTo: null,
   _cellFilter: null,       // { season, week } set by clicking the heatmap below, or null
+  _qbFilter: '',           // '' | 'fav' | 'dog' | 'either' | 'neither' -- QB health of the model's favorite/underdog
 
   sortBy(col) {
     if (this._sort.col === col) this._sort.dir *= -1;
@@ -118,6 +119,7 @@ const Historical = {
     if (lbl) lbl.textContent = this._minDelta.toFixed(2);
     this._redraw();
   },
+  setQbFilter(v) { this._qbFilter = v; this._redraw(); },
 
   // Set by clicking a cell in the season/week heatmap below the scatter (cross-filter);
   // cleared by the × on its chip or by Reset all filters.
@@ -134,6 +136,7 @@ const Historical = {
     this._seasonFrom = null; this._seasonTo = null;
     this._weekFrom = null; this._weekTo = null;
     this._cellFilter = null;
+    this._qbFilter = '';
     this._syncControlsToState();
     this._redraw();
   },
@@ -156,6 +159,7 @@ const Historical = {
     set('backtest-min-delta', 0); text('backtest-min-delta-val', '0.00');
     set('backtest-season-from', ''); set('backtest-season-to', '');
     set('backtest-week-from', ''); set('backtest-week-to', '');
+    set('backtest-qb-filter', '');
   },
 
   render(ctx) {
@@ -247,6 +251,17 @@ const Historical = {
               </select></label>
             </div>
             <div class="backtest-control-row">
+              <label title="QB listed Out/Doubtful on nflverse's weekly injury report -- not on this chart until a QB1 was actually flagged that week. No data before 2009.">QB health
+                <select id="backtest-qb-filter">
+                  <option value="">Any QB status</option>
+                  <option value="fav">Model favorite's QB out/doubtful</option>
+                  <option value="dog">Model underdog's QB out/doubtful</option>
+                  <option value="either">Either team's QB out/doubtful</option>
+                  <option value="neither">Neither team's QB out/doubtful</option>
+                </select>
+              </label>
+            </div>
+            <div class="backtest-control-row">
               <span id="backtest-agree-stat" class="muted small"></span>
               <span id="backtest-cell-chip"></span>
             </div>
@@ -313,6 +328,7 @@ const Historical = {
     on('backtest-min-spread', 'input', e => this.setMinSpread(e.target.value));
     on('backtest-min-delta', 'input', e => this.setMinDelta(e.target.value));
     on('backtest-yaxis-select', 'change', e => this.setYAxisMode(e.target.value));
+    on('backtest-qb-filter', 'change', e => this.setQbFilter(e.target.value));
   },
 
   // Every active filter composes via AND. Order doesn't affect the result, only performance
@@ -326,6 +342,19 @@ const Historical = {
     if (this._teamFilter) rows = rows.filter(r => r.home === this._teamFilter || r.away === this._teamFilter);
     if (this._minSpread > 0) rows = rows.filter(r => Math.abs(r.spread) >= this._minSpread);
     if (this._minDelta > 0) rows = rows.filter(r => Math.abs(r.delta) >= this._minDelta);
+    // QB health is always relative to the MODEL's favorite (sign of delta), independent of
+    // the colorBy toggle above -- "favorite"/"underdog" here means the model's pick either way.
+    if (this._qbFilter) {
+      rows = rows.filter(r => {
+        const favOut = r.delta >= 0 ? r.home_qb_out : r.away_qb_out;
+        const dogOut = r.delta >= 0 ? r.away_qb_out : r.home_qb_out;
+        if (this._qbFilter === 'fav') return favOut;
+        if (this._qbFilter === 'dog') return dogOut;
+        if (this._qbFilter === 'either') return favOut || dogOut;
+        if (this._qbFilter === 'neither') return !favOut && !dogOut;
+        return true;
+      });
+    }
     // "Agreement" = market and model favor the same side (spread and delta share a sign).
     if (this._hideAgreements) rows = rows.filter(r => r.spread * r.delta <= 0);
     if (this._cellFilter) rows = rows.filter(r => r.season === this._cellFilter.season && r.week === this._cellFilter.week);
