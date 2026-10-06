@@ -206,6 +206,73 @@ def delta_win_prob(delta: float) -> float:
 QB_QUALITY_GAP_WEIGHT = -0.5903
 SKILL_EPA_OUT_WEIGHT = -0.0362
 
+# Home-field advantage: every OTHER signal in this model is venue-blind (a team's own rating
+# reflects its average performance regardless of where it played), so `delta` had NO
+# home-field term at all until now -- confirmed directly against real data, not assumed: even
+# in games the model's own delta calls a dead-even matchup, home teams still win meaningfully
+# more than 50% of the time (research/edge_signal_test_v28_hfa_window.py). Unlike QB/skill
+# (rare, situational, variance-type corrections), this applies to EVERY game and corrects a
+# persistent structural bias, not situational uncertainty -- so unlike those two, this one
+# actually moves raw hit-rate, not just calibration (see refresh_historical()'s own backtest
+# numbers). HFA_WEIGHT (0.9169, z=6.14, significant) is fit against home_field_logit_by_
+# season()'s trailing estimate -- NOT a flat historical average, which would overstate
+# today's effect (home win rate has genuinely declined, 2019-2021 especially, including
+# 2020's no-fans anomaly), and NOT a short/tight trailing window either, which gets whipsawed
+# by any single season's sampling noise (each season is only ~256 games). The winning
+# estimator (of 11 tested by walk-forward log-loss) shrinks a trailing-5-season average
+# toward the all-time-to-date average with a 100-pseudo-game weight -- same shrinkage
+# convention nflhub/sources/history.py already uses for small-sample spread-bucket rates,
+# just reused here instead of invented fresh. Recomputed every refresh from `played` (already
+# fetched for everything else) -- never a stale, separately-maintained number.
+HFA_SHRINKAGE_K = 100
+HFA_WEIGHT = 0.9169
+
+
+def _home_win_rate_by_season(played_games: list[dict]) -> dict[int, tuple[int, int]]:
+    """{season: (home_wins, decided_games)} straight off the same `played` games.csv rows
+    refresh()/refresh_historical() already fetch -- no new network call needed for this."""
+    out: dict[int, list[int]] = defaultdict(lambda: [0, 0])
+    for g in played_games:
+        try:
+            season = int(g["season"])
+            home_pts, away_pts = float(g["home_score"]), float(g["away_score"])
+        except (ValueError, TypeError):
+            continue
+        if home_pts == away_pts:
+            continue
+        out[season][1] += 1
+        if home_pts > away_pts:
+            out[season][0] += 1
+    return {s: (v[0], v[1]) for s, v in out.items()}
+
+
+def home_field_logit_by_season(played_games: list[dict]) -> dict[int, float]:
+    """{season: logit(P(home win))} a model could honestly have used GOING INTO that season
+    -- trailing 5 completed seasons' home win rate, shrunk toward the all-time-to-date
+    average with HFA_SHRINKAGE_K pseudo-games (see HFA_WEIGHT's own docstring for why this
+    estimator specifically). No lookahead: season S's value only ever uses games from
+    seasons strictly before S -- the very first tracked season gets exactly 0.0 (no history
+    yet to estimate from, not a guess)."""
+    rates = _home_win_rate_by_season(played_games)
+    seasons = sorted(rates)
+    out: dict[int, float] = {}
+    for i, season in enumerate(seasons):
+        prior = seasons[:i]
+        if not prior:
+            out[season] = 0.0
+            continue
+        window = prior[-5:]
+        w5 = sum(rates[s][0] for s in window)
+        n5 = sum(rates[s][1] for s in window)
+        rate5 = w5 / n5 if n5 else 0.5
+        w_all = sum(rates[s][0] for s in prior)
+        n_all = sum(rates[s][1] for s in prior)
+        rate_all = w_all / n_all if n_all else 0.5
+        p = (n5 * rate5 + HFA_SHRINKAGE_K * rate_all) / (n5 + HFA_SHRINKAGE_K)
+        p = min(max(p, 1e-6), 1 - 1e-6)
+        out[season] = math.log(p / (1 - p))
+    return out
+
 
 def _norm_player_name(name: str) -> str:
     """Lowercase, strip punctuation/suffixes -- same normalization on both sides of every
@@ -858,6 +925,7 @@ def matchup_callouts(
     diff_mu: dict[str, float] | None = None, diff_sd: dict[str, float] | None = None,
     qb_gap_upcoming: dict[tuple[str, int], float] | None = None,
     skill_out_upcoming: dict[tuple[str, int], float] | None = None,
+    hfa_logit: float = 0.0,
 ) -> dict[str, dict]:
     """For each upcoming game (already normalized home/away team codes), rule-based sentences
     for any offense-vs-opposing-defense pairing whose combined z-score clears
@@ -874,8 +942,10 @@ def matchup_callouts(
     `qb_gap_upcoming`/`skill_out_upcoming` (optional, keyed (team, week) -- always this
     week's data, since that's as far as the live injury report goes): QB_QUALITY_GAP_WEIGHT/
     SKILL_EPA_OUT_WEIGHT applied to these adjust `delta` the same way compute_backtest_
-    scatter() does, before it's used to pick a favorite or fed to delta_win_prob(). When
-    given, each entry gets a `power_model` block ({favorite, prob, delta, delta_raw}) for
+    scatter() does. `hfa_logit` (from home_field_logit_by_season(), a single value for the
+    CURRENT season -- home-field advantage isn't a per-team/per-week thing): HFA_WEIGHT
+    applied to this adds the same constant to every game this season. When diff_mu/diff_sd
+    are given, each entry gets a `power_model` block ({favorite, prob, delta, delta_raw}) for
     the Moneyline Pick'em tab's Power Model pick."""
     n_teams = len(ratings)
     if n_teams < 4:
@@ -956,7 +1026,7 @@ def matchup_callouts(
             delta_raw = sum(POWER_WEIGHTS[m] * ((diffs[m] - diff_mu[m]) / diff_sd[m]) for m in RATING_METRICS)
             qb_diff = (qb_gap_upcoming or {}).get((home, week), 0.0) - (qb_gap_upcoming or {}).get((away, week), 0.0)
             skill_diff = (skill_out_upcoming or {}).get((home, week), 0.0) - (skill_out_upcoming or {}).get((away, week), 0.0)
-            delta = delta_raw + QB_QUALITY_GAP_WEIGHT * qb_diff + SKILL_EPA_OUT_WEIGHT * skill_diff
+            delta = delta_raw + QB_QUALITY_GAP_WEIGHT * qb_diff + SKILL_EPA_OUT_WEIGHT * skill_diff + HFA_WEIGHT * hfa_logit
             fav = home if delta > 0 else away if delta < 0 else None
             power_model = {"favorite": fav, "prob": round(delta_win_prob(delta), 4),
                             "delta": round(delta, 4), "delta_raw": round(delta_raw, 4)}
@@ -1253,6 +1323,7 @@ def compute_backtest_scatter(
     game_log: list[dict], qb_out: dict[tuple[str, int, int], bool] | None = None,
     qb_gap: dict[tuple[str, int, int], float] | None = None,
     skill_out: dict[tuple[str, int, int], float] | None = None,
+    hfa_by_season: dict[int, float] | None = None,
 ) -> list[dict]:
     """Turns compute_ratings()'s optional `game_log` into ready-to-plot rows for the
     Historical Power tab's backtest scatter: market spread vs. the CURRENT production
@@ -1265,16 +1336,17 @@ def compute_backtest_scatter(
     `qb_out` (from _qb_out_doubtful_by_week, optional): tags each row with whether the home/
     away team had a QB Out/Doubtful that week, so the frontend can filter on it.
 
-    `qb_gap`/`skill_out` (from qb_quality_gap_data()/skill_epa_out_by_team_week(), optional):
-    QB_QUALITY_GAP_WEIGHT/SKILL_EPA_OUT_WEIGHT applied to these ADD to the pure 8-stat
-    composite below, producing the `delta` this function actually returns -- `delta_raw`
-    keeps the unadjusted composite for comparison. See QB_QUALITY_GAP_WEIGHT's own docstring
-    for why this is a real, data-driven correction and not just a flag."""
+    `qb_gap`/`skill_out`/`hfa_by_season` (from qb_quality_gap_data()/skill_epa_out_by_team_
+    week()/home_field_logit_by_season(), optional): QB_QUALITY_GAP_WEIGHT/SKILL_EPA_OUT_
+    WEIGHT/HFA_WEIGHT applied to these ADD to the pure 8-stat composite below, producing the
+    `delta` this function actually returns -- `delta_raw` keeps the unadjusted composite for
+    comparison. See each weight's own docstring for why it's a real, data-driven correction."""
     if not game_log:
         return []
     qb_out = qb_out or {}
     qb_gap = qb_gap or {}
     skill_out = skill_out or {}
+    hfa_by_season = hfa_by_season or {}
     mu = {m: float(np.mean([r["diffs"][m] for r in game_log])) for m in RATING_METRICS}
     sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in RATING_METRICS}
 
@@ -1283,7 +1355,8 @@ def compute_backtest_scatter(
         delta_raw = sum(POWER_WEIGHTS[m] * ((r["diffs"][m] - mu[m]) / sd[m]) for m in RATING_METRICS)
         qb_gap_diff = qb_gap.get((r["home"], r["season"], r["week"]), 0.0) - qb_gap.get((r["away"], r["season"], r["week"]), 0.0)
         skill_diff = skill_out.get((r["home"], r["season"], r["week"]), 0.0) - skill_out.get((r["away"], r["season"], r["week"]), 0.0)
-        delta = delta_raw + QB_QUALITY_GAP_WEIGHT * qb_gap_diff + SKILL_EPA_OUT_WEIGHT * skill_diff
+        hfa = HFA_WEIGHT * hfa_by_season.get(r["season"], 0.0)
+        delta = delta_raw + QB_QUALITY_GAP_WEIGHT * qb_gap_diff + SKILL_EPA_OUT_WEIGHT * skill_diff + hfa
         if r["home_score"] == r["away_score"]:
             outcome = "tie"
         else:
@@ -1411,7 +1484,8 @@ def refresh_historical(store, force: bool = False) -> str:
     qb_out = _qb_out_doubtful_by_week(current_season)
     qb_gap, _primary, _trailing, _league_avg = qb_quality_gap_data(played, current_season)
     skill_out = skill_epa_out_by_team_week(current_season)
-    scatter = compute_backtest_scatter(game_log, qb_out, qb_gap, skill_out)
+    hfa_by_season = home_field_logit_by_season(played)
+    scatter = compute_backtest_scatter(game_log, qb_out, qb_gap, skill_out, hfa_by_season)
     calibration = compute_calibration_stats(scatter)
 
     store.kv_set("historical_power_rankings", json.dumps({
@@ -1530,9 +1604,10 @@ def refresh(store, force: bool = False) -> str:
         qb_gap_upcoming[(team, week)] = tp - league_avg_epa
     skill_out_by_tw = skill_epa_out_by_team_week(current_season)
     skill_out_upcoming = {(team, week): v for (team, season, week), v in skill_out_by_tw.items() if season == current_season}
+    hfa_logit_current = home_field_logit_by_season(played).get(current_season, 0.0)
 
     matchups = matchup_callouts(ratings, upcoming, historical_bounds, diff_mu, diff_sd,
-                                 qb_gap_upcoming, skill_out_upcoming)
+                                 qb_gap_upcoming, skill_out_upcoming, hfa_logit_current)
     power = power_rankings(ratings, historical_bounds)
     _refresh_parlay_snapshot(store, current_season, current_week, power, all_rows)
 
