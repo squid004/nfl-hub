@@ -274,6 +274,59 @@ def home_field_logit_by_season(played_games: list[dict]) -> dict[int, float]:
     return out
 
 
+# Momentum: a team's own signed win/loss streak entering a game (+N = N straight wins, -N =
+# N straight losses, reset to 0 at a season boundary and after any tie) -- fit ONCE offline
+# (research/edge_signal_test_v35_momentum.py, 4977 games 2007-2025) as a joint logistic
+# regression of home_win ~ delta + streak_diff, where delta is the full production composite
+# (8-stat + QB/skill/HFA, already recency-weighted at the STAT level via compute_ratings'
+# own EWMA). The question this answers isn't "do good teams win more" -- delta already
+# reflects recent form -- it's whether streak length carries anything EXTRA once delta
+# already knows the team's been playing well. It does: streak_diff survived at z=3.74
+# (delta-equivalent weight 0.0262/win-loss-game of streak advantage), and -- unlike QB/skill
+# -- it moves raw hit rate too (68.3% vs 60.9% baseline on big streak mismatches, z=4.43),
+# plus a strong calibration signal (confidence reduced 25.8% of misses vs 20.4% of hits,
+# z=4.35, p<0.0001). No new data source: games.csv's own chronological results are already
+# fetched for everything else in this module.
+MOMENTUM_WEIGHT = 0.0262
+
+
+def team_streak_by_week(played_games: list[dict]) -> dict[tuple[str, int, int], int]:
+    """{(team, season, week): signed streak ENTERING that week's game} -- +N for N
+    consecutive wins, -N for N consecutive losses, reset to 0 at the first game of a season
+    and after any tie. No lookahead: a team's streak for week W only ever uses games from
+    weeks strictly before W (or earlier seasons for week 1, which is itself always 0 since a
+    new season carries no streak over)."""
+    by_team_season: dict[tuple[str, int], list[dict]] = defaultdict(list)
+    for g in played_games:
+        try:
+            season, week = int(g["season"]), int(g["week"])
+            home, away = normalize_team(g["home_team"]), normalize_team(g["away_team"])
+            home_pts, away_pts = float(g["home_score"]), float(g["away_score"])
+        except (ValueError, TypeError, UnknownTeamError):
+            continue
+        if home_pts == away_pts:
+            home_result = away_result = "tie"
+        else:
+            home_result = "win" if home_pts > away_pts else "loss"
+            away_result = "loss" if home_result == "win" else "win"
+        by_team_season[(home, season)].append({"week": week, "result": home_result})
+        by_team_season[(away, season)].append({"week": week, "result": away_result})
+
+    out: dict[tuple[str, int, int], int] = {}
+    for (team, season), games in by_team_season.items():
+        games.sort(key=lambda g: g["week"])
+        streak = 0
+        for g in games:
+            out[(team, season, g["week"])] = streak
+            if g["result"] == "tie":
+                streak = 0
+            elif g["result"] == "win":
+                streak = streak + 1 if streak >= 0 else 1
+            else:
+                streak = streak - 1 if streak <= 0 else -1
+    return out
+
+
 def _norm_player_name(name: str) -> str:
     """Lowercase, strip punctuation/suffixes -- same normalization on both sides of every
     name-matched join below (injury report <-> player_stats.csv), since neither shares a
@@ -1108,6 +1161,7 @@ def matchup_callouts(
     hfa_logit: float = 0.0,
     points_bias: dict[str, float] | None = None, sd_home: float | None = None, sd_away: float | None = None,
     hist_score_freq: dict[int, float] | None = None,
+    streak_upcoming: dict[tuple[str, int], int] | None = None,
 ) -> dict[str, dict]:
     """For each upcoming game (already normalized home/away team codes), rule-based sentences
     for any offense-vs-opposing-defense pairing whose combined z-score clears
@@ -1219,7 +1273,9 @@ def matchup_callouts(
             delta_raw = sum(POWER_WEIGHTS[m] * ((diffs[m] - diff_mu[m]) / diff_sd[m]) for m in RATING_METRICS)
             qb_diff = (qb_gap_upcoming or {}).get((home, week), 0.0) - (qb_gap_upcoming or {}).get((away, week), 0.0)
             skill_diff = (skill_out_upcoming or {}).get((home, week), 0.0) - (skill_out_upcoming or {}).get((away, week), 0.0)
-            delta = delta_raw + QB_QUALITY_GAP_WEIGHT * qb_diff + SKILL_EPA_OUT_WEIGHT * skill_diff + HFA_WEIGHT * hfa_logit
+            streak_diff = (streak_upcoming or {}).get((home, week), 0) - (streak_upcoming or {}).get((away, week), 0)
+            delta = (delta_raw + QB_QUALITY_GAP_WEIGHT * qb_diff + SKILL_EPA_OUT_WEIGHT * skill_diff
+                     + HFA_WEIGHT * hfa_logit + MOMENTUM_WEIGHT * streak_diff)
             fav = home if delta > 0 else away if delta < 0 else None
             power_model = {"favorite": fav, "prob": round(delta_win_prob(delta), 4),
                             "delta": round(delta, 4), "delta_raw": round(delta_raw, 4)}
@@ -1645,6 +1701,7 @@ def compute_backtest_scatter(
     skill_out: dict[tuple[str, int, int], float] | None = None,
     hfa_by_season: dict[int, float] | None = None,
     midgame_qb_injury: dict[tuple[str, int, int], bool] | None = None,
+    streak: dict[tuple[str, int, int], int] | None = None,
 ) -> list[dict]:
     """Turns compute_ratings()'s optional `game_log` into ready-to-plot rows for the
     Historical Power tab's backtest scatter: market spread vs. the CURRENT production
@@ -1666,7 +1723,12 @@ def compute_backtest_scatter(
     `midgame_qb_injury` (from midgame_qb_injury_by_week, optional): tags each row with
     whether the home/away team's starter went down mid-game (confirmed, see that function's
     docstring) -- display/filter-only, NOT folded into `delta` (unlike qb_gap/skill_out),
-    since it's unknowable before the game even starts."""
+    since it's unknowable before the game even starts.
+
+    `streak` (from team_streak_by_week, optional): MOMENTUM_WEIGHT applied to the signed
+    win/loss streak difference ADDS to delta like qb_gap/skill_out/hfa -- see that weight's
+    own docstring for why this one, unlike the mid-game injury flag above, survived the bar
+    to be folded in rather than staying display-only."""
     if not game_log:
         return []
     qb_out = qb_out or {}
@@ -1674,6 +1736,7 @@ def compute_backtest_scatter(
     skill_out = skill_out or {}
     hfa_by_season = hfa_by_season or {}
     midgame_qb_injury = midgame_qb_injury or {}
+    streak = streak or {}
     mu = {m: float(np.mean([r["diffs"][m] for r in game_log])) for m in RATING_METRICS}
     sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in RATING_METRICS}
 
@@ -1683,7 +1746,9 @@ def compute_backtest_scatter(
         qb_gap_diff = qb_gap.get((r["home"], r["season"], r["week"]), 0.0) - qb_gap.get((r["away"], r["season"], r["week"]), 0.0)
         skill_diff = skill_out.get((r["home"], r["season"], r["week"]), 0.0) - skill_out.get((r["away"], r["season"], r["week"]), 0.0)
         hfa = HFA_WEIGHT * hfa_by_season.get(r["season"], 0.0)
-        delta = delta_raw + QB_QUALITY_GAP_WEIGHT * qb_gap_diff + SKILL_EPA_OUT_WEIGHT * skill_diff + hfa
+        streak_diff = streak.get((r["home"], r["season"], r["week"]), 0) - streak.get((r["away"], r["season"], r["week"]), 0)
+        delta = (delta_raw + QB_QUALITY_GAP_WEIGHT * qb_gap_diff + SKILL_EPA_OUT_WEIGHT * skill_diff
+                 + hfa + MOMENTUM_WEIGHT * streak_diff)
         if r["home_score"] == r["away_score"]:
             outcome = "tie"
         else:
@@ -1700,6 +1765,8 @@ def compute_backtest_scatter(
             "away_qb_out": qb_out.get((r["away"], r["season"], r["week"]), False),
             "home_qb_injured_ingame": midgame_qb_injury.get((r["home"], r["season"], r["week"]), False),
             "away_qb_injured_ingame": midgame_qb_injury.get((r["away"], r["season"], r["week"]), False),
+            "home_streak": streak.get((r["home"], r["season"], r["week"]), 0),
+            "away_streak": streak.get((r["away"], r["season"], r["week"]), 0),
         })
     return out
 
@@ -1815,7 +1882,8 @@ def refresh_historical(store, force: bool = False) -> str:
     skill_out = skill_epa_out_by_team_week(current_season)
     hfa_by_season = home_field_logit_by_season(played)
     midgame_qb_injury = midgame_qb_injury_by_week(current_season)
-    scatter = compute_backtest_scatter(game_log, qb_out, qb_gap, skill_out, hfa_by_season, midgame_qb_injury)
+    streak = team_streak_by_week(played)
+    scatter = compute_backtest_scatter(game_log, qb_out, qb_gap, skill_out, hfa_by_season, midgame_qb_injury, streak)
     calibration = compute_calibration_stats(scatter)
 
     store.kv_set("historical_power_rankings", json.dumps({
@@ -2156,6 +2224,8 @@ def refresh(store, force: bool = False) -> str:
     skill_out_by_tw = skill_epa_out_by_team_week(current_season)
     skill_out_upcoming = {(team, week): v for (team, season, week), v in skill_out_by_tw.items() if season == current_season}
     hfa_logit_current = home_field_logit_by_season(played).get(current_season, 0.0)
+    streak_by_tsw = team_streak_by_week(played)
+    streak_upcoming = {(team, week): v for (team, season, week), v in streak_by_tsw.items() if season == current_season}
 
     # Score-distribution pipeline (Against the Spread tab) -- reuses the SAME game_log
     # compute_ratings() already built above (now carries home_pred_points/away_pred_points,
@@ -2177,7 +2247,8 @@ def refresh(store, force: bool = False) -> str:
 
     matchups = matchup_callouts(ratings, upcoming, historical_bounds, diff_mu, diff_sd,
                                  qb_gap_upcoming, skill_out_upcoming, hfa_logit_current,
-                                 points_bias_live, sd_home, sd_away, hist_score_freq)
+                                 points_bias_live, sd_home, sd_away, hist_score_freq,
+                                 streak_upcoming)
     matchups = _freeze_score_distributions(store, matchups, date.today().isoformat())
     power = power_rankings(ratings, historical_bounds)
     team_records = season_records(played, current_season)
