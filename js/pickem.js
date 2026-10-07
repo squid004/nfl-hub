@@ -200,6 +200,8 @@ function forecastSummary(wx) {
   return parts.join(', ');
 }
 
+// Not currently rendered anywhere -- EPA table hidden for now, kept intact for an easy
+// re-add rather than deleted outright.
 function matchupTableHtml(matchup, home, away) {
   if (!matchup) return '<div class="muted small">No rating data yet.</div>';
   const hr = matchup.home_ratings_display || {};
@@ -213,17 +215,26 @@ function matchupTableHtml(matchup, home, away) {
     <td>${offTeam} off &rarr; ${defTeam} def</td>
     ${PHASES.map(([phase]) => cell(offTeam, offR, phase, defTeam, defR)).join('')}
   </tr>`;
+  return `<table class="mini-ratings matchup-matrix">
+    <thead><tr><th></th>${PHASES.map(([, label]) => `<th class="num">${label} (off vs def)</th>`).join('')}</tr></thead>
+    <tbody>${row(away, ar, home, hr)}${row(home, hr, away, ar)}</tbody>
+  </table>`;
+}
+
+// Weather-adjusted projected score + the forecast itself -- an O/U-flavored mechanism (it
+// only ever moves the predicted POINT TOTAL, never who's favored). Lives on the Against the
+// Spread tab's Details only; the "Bad Weather" CHIP (header-level, see weatherChip() above)
+// still shows on Moneyline Pick'em too since that's useful SU context on its own.
+function forecastHtml(matchup, home, away) {
+  if (!matchup) return '<div class="muted small">No forecast data yet.</div>';
   const ap = matchup.predicted_away_points, hp = matchup.predicted_home_points;
   const wx = matchup.weather;
   const wxNote = wx ? ' (weather adjustment applied)' : '';
   const proj = (ap != null && hp != null)
-    ? `<div class="muted small" title="Non-negative L2-regularized regression on own offense vs. opponent defense (same 8 stats), walk-forward validated 2007-2025, plus a separate wind/rain/extreme-cold adjustment (also walk-forward validated, applied only for outdoor stadiums within the ~16-day forecast window) when available. Less accurate than the market spread at picking winners -- a second data point alongside the market/ELWAY lines, not a replacement.">Projected: ${away} ${ap.toFixed(1)} – ${home} ${hp.toFixed(1)}${wxNote}</div>`
+    ? `<div class="muted small" title="Non-negative L2-regularized regression on own offense vs. opponent defense (same 8 stats), walk-forward validated 2007-2025, plus a separate wind/rain/extreme-cold adjustment (also walk-forward validated, applied only for outdoor stadiums within the ~16-day forecast window) when available. Less accurate than the market total at predicting points -- a second data point, not a replacement.">Projected: ${away} ${ap.toFixed(1)} – ${home} ${hp.toFixed(1)}${wxNote}</div>`
     : '';
   const forecast = wx ? `<div class="muted small">Forecast: ${esc(forecastSummary(wx))}</div>` : '';
-  return `<table class="mini-ratings matchup-matrix">
-    <thead><tr><th></th>${PHASES.map(([, label]) => `<th class="num">${label} (off vs def)</th>`).join('')}</tr></thead>
-    <tbody>${row(away, ar, home, hr)}${row(home, hr, away, ar)}</tbody>
-  </table>${forecast}${proj}`;
+  return (forecast + proj) || '<div class="muted small">No forecast data yet.</div>';
 }
 
 // Rule-based (not AI-generated) explanation: every clause traces to a real number already
@@ -324,12 +335,6 @@ const Pickem = {
       const pmHit = postGame && pm && pm.favorite && result !== 'TIE' ? pm.favorite === result : null;
       const pickHit = postGame && mine && result !== 'TIE' ? mine === result : null;
       const resultClass = v => v === true ? 'result-good' : v === false ? 'result-bad' : '';
-      // Once final, "O/U 44.5" (which side of the number nobody picked yet) stops being the
-      // useful question -- show which side actually hit instead.
-      const ouLabel = postGame && o.total != null
-        ? (g.home_score + g.away_score > o.total ? `Over ${o.total}`
-           : g.home_score + g.away_score < o.total ? `Under ${o.total}` : `Push ${o.total}`)
-        : `O/U ${o.total ?? '—'}`;
       // Once final, the line/implied-% stop mattering -- show the actual final score instead,
       // winner bolded green.
       const scorePart = (team, score) => result === team
@@ -387,9 +392,8 @@ const Pickem = {
           <div class="stat-block">
             <div class="stat-label">Market</div>
             ${postGame
-              ? `<div>${scorePart(g.away, g.away_score)} - ${scorePart(g.home, g.home_score)}</div>
-                 <div class="muted">${ouLabel}</div>`
-              : `<div>${favLabel} &middot; ${ouLabel}</div>
+              ? `<div>${scorePart(g.away, g.away_score)} - ${scorePart(g.home, g.home_score)}</div>`
+              : `<div>${favLabel}</div>
                  <div class="muted">${pct(o.implied_away)} / ${pct(o.implied_home)} &middot; ${o.book ?? '—'}</div>
                  ${move ? `<div class="muted small">opened ${signed(move.open)}</div>` : ''}`}
           </div>
@@ -420,10 +424,6 @@ const Pickem = {
         <details class="game-card-details">
           <summary>Details</summary>
           <p class="game-card-narrative">${esc(narrative)}</p>
-          <div class="game-card-matchup">
-            <div class="stat-label" title="Rush/pass offense and defense, 0-100 scale (100 = best ever recorded in the 2007-present dataset, garbage time excluded), plus a projected score and full forecast. Descriptive context only -- backtesting found neither beats the market spread.">Matchup (0-100) + Projected Score + Forecast</div>
-            ${matchupTableHtml(matchup, g.home, g.away)}
-          </div>
         </details>
       </div>`;
     }).join('');
@@ -458,9 +458,9 @@ const Pickem = {
             injury ELWAY's own depth-chart tracking hasn't caught up to yet.
             <span class="chip bad">Bad Weather</span> = live forecast at kickoff (only shown
             for outdoor stadiums within ~16 days out) is bad enough to matter for scoring —
-            &ge;20mph wind, &ge;10mm precip, any snow, or sub-20&deg;F highs. Milder forecasts
-            don't get a chip, but still silently adjust the projected score (and say so) in
-            each card's "Details" section, where the full forecast always shows when available.
+            &ge;20mph wind, &ge;10mm precip, any snow, or sub-20&deg;F highs; shown here as
+            context only -- the actual weather-adjusted point forecast lives on the Against
+            the Spread tab.
             <span class="stat-label" style="display:inline;text-transform:none;font-weight:600;">Power Model</span>
             is the Power Rankings composite (same 8 EPA/points/turnover stats as the Power
             Rankings tab) applied to this matchup, with its margin (&Delta;) converted into a
@@ -470,10 +470,12 @@ const Pickem = {
             spread at picking winners -- a third independent data point, not a replacement.
             Once a game is final, the ELWAY/History/Power Model numbers turn <span class="result-good">green</span>
             if the side they favored actually won or <span class="result-bad">red</span> if it
-            didn't, the whole card gets a light green/red tint if your own pick hit or missed,
-            and O/U swaps to the actual Over/Under result. The market line itself is frozen at
-            whatever it was just before kickoff -- it won't keep changing once the game starts
-            just because the live odds feed does.</p>
+            didn't, and the whole card gets a light green/red tint if your own pick hit or
+            missed. The market line itself is frozen at whatever it was just before kickoff --
+            it won't keep changing once the game starts just because the live odds feed does.
+            This tab is about picking winners and playing the pool well; point totals and the
+            weather-adjusted forecast/ratings breakdown live on the Against the Spread tab
+            instead.</p>
         </details>
       </div>`;
   },
@@ -623,8 +625,8 @@ const Pickem = {
         <details class="game-card-details" id="ats-details-${g.game_id}">
           <summary>Details</summary>
           ${matchup ? `<div class="game-card-matchup">
-            <div class="stat-label" title="Rush/pass offense and defense, 0-100 scale (100 = best ever recorded in the 2007-present dataset, garbage time excluded), plus a projected score and full forecast. Descriptive context only -- backtesting found neither beats the market spread.">Matchup (0-100) + Projected Score + Forecast</div>
-            ${matchupTableHtml(matchup, g.home, g.away)}
+            <div class="stat-label" title="Own-offense-vs-opponent-defense point projection plus the live forecast for outdoor stadiums within the ~16-day window. Descriptive context only -- backtesting found neither beats the market total.">Projected Score + Forecast</div>
+            ${forecastHtml(matchup, g.home, g.away)}
           </div>` : ''}
           ${sd ? `<div class="game-card-matchup">
             <div class="stat-label" title="Each side's full predicted score distribution -- raw model curve reshaped to match real historical NFL scoring frequency, calibrated so the implied win probability matches the Power Model pick.">Point Distribution</div>
