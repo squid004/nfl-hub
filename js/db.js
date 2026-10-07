@@ -166,6 +166,17 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return null; }
   },
 
+  // { "<season>": { "<week>": { generated, teams, power_rankings, parlay_teams } } } --
+  // permanent per-week snapshot ("ratings as of the last refresh before that week's first
+  // kickoff", frozen forever once computed; see team_ratings.py's refresh_weekly_power_
+  // rankings()). Powers the week dropdown's Power Rankings/Parlays history -- the CURRENT
+  // week has no entry yet (team_ratings() above is its own live pre-kickoff preview).
+  async weeklyPowerRankings() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'power_rankings_by_week').maybeSingle();
+    if (!data) return null;
+    try { return JSON.parse(data.value); } catch { return null; }
+  },
+
   // { seasons: [2007...2025], rankings: [{team, season, rank, score_display, ratings_display}, ...] }
   // -- every (team, season) from every fully completed regular season, pooled into one
   // dataset (written by nflhub.refresh; see team_ratings.py's refresh_historical()/

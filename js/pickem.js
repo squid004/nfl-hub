@@ -1,18 +1,24 @@
 'use strict';
 
-// Two modes:
-//   'ml'  -> Moneyline Pick'em: pick the outright winner. Rendered as one card per game
-//            (richest data set: ELWAY, history, pool-leverage edge, plus a narrative).
-//   'ats' -> Against the Spread: pick the side that covers. Stays a table (no edge/leverage
-//            system exists for ATS, so a table is still easy to scan).
+// Two modes, both rendered as one card per game (same visual format -- see _renderCards()/
+// _renderAtsCards()):
+//   'ml'  -> Moneyline Pick'em: pick the outright winner. Market/ELWAY/History/Power Model/
+//            Pool-edge stat blocks (pool-leverage only exists for ML, not ATS).
+//   'ats' -> Against the Spread: pick the side that covers. Market/ELWAY/History/Power
+//            Ranking stat blocks, each stating that source's own spread + O/U instead of a
+//            SU winner -- no pool-edge block (that system is ML-only). Power Ranking's
+//            spread/O&U comes from team_ratings.py's score-distribution pipeline (research/
+//            edge_signal_test_v32/v33_score_distribution*.py) -- each side's own MODE (most
+//            likely single score), not its mean, per explicit user direction; the details
+//            dropdown plots the full distribution.
 const PICK_MODES = {
   ml: {
     id: 'pickem', picksKey: 'pPicks', act: 'pick', setter: 'setPickemPick',
-    title: 'Moneyline Pick’em', winChip: 'W', dogChip: 'upset',
+    title: 'Moneyline Pick’em', dogChip: 'upset',
   },
   ats: {
     id: 'atspickem', picksKey: 'aPicks', act: 'atspick', setter: 'setAtsPick',
-    title: 'Against the Spread', winChip: 'C', dogChip: 'dog',
+    title: 'Against the Spread', dogChip: 'dog',
   },
 };
 
@@ -265,7 +271,7 @@ function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLa
 const Pickem = {
   render(ctx, mode = 'ml') {
     if (mode === 'ml') this._renderCards(ctx);
-    else this._renderTable(ctx, mode);
+    else this._renderAtsCards(ctx);
   },
 
   _renderCards(ctx) {
@@ -474,8 +480,36 @@ const Pickem = {
       </div>`;
   },
 
-  _renderTable(ctx, mode) {
-    const M = PICK_MODES[mode];
+  // Score-distribution bar chart for one ATS card's details dropdown -- lazy-rendered on
+  // first <details> open (not eagerly for all ~14-16 games every reload): Plotly can't size
+  // itself correctly into a hidden (closed <details>) container, and there's no reason to
+  // pay for charts nobody expands anyway.
+  _drawDistChart(divId, sd, home, away) {
+    const el = document.getElementById(divId);
+    if (!el || el._distDrawn) return;
+    el._distDrawn = true;
+    const cs = getComputedStyle(document.documentElement);
+    const cssVar = name => cs.getPropertyValue(name).trim();
+    const colors = { text: cssVar('--text'), dim: cssVar('--dim'), line: cssVar('--line'),
+                      panel: cssVar('--panel2'), home: cssVar('--accent'), away: cssVar('--warn') };
+    const trace = (pts, label, mode, color) => ({
+      name: `${label} (mode ${mode})`,
+      x: pts.map(d => d.points), y: pts.map(d => d.pct), type: 'bar', opacity: 0.65,
+      marker: { color }, hovertemplate: `${label} %{x} pts: %{y}%<extra></extra>`,
+    });
+    Plotly.react(divId, [trace(sd.home_pct, home, sd.home_mode, colors.home), trace(sd.away_pct, away, sd.away_mode, colors.away)], {
+      barmode: 'overlay', autosize: true, margin: { l: 44, r: 12, t: 8, b: 36 },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+      font: { color: colors.text, size: 11 },
+      xaxis: { title: { text: 'Points' }, gridcolor: colors.line, color: colors.dim, tickfont: { size: 10 } },
+      yaxis: { title: { text: '% chance' }, gridcolor: colors.line, color: colors.dim, tickfont: { size: 10 } },
+      legend: { orientation: 'h', x: 0, y: 1.15, font: { color: colors.text, size: 11 } },
+      hoverlabel: { bgcolor: colors.panel, bordercolor: colors.line, font: { color: colors.text, size: 11 } },
+    }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] });
+  },
+
+  _renderAtsCards(ctx) {
+    const M = PICK_MODES.ats;
     const { week, games, odds, hist } = ctx;
     const picks = ctx[M.picksKey] || {};
     const elway = ctx.elway || {};
@@ -483,91 +517,173 @@ const Pickem = {
     const spreadHist = ctx.spreadHist || {};
     const elwayQb1 = ctx.elwayQb1 || {};
     const depthChart = ctx.qbDepthChart || {};
+    const teamRatings = ctx.teamRatings || null;
 
-    const rows = games.map(g => {
+    const spreadFavLabel = (spreadHome, home, away) =>
+      spreadHome == null ? null : { team: spreadHome <= 0 ? home : away, label: spreadHome === 0 ? 'Pick’em' : `${spreadHome <= 0 ? home : away} ${spreadHome}` };
+
+    const chartsToWire = [];
+
+    const cards = games.map(g => {
       const o = odds[g.game_id] || {};
-      const el = elway[g.game_id] || {};
+      const matchup = matchupFor(teamRatings, g.home, g.away);
+      const sd = matchup && matchup.score_distribution;
       const move = lineMovement(spreadHist[g.game_id]);
-      const staleQb = elwayStaleQb(g.home, elwayQb1, injuries) || elwayStaleQb(g.away, elwayQb1, injuries);
+      const staleHome = elwayStaleQb(g.home, elwayQb1, injuries);
+      const staleAway = elwayStaleQb(g.away, elwayQb1, injuries);
+      const elRaw = elway[g.game_id];
+      const el = elRaw ? { ...elRaw, _home: g.home, _away: g.away } : null;
       const effSpread = frozenSpread(o.spread, spreadHist[g.game_id], g.kickoff);
       const hasLine = effSpread != null;
       const favTeam = !hasLine ? null : (effSpread <= 0 ? g.home : g.away);
       const dogTeam = favTeam == null ? null : (favTeam === g.home ? g.away : g.home);
-      const lineFor = t => !hasLine ? '' : (effSpread === 0 ? ' PK'
-        : (' ' + signed(t === g.home ? effSpread : -effSpread)));
-      const favLabel = !hasLine ? '—' : (effSpread === 0 ? 'PK' : `${favTeam} ${effSpread}`);
+      const favLabel = !hasLine ? '—' : (effSpread === 0 ? 'Pick’em' : `${favTeam} ${effSpread}`);
       const mine = (picks[g.game_id] || {}).pick;
       const mineIsDog = mine && dogTeam && mine === dogTeam;
 
+      const stateChip = g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
+
+      // ATS grading is "did this side COVER the market spread," not who won SU. PUSH grades
+      // no side right or wrong, same spirit as SU's TIE handling on the Moneyline cards.
       let result = null;
       if (g.state === 'post' && hasLine) {
         const favMargin = (effSpread <= 0 ? 1 : -1) * (g.home_score - g.away_score);
         const edge = favMargin - Math.abs(effSpread);
         result = Math.abs(edge) < 1e-9 ? 'PUSH' : (edge > 0 ? favTeam : dogTeam);
       }
-      const wchip = t => result === t ? ` <span class="chip good">${M.winChip}</span>` : '';
+      const postGame = g.state === 'post';
 
-      let atsCell = '<td class="num muted">—</td>';
-      if (hist && hasLine) {
-        const h = History.lookup(hist, Math.abs(effSpread), effSpread <= 0);
-        if (h) {
-          const atW = h.ats != null && h.ats < 0.48 ? ' warn' : '';
-          atsCell = `<td class="num${atW}" title="${favTeam} covers, n=${h.n}">${h.ats != null ? Math.round(h.ats * 100) + '%' : '—'}</td>`;
-        }
-      }
+      const elwaySf = el ? spreadFavLabel(el.spread_home, g.home, g.away) : null;
+      const prSf = sd ? spreadFavLabel(sd.spread, g.home, g.away) : null;
+      const histCell = hist && hasLine ? History.lookup(hist, Math.abs(effSpread), effSpread <= 0) : null;
+
+      const elwayHit = postGame && elwaySf && result !== 'PUSH' ? elwaySf.team === result : null;
+      const histHit = postGame && histCell && favTeam && result !== 'PUSH' ? favTeam === result : null;
+      const prHit = postGame && prSf && result !== 'PUSH' ? prSf.team === result : null;
+      const pickHit = postGame && mine && result !== 'PUSH' ? mine === result : null;
+      const resultClass = v => v === true ? 'result-good' : v === false ? 'result-bad' : '';
+
+      const ouLabel = postGame && o.total != null
+        ? (g.home_score + g.away_score > o.total ? `Over ${o.total}`
+           : g.home_score + g.away_score < o.total ? `Under ${o.total}` : `Push ${o.total}`)
+        : `O/U ${o.total ?? '—'}`;
+      const scorePart = (team, score) => result === team
+        ? `<span class="result-good">${team} ${score}</span>` : `${team} ${score}`;
+
+      const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
 
       const btn = team => `<button data-act="${M.act}" data-week="${week}" data-game="${g.game_id}"
         data-team="${team}" data-spread="${hasLine ? effSpread : ''}"
-        class="${mine === team ? 'primary' : ''}">${team}${lineFor(team)}</button>`;
+        class="${mine === team ? 'primary' : ''}">${team}</button>`;
 
-      const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
-      const elwaySpreadCell = staleQb
-        ? `<td class="num elway-stale" title="ELWAY's rating still assumes ${staleQb.assumedName} at QB1, but our injury report lists him ${staleQb.status}">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>`
-        : elwayFlip
-        ? `<td class="num elway-flip" title="ELWAY's model favors the OTHER team entirely: ${signed(el.spread_home)}">${signed(el.spread_home)}</td>`
-        : `<td class="num muted">${el.spread_home != null ? signed(el.spread_home) : '—'}</td>`;
+      const distChartId = `ats-dist-${g.game_id}`;
+      if (sd) chartsToWire.push({ id: distChartId, sd, home: g.home, away: g.away });
 
-      return `<tr>
-        <td class="muted">${fmtLocal(g.kickoff, false)}</td>
-        <td>${g.away}${wchip(g.away)}${qbChip(g.away, injuries, depthChart)}</td>
-        <td>${g.home}${wchip(g.home)}${qbChip(g.home, injuries, depthChart)}</td>
-        <td class="muted${move && move.steam ? ' warn' : ''}" title="${move ? `opened ${signed(move.open)}, now ${signed(move.cur)}` : ''}">${favLabel}</td>
-        ${elwaySpreadCell}
-        <td class="muted">${o.total ?? '—'}</td>
-        ${atsCell}
-        <td>${mine ? `<strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">—</span>'}</td>
-        <td class="btns">${btn(g.away)} ${btn(g.home)}</td>
-      </tr>`;
+      return `<div class="game-card${pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
+        <div class="game-card-head">
+          <span class="muted">${fmtLocal(g.kickoff, false)}</span>
+          <span class="matchup">${g.away}${qbChip(g.away, injuries, depthChart)} @ ${g.home}${qbChip(g.home, injuries, depthChart)}</span>
+          ${stateChip}
+          ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
+          ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
+            `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
+          ).join('')}
+          ${matchup ? weatherChip(matchup.weather) : ''}
+          ${lineMoveChip(move)}
+        </div>
+        <div class="game-card-body">
+          <div class="stat-block">
+            <div class="stat-label">Market</div>
+            ${postGame
+              ? `<div>${scorePart(g.away, g.away_score)} - ${scorePart(g.home, g.home_score)}</div>
+                 <div class="muted">${ouLabel}</div>`
+              : `<div>${favLabel}</div>
+                 <div class="muted">${ouLabel}</div>`}
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">ELWAY</div>
+            <div class="${resultClass(elwayHit)}">${elwaySf ? elwaySf.label : '<span class="muted">—</span>'}</div>
+            <div class="muted">${el && el.total != null ? `O/U ${el.total}` : ' '}</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">History</div>
+            <div class="${resultClass(histHit)}">${histCell && histCell.ats != null ? `${favTeam} ${pct(histCell.ats)}` : '<span class="muted">—</span>'}</div>
+            <div class="muted">${histCell ? 'covers historically' : ' '}</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label" title="Each side's most likely single score from team_ratings.py's score-distribution pipeline (predict_points(), bias-corrected for home/away and favorite/underdog, reshaped to match real historical NFL scoring frequency since the 2015 PAT-distance rule change, and calibrated so its implied win probability matches the Power Model pick exactly). Backtesting found predict_points() does NOT beat the market -- descriptive context, not a replacement. Frozen at kickoff, like the market line.">Power Ranking</div>
+            <div class="${resultClass(prHit)}">${prSf ? prSf.label : '<span class="muted">—</span>'}</div>
+            <div class="muted">${sd ? `O/U ${sd.total}` : ' '}</div>
+          </div>
+        </div>
+        <div class="game-card-pick">
+          ${btn(g.away)} ${btn(g.home)}
+          <span class="game-card-mine">${mine ? `Your pick: <strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">No pick yet</span>'}</span>
+        </div>
+        <details class="game-card-details" id="ats-details-${g.game_id}">
+          <summary>Details</summary>
+          ${matchup ? `<div class="game-card-matchup">
+            <div class="stat-label" title="Rush/pass offense and defense, 0-100 scale (100 = best ever recorded in the 2007-present dataset, garbage time excluded), plus a projected score and full forecast. Descriptive context only -- backtesting found neither beats the market spread.">Matchup (0-100) + Projected Score + Forecast</div>
+            ${matchupTableHtml(matchup, g.home, g.away)}
+          </div>` : ''}
+          ${sd ? `<div class="game-card-matchup">
+            <div class="stat-label" title="Each side's full predicted score distribution -- raw model curve reshaped to match real historical NFL scoring frequency, calibrated so the implied win probability matches the Power Model pick.">Point Distribution</div>
+            <div id="${distChartId}" class="dist-chart"></div>
+          </div>` : ''}
+        </details>
+      </div>`;
     }).join('');
 
     const made = Object.keys(picks).length;
-    const lean = hist ? History.summaryLine(ctx, mode) : '';
     document.getElementById(M.id).innerHTML = `
       <div class="panel">
         <h2>${M.title} &mdash; ${made}/${games.length} made
           &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
-        ${lean ? `<p class="lean">${esc(lean)}</p>` : ''}
-        <table><thead><tr><th>Kick</th><th>Away</th><th>Home</th><th>Fav</th>
-          <th class="num" title="ELWAY's home-spread equivalent: away avg pts minus home avg pts. Compare against the Fav column's market line, not the sheet's own spread.">ELWAY Spread</th>
-          <th>O/U</th>
-          <th class="num" title="Historical: favorite of this spread covers">Fav ATS</th>
-          <th>Pick</th><th></th></tr></thead>
-          <tbody>${rows}</tbody></table>
+        <div class="game-card-grid">${cards}</div>
         <details>
-          <summary class="muted small">Legend</summary>
-          <p class="tablefoot muted">Pick the side that covers. Fav ATS is the historical
-            cover rate for any favorite of that spread size — below ~50% leans dog. The line
-            is snapshotted when you pick.
-            A <span class="chip warn">QB</span> chip next to a team shows that team's QB injury
-            situation regardless of what ELWAY currently assumes at QB1 (plus any other flagged
-            QB, if ELWAY's assumed starter is the one hurt; otherwise only a Doubtful/Out backup
-            counts, not a merely Questionable one). A highlighted (amber) Fav cell means
-            the line has moved &ge;1.5 points in one direction this week — hover for the
-            open/current line. A <span class="elway-stale">red</span> ELWAY Spread cell means
-            ELWAY's weekly sheet is still rating a team with a QB1 our live injury feed now
-            shows hurt.</p>
+          <summary class="muted small">Chip legend</summary>
+          <p class="tablefoot muted">Each stat block states that source's own spread + O/U
+            (Market/ELWAY/Power Ranking) or historical ATS cover rate (History) instead of a
+            straight-up pick. ELWAY is Nate Silver's Silver Bulletin NFL forecasting model,
+            transcribed weekly into a Google Sheet. A
+            <span class="chip warn">QB</span> chip shows that team's QB injury situation (red
+            = Out/IR) regardless of what ELWAY currently assumes at QB1 — if ELWAY's assumed
+            starter is the one flagged, another flagged QB for that team shows too (the
+            presumptive next man up); if ELWAY has already moved QB1 off an injured player (or
+            we don't know who ELWAY has at QB1), this falls back to the worst OTHER flagged QB
+            at Doubtful/Out severity only. Any net line move this week shows as a "Steam:"
+            chip, pinned to the right of the card header, with the signed point move itself
+            (<span class="chip good">Steam: +1.5</span> at/above a 1.5-point move in one
+            direction since this week's first snapshot, <span class="chip">Steam: +0.5</span>
+            plain below that).
+            <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
+            rating that team with a QB1 our live injury feed now shows hurt.
+            <span class="chip bad">Bad Weather</span> = live forecast at kickoff is bad enough
+            to matter for scoring, shown in each card's Details section regardless.
+            <span class="stat-label" style="display:inline;text-transform:none;font-weight:600;">Power Ranking</span>
+            states each side's most likely single score (the distribution MODE, not the
+            average) from the same score-distribution pipeline charted in each card's Details
+            section -- frozen at kickoff, like the market line, so it won't drift during a
+            live game. Once a game is final, the ELWAY/History/Power Ranking numbers turn
+            <span class="result-good">green</span> if the side they favored actually covered
+            or <span class="result-bad">red</span> if it didn't (a push grades neither), the
+            whole card gets a light green/red tint if your own pick covered, and O/U swaps to
+            the actual Over/Under result. The market line itself is frozen at whatever it was
+            just before kickoff.</p>
         </details>
       </div>`;
+
+    // Lazy chart render: a Plotly chart drawn into a closed <details> can't size itself
+    // correctly, and there's no reason to render ~15 charts nobody's opened yet. Draw (once)
+    // the first time each card's own details element opens.
+    chartsToWire.forEach(({ id, sd, home, away }) => {
+      const gid = id.replace('ats-dist-', '');
+      const details = document.getElementById(`ats-details-${gid}`);
+      if (!details) return;
+      details.addEventListener('toggle', () => {
+        if (details.open) this._drawDistChart(id, sd, home, away);
+      });
+    });
   },
 
   async pick(week, gameId, team, spread) {

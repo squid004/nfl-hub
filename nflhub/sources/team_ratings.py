@@ -568,6 +568,178 @@ def predict_points(own: dict[str, float], opp: dict[str, float], weather: dict[s
     return round(total, 2)
 
 
+# Per-team SCORE DISTRIBUTIONS (not just predict_points()'s single number) for the Against
+# the Spread tab's Power Ranking spread/O&U and its score-distribution chart. Two-step, per
+# explicit user direction (research/edge_signal_test_v32/v33_score_distribution*.py, 2429
+# games validated): (1) a raw Normal(bias-corrected predict_points() mean, empirical
+# residual sd) discretized to integers; (2) reweighted by the REAL historical frequency of
+# each exact final score since the PAT distance increased (2015 season -- verified live,
+# NFL owners approved the 15-yard-line PAT in May 2015), so the output favors realistic
+# scores (14) over unrealistic ones (15) instead of spreading mass smoothly across every
+# integer. Validated at scale: MAE improved on the uncorrected baseline (7.57 vs. 7.70), and
+# Step 2 genuinely improves the distribution's accuracy, not just its look (+0.16 nats/
+# game-side average log-likelihood of the actual score vs. Step 1 alone).
+#
+# Bias correction folds into Step 1's mean: home/away bias is real and DECLINING over time
+# (same underlying shift as the win-probability HFA work) -- trailing-5-season-shrunk-
+# toward-long-run, same structure as home_field_logit_by_season() but in raw points.
+# Favorite/underdog bias is defined by predict_points()'s OWN predicted margin (not the
+# market spread, so this module stays self-contained) -- flat/cumulative average, since no
+# time trend was found there (unlike home/away), just noise.
+#
+# Reconciliation with the model's OWN win probability (delta_win_prob()): the two
+# distributions are calibrated via bisection on a symmetric mean-shift so their IMPLIED
+# P(home scores more) -- treating the two as INDEPENDENT, a real simplification, not a true
+# joint model -- exactly matches delta_win_prob(). "Most likely outcome" (the Power Ranking
+# spread/O&U shown in the UI) is each side's own distribution MODE -- under independence the
+# single most probable (home, away) score PAIR is exactly (mode(home), mode(away)), so this
+# is a well-defined joint answer, not just two separate marginal summaries pasted together.
+SCORE_HIST_FIRST_SEASON = 2015
+MAX_TEAM_SCORE = 60  # integer score bins 0..MAX_TEAM_SCORE; negligible real mass beyond this
+
+
+def points_bias_by_season(game_log: list[dict]) -> dict[int, dict[str, float]]:
+    """Trailing-5-season home/away points-prediction bias (actual - predicted), shrunk
+    toward the all-time-to-date average with HFA_SHRINKAGE_K pseudo-games -- same structure
+    as home_field_logit_by_season(), just in raw points instead of logit units. No
+    lookahead: season S's value only uses games from seasons strictly before S."""
+    by_season: dict[int, dict[str, list[float]]] = defaultdict(lambda: {"home": [], "away": []})
+    for r in game_log:
+        if r.get("home_pred_points") is None or r.get("away_pred_points") is None:
+            continue
+        by_season[r["season"]]["home"].append(r["home_score"] - r["home_pred_points"])
+        by_season[r["season"]]["away"].append(r["away_score"] - r["away_pred_points"])
+    seasons = sorted(by_season)
+    out: dict[int, dict[str, float]] = {}
+    for i, season in enumerate(seasons):
+        prior = seasons[:i]
+        if not prior:
+            out[season] = {"home": 0.0, "away": 0.0}
+            continue
+        window = prior[-5:]
+        result = {}
+        for side in ("home", "away"):
+            w_vals = [v for s in window for v in by_season[s][side]]
+            a_vals = [v for s in prior for v in by_season[s][side]]
+            rate5 = float(np.mean(w_vals)) if w_vals else 0.0
+            n5 = len(w_vals)
+            rate_all = float(np.mean(a_vals)) if a_vals else 0.0
+            n_all = len(a_vals)
+            result[side] = (n5 * rate5 + HFA_SHRINKAGE_K * rate_all) / (n5 + HFA_SHRINKAGE_K)
+        out[season] = result
+    return out
+
+
+def points_fav_dog_bias_current(game_log: list[dict]) -> float:
+    """Cumulative-to-date favorite bias (predict_points()'s OWN predicted margin decides
+    "favorite", not the market) -- a single current value, not a per-game history, since
+    this only feeds LIVE upcoming-game predictions. The underdog's bias is its negative
+    (research/edge_signal_test_v32/v33 found these symmetric to 3 decimals)."""
+    fav_sum, fav_n = 0.0, 0
+    for r in sorted(game_log, key=lambda r: (r["season"], r["week"])):
+        hp, ap = r.get("home_pred_points"), r.get("away_pred_points")
+        if hp is None or ap is None:
+            continue
+        if hp > ap:
+            fav_sum += r["home_score"] - hp
+            fav_n += 1
+        elif ap > hp:
+            fav_sum += r["away_score"] - ap
+            fav_n += 1
+    return (fav_sum / fav_n) if fav_n else 0.0
+
+
+def historical_score_frequency(played_games: list[dict], first_season: int = SCORE_HIST_FIRST_SEASON) -> dict[int, float]:
+    """P(a team's final score == s) for s in 0..MAX_TEAM_SCORE, from every team-game's own
+    final score since `first_season` -- the modern PAT-distance era. Both home and away
+    scores counted (one entry per team per game)."""
+    counts: dict[int, int] = defaultdict(int)
+    n = 0
+    for g in played_games:
+        try:
+            season = int(g["season"])
+            home_pts, away_pts = float(g["home_score"]), float(g["away_score"])
+        except (ValueError, TypeError):
+            continue
+        if season < first_season:
+            continue
+        for pts in (home_pts, away_pts):
+            s = int(round(pts))
+            if 0 <= s <= MAX_TEAM_SCORE:
+                counts[s] += 1
+                n += 1
+    if not n:
+        return {}
+    return {s: counts.get(s, 0) / n for s in range(MAX_TEAM_SCORE + 1)}
+
+
+def _raw_score_distribution(mean: float, sd: float) -> np.ndarray:
+    """Step 1: Normal(mean, sd) discretized to integers 0..MAX_TEAM_SCORE via the
+    continuity correction; mass outside that range (a team can't score negative, and a 61+
+    point game is vanishingly rare) folds into the boundary bins."""
+    from scipy.stats import norm
+    edges = np.arange(-0.5, MAX_TEAM_SCORE + 1.5, 1.0)
+    cdf = norm.cdf(edges, loc=mean, scale=sd)
+    probs = np.diff(cdf)
+    probs[0] += norm.cdf(-0.5, loc=mean, scale=sd)
+    probs[-1] += 1 - norm.cdf(MAX_TEAM_SCORE + 0.5, loc=mean, scale=sd)
+    return probs / probs.sum()
+
+
+def _reweight_score_by_history(raw: np.ndarray, hist_freq: dict[int, float]) -> np.ndarray:
+    """Step 2: multiply by the real historical per-score frequency, renormalize. A score
+    with zero historical precedent gets a tiny floor instead of an outright zero."""
+    hist = np.array([hist_freq.get(s, 0.0) for s in range(len(raw))])
+    weighted = raw * (hist + 1e-6)
+    return weighted / weighted.sum()
+
+
+def _implied_home_score_win_prob(home_dist: np.ndarray, away_dist: np.ndarray) -> float:
+    """P(home score > away score), treating the two distributions as INDEPENDENT."""
+    away_cdf_below = np.cumsum(away_dist) - away_dist
+    return float(np.sum(home_dist * away_cdf_below))
+
+
+def build_score_distributions(
+    mean_home: float, mean_away: float, sd_home: float, sd_away: float,
+    hist_freq: dict[int, float], target_home_win_prob: float,
+    tol: float = 0.0005, max_iter: int = 40,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Full pipeline: Step 1 + Step 2 for both sides, then bisect on a symmetric mean-shift
+    so the pair's implied win probability matches `target_home_win_prob` exactly (within
+    `tol`) -- see this section's own module-level docstring for why. Returns (home_dist,
+    away_dist), each a MAX_TEAM_SCORE+1-length probability array summing to 1."""
+    lo, hi = -21.0, 21.0  # generous bracket; a 3-score swing in mean is already extreme
+    h_dist = a_dist = None
+    mid = 0.0
+    for _ in range(max_iter):
+        mid = (lo + hi) / 2
+        h_dist = _reweight_score_by_history(_raw_score_distribution(mean_home + mid, sd_home), hist_freq)
+        a_dist = _reweight_score_by_history(_raw_score_distribution(mean_away - mid, sd_away), hist_freq)
+        p = _implied_home_score_win_prob(h_dist, a_dist)
+        if abs(p - target_home_win_prob) < tol:
+            break
+        if p < target_home_win_prob:
+            lo = mid
+        else:
+            hi = mid
+    return h_dist, a_dist
+
+
+def score_dist_to_whole_percentages(dist: np.ndarray) -> list[dict[str, int]]:
+    """Largest-remainder (Hamilton) apportionment -- integer percentages that sum to EXACTLY
+    100, instead of naive rounding (which can land on 99 or 101). Only nonzero bins are kept
+    (a 61-entry array of mostly-zero percentages isn't useful to ship to the frontend)."""
+    raw_pct = dist * 100
+    floors = np.floor(raw_pct).astype(int)
+    remainder = 100 - int(floors.sum())
+    order = np.argsort(-(raw_pct - floors))
+    out = floors.copy()
+    for i in range(max(remainder, 0)):
+        out[order[i]] += 1
+    return [{"points": int(s), "pct": int(out[s])} for s in range(len(out)) if out[s] > 0]
+
+
 # Stadium coordinates for teams that are UNAMBIGUOUSLY, permanently outdoor as of the current
 # roof (verified against 2022+ games.csv roof values -- each of these showed ONLY 'outdoors',
 # never 'dome'/'closed'/'open'). Deliberately excludes: fixed domes (DET/LV/LAR/LAC/MIN/NO --
@@ -841,6 +1013,14 @@ def compute_ratings(
                     "home_score": int(home_pts), "away_score": int(away_pts),
                     "spread_line": spread_line,
                     "diffs": {m: ORIENTATION[m] * (rating[home][m] - rating[away][m]) for m in RATING_METRICS},
+                    # same pregame rating[home]/rating[away] snapshot the diffs above use --
+                    # reuses predict_points() directly instead of a second, parallel rating
+                    # walk (unlike the research scripts, which deliberately stay
+                    # self-contained) so this can never drift from what matchup_callouts()
+                    # shows live. Feeds the score-distribution pipeline's bias corrections
+                    # (see points_bias_by_season()/points_fav_dog_bias() below).
+                    "home_pred_points": predict_points(rating[home], rating[away]),
+                    "away_pred_points": predict_points(rating[away], rating[home]),
                 })
 
         for team, raw in ((home, home_raw), (away, away_raw)):
@@ -926,6 +1106,8 @@ def matchup_callouts(
     qb_gap_upcoming: dict[tuple[str, int], float] | None = None,
     skill_out_upcoming: dict[tuple[str, int], float] | None = None,
     hfa_logit: float = 0.0,
+    points_bias: dict[str, float] | None = None, sd_home: float | None = None, sd_away: float | None = None,
+    hist_score_freq: dict[int, float] | None = None,
 ) -> dict[str, dict]:
     """For each upcoming game (already normalized home/away team codes), rule-based sentences
     for any offense-vs-opposing-defense pairing whose combined z-score clears
@@ -946,7 +1128,16 @@ def matchup_callouts(
     CURRENT season -- home-field advantage isn't a per-team/per-week thing): HFA_WEIGHT
     applied to this adds the same constant to every game this season. When diff_mu/diff_sd
     are given, each entry gets a `power_model` block ({favorite, prob, delta, delta_raw}) for
-    the Moneyline Pick'em tab's Power Model pick."""
+    the Moneyline Pick'em tab's Power Model pick.
+
+    `points_bias` ({"home", "away", "fav_dog"}, from points_bias_by_season()/points_fav_dog_
+    bias_current())/`sd_home`/`sd_away`/`hist_score_freq` (from historical_score_frequency()):
+    when all given (alongside power_model), each entry also gets a `score_distribution`
+    block (home/away mode, spread, total, and each side's full percentage-by-score curve) for
+    the Against the Spread tab -- see build_score_distributions()'s own module-level
+    docstring for the full two-step methodology and how it's reconciled with power_model's
+    own win probability. NOT frozen-at-kickoff here (this function is stateless, no store
+    access) -- refresh() applies that after calling this."""
     n_teams = len(ratings)
     if n_teams < 4:
         return {}
@@ -1009,14 +1200,16 @@ def matchup_callouts(
         # How many of those predicted points are the weather adjustment itself, not the base
         # model -- the difference against the same prediction with weather=None. Lets a caller
         # flag "weather is worth N points here" without re-implementing predict_points' formula.
+        # Also doubles as the NO-WEATHER base the score-distribution pipeline below anchors
+        # on -- its bias corrections were fit against the no-weather residual, so mixing in a
+        # weather-adjusted mean here would double-count/mismatch what they were fit to.
+        base_home = predict_points(ratings[home], ratings[away], None)
+        base_away = predict_points(ratings[away], ratings[home], None)
         weather_points_delta = None
-        if weather is not None:
-            base_home = predict_points(ratings[home], ratings[away], None)
-            base_away = predict_points(ratings[away], ratings[home], None)
-            if None not in (base_home, base_away, predicted_home_points, predicted_away_points):
-                weather_points_delta = round(
-                    (predicted_home_points - base_home) + (predicted_away_points - base_away), 2
-                )
+        if weather is not None and None not in (base_home, base_away, predicted_home_points, predicted_away_points):
+            weather_points_delta = round(
+                (predicted_home_points - base_home) + (predicted_away_points - base_away), 2
+            )
 
         power_model = None
         if diff_mu is not None and diff_sd is not None and all(
@@ -1031,8 +1224,27 @@ def matchup_callouts(
             power_model = {"favorite": fav, "prob": round(delta_win_prob(delta), 4),
                             "delta": round(delta, 4), "delta_raw": round(delta_raw, 4)}
 
+        score_distribution = None
+        if (power_model is not None and points_bias is not None and sd_home and sd_away and hist_score_freq
+                and base_home is not None and base_away is not None):
+            hb, ab = points_bias.get("home", 0.0), points_bias.get("away", 0.0)
+            fb = points_bias.get("fav_dog", 0.0)
+            mean_home = base_home + hb + (fb if base_home > base_away else -fb)
+            mean_away = base_away + ab + (fb if base_away > base_home else -fb)
+            target_home_p = power_model["prob"] if power_model["favorite"] == home else (
+                1 - power_model["prob"] if power_model["favorite"] == away else 0.5)
+            h_dist, a_dist = build_score_distributions(mean_home, mean_away, sd_home, sd_away, hist_score_freq, target_home_p)
+            h_mode, a_mode = int(np.argmax(h_dist)), int(np.argmax(a_dist))
+            score_distribution = {
+                "home_mode": h_mode, "away_mode": a_mode,
+                "spread": a_mode - h_mode,  # home-spread convention: negative = home favored, matches el.spread_home
+                "total": h_mode + a_mode,
+                "home_pct": score_dist_to_whole_percentages(h_dist),
+                "away_pct": score_dist_to_whole_percentages(a_dist),
+            }
+
         out[f"{away}@{home}"] = {
-            "home": home, "away": away,
+            "home": home, "away": away, "game_id": g.get("game_id"), "gameday": gameday,
             "home_ratings": ratings[home], "away_ratings": ratings[away],
             "home_ratings_display": ratings_display.get(home), "away_ratings_display": ratings_display.get(away),
             "callouts": callouts,
@@ -1041,6 +1253,7 @@ def matchup_callouts(
             "weather": weather,
             "weather_points_delta": weather_points_delta,
             "power_model": power_model,
+            "score_distribution": score_distribution,
         }
     return out
 
@@ -1539,6 +1752,122 @@ def _refresh_parlay_snapshot(store, season: int, week: int, power: dict[str, dic
     store.kv_set("parlay_ratings_snapshot", json.dumps({"season": season, "week": week, "teams": teams}))
 
 
+def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: int, current_week: int) -> None:
+    """Backfills AND maintains a permanent per-week snapshot of the power rankings (kv
+    "power_rankings_by_week", {season: {week: {...}}}) for the week dropdown's Power
+    Rankings/Parlays history -- explicit user direction: reconstruct missing weeks once and
+    store them, don't recompute on every view; each week's snapshot is "ratings as of the
+    last refresh before that week's first kickoff," frozen permanently once computed, never
+    touched again (the underlying games that defined it don't change in hindsight).
+
+    "As of right before week W's first kickoff" has an exact, unambiguous definition given
+    final historical results: every fully-completed PRIOR season, plus this season's weeks
+    strictly before W -- no week-W (or later) game has a result yet at that point by
+    definition, so this cutoff is identical whether reconstructed today or computed live
+    back when week W actually started. That's what makes one-time reconstruction exact, not
+    an approximation of what the live snapshot would have shown.
+
+    Idempotent and incremental by construction: a week already present in the stored blob is
+    never recomputed (this IS the "store so we don't recompute every time" behavior, not a
+    separate backfill-vs-maintain code path) -- the very first run after this shipped simply
+    found every past week missing and filled them all in one pass; every run after that only
+    ever computes whichever single NEW week most recently had its first kickoff pass, if any.
+    The CURRENT week stays unsnapshotted until its own first kickoff -- team_ratings' own
+    live, reactive "teams"/"power_rankings" already serves as its pre-kickoff preview, so
+    there's nothing to freeze yet."""
+    existing = store.kv_get("power_rankings_by_week")
+    try:
+        by_week: dict[str, dict[str, dict]] = json.loads(existing) if existing else {}
+    except (TypeError, ValueError):
+        by_week = {}
+    season_key = str(current_season)
+    season_weeks = by_week.setdefault(season_key, {})
+
+    changed = False
+    for week in range(1, current_week + 1):
+        week_key = str(week)
+        if week_key in season_weeks:
+            continue  # already frozen -- never touched again
+
+        this_week_days = [
+            r.get("gameday") for r in all_rows
+            if int(r["season"]) == current_season and str(r.get("week")) == str(week) and r.get("gameday")
+        ]
+        first_day = min(this_week_days) if this_week_days else None
+        still_pregame = first_day is None or date.today().isoformat() < first_day
+        if week == current_week and still_pregame:
+            continue  # nothing to freeze yet -- live team_ratings IS this week's preview
+
+        played_cutoff = [
+            r for r in all_rows
+            if r.get("result") not in ("", "NA", None) and int(r["season"]) >= FIRST_SEASON
+            and (int(r["season"]) < current_season or int(r["week"]) < week)
+        ]
+        raw_ratings, historical_bounds = compute_ratings(played_cutoff, current_season)
+        ratings: dict[str, dict[str, float]] = {}
+        for raw_team, r in raw_ratings.items():
+            try:
+                ratings[normalize_team(raw_team)] = r
+            except UnknownTeamError:
+                continue
+        power = power_rankings(ratings, historical_bounds)
+        season_weeks[week_key] = {
+            "generated": datetime.now(timezone.utc).isoformat(),
+            "teams": ratings,
+            "power_rankings": power,
+            # same shape as parlay_ratings_snapshot's own "teams" field, for direct reuse by
+            # the Parlays tab's history view without a second extraction step client-side.
+            "parlay_teams": {
+                t: {m: info["ratings_display"].get(m) for m in EPA_DISPLAY_METRICS}
+                for t, info in power.items() if info.get("ratings_display")
+            },
+        }
+        changed = True
+
+    if changed:
+        store.kv_set("power_rankings_by_week", json.dumps(by_week))
+
+
+def _freeze_score_distributions(store, matchups: dict[str, dict], today: str) -> dict[str, dict]:
+    """Freezes each game's `score_distribution` the moment its kickoff (gameday, date
+    granularity -- same freeze-point convention as _refresh_parlay_snapshot above and
+    refresh.py's own odds freezing, "good enough" per that precedent) has passed, so a live
+    or just-finished game keeps showing its last PRE-kickoff score distribution instead of
+    drifting if refresh() reruns later the same day -- explicit user direction, matching how
+    the market line is already frozen at kickoff elsewhere in this project. Keyed by each
+    matchup's own `game_id` (stable across weeks/seasons, unlike the "AWAY@HOME" dict key
+    matchup_callouts() itself uses, which recurs every season). Snapshot is pruned to only
+    this week's games each call, so it can't grow unbounded over a season."""
+    existing = store.kv_get("score_distribution_snapshot")
+    try:
+        frozen: dict[str, dict] = json.loads(existing) if existing else {}
+    except (TypeError, ValueError):
+        frozen = {}
+
+    changed = False
+    for key, info in matchups.items():
+        gid = info.get("game_id")
+        gameday = info.get("gameday")
+        if not gid or info.get("score_distribution") is None:
+            continue
+        past_kickoff = bool(gameday) and today >= gameday
+        if past_kickoff:
+            if gid in frozen:
+                info["score_distribution"] = frozen[gid]
+            else:
+                frozen[gid] = info["score_distribution"]
+                changed = True
+
+    stale = [gid for gid in frozen if gid not in {m.get("game_id") for m in matchups.values()}]
+    for gid in stale:
+        del frozen[gid]
+        changed = True
+
+    if changed:
+        store.kv_set("score_distribution_snapshot", json.dumps(frozen))
+    return matchups
+
+
 def refresh(store, force: bool = False) -> str:
     """Rebuild team EPA ratings at most once per day."""
     today = date.today().isoformat()
@@ -1582,7 +1911,7 @@ def refresh(store, force: bool = False) -> str:
     for r in upcoming_raw:
         try:
             upcoming.append({"home_team": normalize_team(r["home_team"]), "away_team": normalize_team(r["away_team"]),
-                              "gameday": r.get("gameday"), "week": int(r.get("week") or 0)})
+                              "gameday": r.get("gameday"), "week": int(r.get("week") or 0), "game_id": r.get("game_id")})
         except (UnknownTeamError, ValueError, TypeError):
             continue
 
@@ -1606,10 +1935,31 @@ def refresh(store, force: bool = False) -> str:
     skill_out_upcoming = {(team, week): v for (team, season, week), v in skill_out_by_tw.items() if season == current_season}
     hfa_logit_current = home_field_logit_by_season(played).get(current_season, 0.0)
 
+    # Score-distribution pipeline (Against the Spread tab) -- reuses the SAME game_log
+    # compute_ratings() already built above (now carries home_pred_points/away_pred_points,
+    # see compute_ratings()'s own game_log.append), so this costs nothing extra beyond a
+    # handful of cheap aggregations over data already in memory.
+    points_bias_by_season_map = points_bias_by_season(game_log)
+    current_points_bias = points_bias_by_season_map.get(current_season, {"home": 0.0, "away": 0.0})
+    points_bias_live = {
+        "home": current_points_bias["home"], "away": current_points_bias["away"],
+        "fav_dog": points_fav_dog_bias_current(game_log),
+    }
+    sd_home = sd_away = None
+    if game_log:
+        home_resids = [r["home_score"] - r["home_pred_points"] for r in game_log if r.get("home_pred_points") is not None]
+        away_resids = [r["away_score"] - r["away_pred_points"] for r in game_log if r.get("away_pred_points") is not None]
+        sd_home = (float(np.std(home_resids)) or 1.0) if home_resids else None
+        sd_away = (float(np.std(away_resids)) or 1.0) if away_resids else None
+    hist_score_freq = historical_score_frequency(played)
+
     matchups = matchup_callouts(ratings, upcoming, historical_bounds, diff_mu, diff_sd,
-                                 qb_gap_upcoming, skill_out_upcoming, hfa_logit_current)
+                                 qb_gap_upcoming, skill_out_upcoming, hfa_logit_current,
+                                 points_bias_live, sd_home, sd_away, hist_score_freq)
+    matchups = _freeze_score_distributions(store, matchups, date.today().isoformat())
     power = power_rankings(ratings, historical_bounds)
     _refresh_parlay_snapshot(store, current_season, current_week, power, all_rows)
+    refresh_weekly_power_rankings(store, all_rows, current_season, current_week)
 
     store.kv_set("team_ratings", json.dumps({
         "generated": datetime.now(timezone.utc).isoformat(),
