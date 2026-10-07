@@ -344,15 +344,20 @@ def _apply_edge(
             log.warning("edge sheet pull failed: %s", exc)
             summary["edge_sheet"] = f"unavailable ({exc})"
 
-    # national pick % — best-effort scrape, at most once/day, never overwrites a manual row
+    # national pick % — best-effort scrape, at most once/day PER WEEK, never overwrites a
+    # manual row. Keyed by (date, week) rather than date alone: the week can roll over
+    # mid-day (Tuesday ~3am ET) after that day's scrape already ran for the OLD week, and a
+    # date-only gate would then silently withhold the new week's data for the rest of the
+    # day even though it's already sitting on Yahoo's page ready to fetch.
     today = datetime.now(timezone.utc).date().isoformat()
-    if store.kv_get("edge_national_date") != today:
+    national_gate = f"{today}:{week}"
+    if store.kv_get("edge_national_date") != national_gate:
         try:
             rows = edge_national.fetch_week(week, normalize_team)
             store.edge_bulk_set_national_pct(
                 season, week, [{"team": r.team, "pct": r.pct} for r in rows]
             )
-            store.kv_set("edge_national_date", today)
+            store.kv_set("edge_national_date", national_gate)
             summary["edge_national"] = f"scraped {len(rows)} teams"
         except edge_national.NationalPctUnavailable as exc:
             log.warning("national pick%% scrape failed: %s", exc)
