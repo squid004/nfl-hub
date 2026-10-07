@@ -492,16 +492,26 @@ const Pickem = {
     const cssVar = name => cs.getPropertyValue(name).trim();
     const colors = { text: cssVar('--text'), dim: cssVar('--dim'), line: cssVar('--line'),
                       panel: cssVar('--panel2'), home: cssVar('--accent'), away: cssVar('--warn') };
-    const trace = (pts, label, mode, color) => ({
+    // Away mirrored onto negative x, home on positive x -- separates the two curves instead
+    // of overlapping them. Points can never actually be negative, so the sign here is purely
+    // a left/right layout trick; tickvals/ticktext below relabel every tick back to its real
+    // (always non-negative) point value so nothing reads as an actual negative score.
+    const trace = (pts, label, mode, color, sign) => ({
       name: `${label} (mode ${mode})`,
-      x: pts.map(d => d.points), y: pts.map(d => d.pct), type: 'bar', opacity: 0.65,
-      marker: { color }, hovertemplate: `${label} %{x} pts: %{y}%<extra></extra>`,
+      x: pts.map(d => sign * d.points), y: pts.map(d => d.pct),
+      customdata: pts.map(d => d.points), type: 'bar', opacity: 0.75,
+      marker: { color }, hovertemplate: `${label} %{customdata} pts: %{y}%<extra></extra>`,
     });
-    Plotly.react(divId, [trace(sd.home_pct, home, sd.home_mode, colors.home), trace(sd.away_pct, away, sd.away_mode, colors.away)], {
-      barmode: 'overlay', autosize: true, margin: { l: 44, r: 12, t: 8, b: 36 },
+    const maxPts = Math.max(...sd.home_pct.map(d => d.points), ...sd.away_pct.map(d => d.points));
+    const tickMax = Math.ceil((maxPts + 1) / 10) * 10;
+    const tickvals = [], ticktext = [];
+    for (let v = -tickMax; v <= tickMax; v += 10) { tickvals.push(v); ticktext.push(String(Math.abs(v))); }
+    Plotly.react(divId, [trace(sd.away_pct, away, sd.away_mode, colors.away, -1), trace(sd.home_pct, home, sd.home_mode, colors.home, 1)], {
+      autosize: true, margin: { l: 44, r: 12, t: 8, b: 36 },
       paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
       font: { color: colors.text, size: 11 },
-      xaxis: { title: { text: 'Points' }, gridcolor: colors.line, color: colors.dim, tickfont: { size: 10 } },
+      xaxis: { title: { text: `${away} ←  points  → ${home}` }, gridcolor: colors.line, color: colors.dim,
+               tickfont: { size: 10 }, tickvals, ticktext, zeroline: true, zerolinecolor: colors.dim },
       yaxis: { title: { text: '% chance' }, gridcolor: colors.line, color: colors.dim, tickfont: { size: 10 } },
       legend: { orientation: 'h', x: 0, y: 1.15, font: { color: colors.text, size: 11 } },
       hoverlabel: { bgcolor: colors.panel, bordercolor: colors.line, font: { color: colors.text, size: 11 } },
