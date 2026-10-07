@@ -1560,11 +1560,91 @@ def _qb_out_doubtful_by_week(current_season: int) -> dict[tuple[str, int, int], 
     return out
 
 
+# Mid-game QB injury: a DIFFERENT signal from _qb_out_doubtful_by_week above (which only
+# ever sees PRE-game report status) -- a starter healthy enough to start, then hurt partway
+# through. Ported from research/edge_signal_test_v34_midgame_qb_injury.py once that
+# investigation confirmed it as a real, statistically significant (z=3.36, p<0.001)
+# contributor to misses: when the MODEL'S OWN FAVORITE's QB goes down mid-game, that game
+# misses 2.34% of the time vs. 1.11% for an otherwise-identical hit -- small in absolute
+# terms (43 of 1836 misses, 2007-2025) but real and mechanistically unknowable pregame,
+# hence descriptive/filterable here rather than folded into `delta` itself.
+MIDGAME_MIN_BACKUP_ATTEMPTS = 3  # filters out one-off gadget/trick-play passer changes
+
+
+def _compute_midgame_qb_injury_season(season: int) -> pd.DataFrame:
+    """One row per (team, week) where that team's starting passer changed mid-game outside
+    garbage time (WP_LO/WP_HI) AND nflverse's own play text explicitly says the departing
+    passer "was injured during the play" -- both signals required, see module docstring
+    above. Returns an empty-but-correctly-columned frame on total failure (caller treats
+    that as "nothing found," not a crash)."""
+    cols = ["game_id", "season", "week", "season_type", "posteam", "play_type", "wp",
+            "passer_player_id", "passer_player_name", "game_seconds_remaining", "desc"]
+    df = pd.read_csv(PBP_URL.format(season=season), compression="gzip", usecols=cols, low_memory=False)
+    df = df[df["season_type"] == "REG"]
+    pass_df = df[(df["play_type"] == "pass") & df["passer_player_id"].notna()].copy()
+    pass_df = pass_df.sort_values(["game_id", "posteam", "game_seconds_remaining"], ascending=[True, True, False])
+
+    rows = []
+    for (gid, team_raw), grp in pass_df.groupby(["game_id", "posteam"], sort=False):
+        passers = grp["passer_player_id"].tolist()
+        starter_id = passers[0]
+        switch_idx = next((i for i, p in enumerate(passers) if p != starter_id), None)
+        if switch_idx is None:
+            continue
+        new_id = passers[switch_idx]
+        backup_attempts = sum(1 for p in passers[switch_idx:] if p == new_id)
+        if backup_attempts < MIDGAME_MIN_BACKUP_ATTEMPTS:
+            continue
+        wp_at_switch = grp["wp"].iloc[switch_idx - 1] if switch_idx > 0 else grp["wp"].iloc[0]
+        if pd.isna(wp_at_switch) or not (WP_LO <= wp_at_switch <= WP_HI):
+            continue  # game already decided when the switch happened
+
+        starter_name = grp["passer_player_name"].iloc[0]
+        game_desc = df.loc[df["game_id"] == gid, "desc"].dropna()
+        name_pat = re.escape(str(starter_name))
+        injured = bool(game_desc.str.contains(
+            rf"{re.escape(str(team_raw))}-\d+-{name_pat} was injured", regex=True, na=False
+        ).any())
+        if not injured:
+            continue
+        try:
+            team = normalize_team(team_raw)
+        except UnknownTeamError:
+            continue
+        rows.append({"team": team, "week": int(grp["week"].iloc[0])})
+    return pd.DataFrame(rows, columns=["team", "week"])
+
+
+def midgame_qb_injury_by_week(current_season: int) -> dict[tuple[str, int, int], bool]:
+    """{(team, season, week): True} for every (team, season, week) with a confirmed mid-game
+    QB injury (see _compute_midgame_qb_injury_season). Completed seasons cached (nflhub/data/
+    team_ratings/midgame_qb_injury_{season}.parquet), same convention as _passer_game_stats;
+    only the current season re-downloads. A per-season fetch failure is logged and skipped,
+    never allowed to fail the whole historical refresh over one bad season."""
+    out: dict[tuple[str, int, int], bool] = {}
+    for season in range(FIRST_SEASON, current_season + 1):
+        cache_path = os.path.join(DATA_DIR, f"midgame_qb_injury_{season}.parquet")
+        if season < current_season and os.path.exists(cache_path):
+            df = pd.read_parquet(cache_path)
+        else:
+            try:
+                df = _compute_midgame_qb_injury_season(season)
+            except Exception:  # noqa: BLE001 -- best-effort, same soft-fail convention as the rest of this module
+                log.warning("midgame QB injury detection failed for %s", season, exc_info=True)
+                continue
+            if season < current_season:
+                df.to_parquet(cache_path)
+        for _, row in df.iterrows():
+            out[(row["team"], season, int(row["week"]))] = True
+    return out
+
+
 def compute_backtest_scatter(
     game_log: list[dict], qb_out: dict[tuple[str, int, int], bool] | None = None,
     qb_gap: dict[tuple[str, int, int], float] | None = None,
     skill_out: dict[tuple[str, int, int], float] | None = None,
     hfa_by_season: dict[int, float] | None = None,
+    midgame_qb_injury: dict[tuple[str, int, int], bool] | None = None,
 ) -> list[dict]:
     """Turns compute_ratings()'s optional `game_log` into ready-to-plot rows for the
     Historical Power tab's backtest scatter: market spread vs. the CURRENT production
@@ -1581,13 +1661,19 @@ def compute_backtest_scatter(
     week()/home_field_logit_by_season(), optional): QB_QUALITY_GAP_WEIGHT/SKILL_EPA_OUT_
     WEIGHT/HFA_WEIGHT applied to these ADD to the pure 8-stat composite below, producing the
     `delta` this function actually returns -- `delta_raw` keeps the unadjusted composite for
-    comparison. See each weight's own docstring for why it's a real, data-driven correction."""
+    comparison. See each weight's own docstring for why it's a real, data-driven correction.
+
+    `midgame_qb_injury` (from midgame_qb_injury_by_week, optional): tags each row with
+    whether the home/away team's starter went down mid-game (confirmed, see that function's
+    docstring) -- display/filter-only, NOT folded into `delta` (unlike qb_gap/skill_out),
+    since it's unknowable before the game even starts."""
     if not game_log:
         return []
     qb_out = qb_out or {}
     qb_gap = qb_gap or {}
     skill_out = skill_out or {}
     hfa_by_season = hfa_by_season or {}
+    midgame_qb_injury = midgame_qb_injury or {}
     mu = {m: float(np.mean([r["diffs"][m] for r in game_log])) for m in RATING_METRICS}
     sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in RATING_METRICS}
 
@@ -1612,6 +1698,8 @@ def compute_backtest_scatter(
             "outcome": outcome,
             "home_qb_out": qb_out.get((r["home"], r["season"], r["week"]), False),
             "away_qb_out": qb_out.get((r["away"], r["season"], r["week"]), False),
+            "home_qb_injured_ingame": midgame_qb_injury.get((r["home"], r["season"], r["week"]), False),
+            "away_qb_injured_ingame": midgame_qb_injury.get((r["away"], r["season"], r["week"]), False),
         })
     return out
 
@@ -1726,7 +1814,8 @@ def refresh_historical(store, force: bool = False) -> str:
     qb_gap, _primary, _trailing, _league_avg = qb_quality_gap_data(played, current_season)
     skill_out = skill_epa_out_by_team_week(current_season)
     hfa_by_season = home_field_logit_by_season(played)
-    scatter = compute_backtest_scatter(game_log, qb_out, qb_gap, skill_out, hfa_by_season)
+    midgame_qb_injury = midgame_qb_injury_by_week(current_season)
+    scatter = compute_backtest_scatter(game_log, qb_out, qb_gap, skill_out, hfa_by_season, midgame_qb_injury)
     calibration = compute_calibration_stats(scatter)
 
     store.kv_set("historical_power_rankings", json.dumps({

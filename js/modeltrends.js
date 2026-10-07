@@ -61,6 +61,7 @@ const ModelTrends = {
   _weekFrom: null, _weekTo: null,
   _cellFilter: null,       // { season, week } set by clicking the heatmap below, or null
   _qbFilter: '',           // '' | 'fav' | 'dog' | 'either' | 'neither' -- QB health of the model's favorite/underdog
+  _midgameQbFilter: '',    // '' | 'fav' | 'dog' | 'either' | 'neither' -- confirmed mid-game QB injury (research/edge_signal_test_v34)
 
   // "Agreement" = market and model favor the SAME side (spread and delta share a sign) --
   // those games can't show the market beating the model or vice versa, since both picked
@@ -110,6 +111,7 @@ const ModelTrends = {
     this._redraw();
   },
   setQbFilter(v) { this._qbFilter = v; this._redraw(); },
+  setMidgameQbFilter(v) { this._midgameQbFilter = v; this._redraw(); },
 
   // Set by clicking a cell in the season/week heatmap below the scatter (cross-filter);
   // cleared by the × on its chip or by Reset all filters.
@@ -127,6 +129,7 @@ const ModelTrends = {
     this._weekFrom = null; this._weekTo = null;
     this._cellFilter = null;
     this._qbFilter = '';
+    this._midgameQbFilter = '';
     this._syncControlsToState();
     this._redraw();
   },
@@ -150,6 +153,7 @@ const ModelTrends = {
     set('backtest-season-from', ''); set('backtest-season-to', '');
     set('backtest-week-from', ''); set('backtest-week-to', '');
     set('backtest-qb-filter', '');
+    set('backtest-midgame-qb-filter', '');
   },
 
   render(ctx) {
@@ -230,6 +234,15 @@ const ModelTrends = {
                   <option value="neither">Neither team's QB out/doubtful</option>
                 </select>
               </label>
+              <label title="Confirmed via nflverse's own play text ('...was injured during the play') AND a real mid-game passer change outside garbage time -- a starter healthy enough to START, hurt partway through. Different signal from QB health above, which is pre-game report status only. See research/edge_signal_test_v34_midgame_qb_injury.py.">Mid-game QB injury
+                <select id="backtest-midgame-qb-filter">
+                  <option value="">Any game</option>
+                  <option value="fav">Model favorite's QB hurt mid-game</option>
+                  <option value="dog">Model underdog's QB hurt mid-game</option>
+                  <option value="either">Either team's QB hurt mid-game</option>
+                  <option value="neither">Neither team's QB hurt mid-game</option>
+                </select>
+              </label>
             </div>
             <div class="backtest-control-row">
               <span id="backtest-agree-stat" class="muted small"></span>
@@ -273,6 +286,7 @@ const ModelTrends = {
     on('backtest-min-delta', 'input', e => this.setMinDelta(e.target.value));
     on('backtest-yaxis-select', 'change', e => this.setYAxisMode(e.target.value));
     on('backtest-qb-filter', 'change', e => this.setQbFilter(e.target.value));
+    on('backtest-midgame-qb-filter', 'change', e => this.setMidgameQbFilter(e.target.value));
   },
 
   // Every active filter composes via AND. Order doesn't affect the result, only performance
@@ -296,6 +310,19 @@ const ModelTrends = {
         if (this._qbFilter === 'dog') return dogOut;
         if (this._qbFilter === 'either') return favOut || dogOut;
         if (this._qbFilter === 'neither') return !favOut && !dogOut;
+        return true;
+      });
+    }
+    // Same favorite/underdog framing as QB health above, but for a CONFIRMED mid-game
+    // injury (research/edge_signal_test_v34) instead of pre-game report status.
+    if (this._midgameQbFilter) {
+      rows = rows.filter(r => {
+        const favHurt = r.delta >= 0 ? r.home_qb_injured_ingame : r.away_qb_injured_ingame;
+        const dogHurt = r.delta >= 0 ? r.away_qb_injured_ingame : r.home_qb_injured_ingame;
+        if (this._midgameQbFilter === 'fav') return favHurt;
+        if (this._midgameQbFilter === 'dog') return dogHurt;
+        if (this._midgameQbFilter === 'either') return favHurt || dogHurt;
+        if (this._midgameQbFilter === 'neither') return !favHurt && !dogHurt;
         return true;
       });
     }
