@@ -285,11 +285,9 @@ const Pickem = {
     const elwayQb1 = ctx.elwayQb1 || {};
     const depthChart = ctx.qbDepthChart || {};
     const teamRatings = ctx.teamRatings || null;
-    const power = (teamRatings && teamRatings.power_rankings) || {};
     const bucketRanks = computeBucketRanks(ctx);
-    // College-football-poll-style "#N " prefix from the power ranking (data-driven composite
-    // of 8 stats -- see js/power.js / Power Rankings tab). Descriptive only.
-    const rankPrefix = team => power[team] ? `<span class="rank-badge" title="Power ranking #${power[team].rank} of ${Object.keys(power).length}">#${power[team].rank}</span> ` : '';
+    const records = (teamRatings && teamRatings.team_records) || {};
+    const recordLabel = team => { const r = records[team]; return r ? ` <span class="team-record">(${r.wins}-${r.losses}${r.ties ? '-' + r.ties : ''})</span>` : ''; };
 
     const cards = games.map(g => {
       const o = odds[g.game_id] || {};
@@ -376,7 +374,7 @@ const Pickem = {
       return `<div class="game-card${pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
-          <span class="matchup">${rankPrefix(g.away)}${teamSpan(g.away)}${qbChip(g.away, injuries, depthChart)} @ ${rankPrefix(g.home)}${teamSpan(g.home)}${qbChip(g.home, injuries, depthChart)}</span>
+          <span class="matchup">${teamSpan(g.away)}${recordLabel(g.away)}${qbChip(g.away, injuries, depthChart)} @ ${teamSpan(g.home)}${recordLabel(g.home)}${qbChip(g.home, injuries, depthChart)}</span>
           ${stateChip}
           ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
@@ -518,6 +516,8 @@ const Pickem = {
     const elwayQb1 = ctx.elwayQb1 || {};
     const depthChart = ctx.qbDepthChart || {};
     const teamRatings = ctx.teamRatings || null;
+    const records = (teamRatings && teamRatings.team_records) || {};
+    const recordLabel = team => { const r = records[team]; return r ? ` <span class="team-record">(${r.wins}-${r.losses}${r.ties ? '-' + r.ties : ''})</span>` : ''; };
 
     const spreadFavLabel = (spreadHome, home, away) =>
       spreadHome == null ? null : { team: spreadHome <= 0 ? home : away, label: spreadHome === 0 ? 'Pick’em' : `${spreadHome <= 0 ? home : away} ${spreadHome}` };
@@ -582,7 +582,7 @@ const Pickem = {
       return `<div class="game-card${pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
-          <span class="matchup">${g.away}${qbChip(g.away, injuries, depthChart)} @ ${g.home}${qbChip(g.home, injuries, depthChart)}</span>
+          <span class="matchup">${g.away}${recordLabel(g.away)}${qbChip(g.away, injuries, depthChart)} @ ${g.home}${recordLabel(g.home)}${qbChip(g.home, injuries, depthChart)}</span>
           ${stateChip}
           ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>

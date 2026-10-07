@@ -17,6 +17,7 @@ const EPA_0_100_COLS = new Set(['score', 'sos', 'rush_off_epa', 'pass_off_epa', 
 const POWER_COLS = [
   ['rank', 'Rank'],
   ['team', 'Team'],
+  ['record', 'Record'],
   ['score', 'Power Score'],
   ['rush_off_epa', 'Rush Offense'],
   ['pass_off_epa', 'Pass Offense'],
@@ -109,7 +110,7 @@ const GROUP_ORDER = ['elite', 'above', 'average', 'below', 'weak'];
 
 function fmtPowerVal(key, v) {
   if (v == null) return '—';
-  if (key === 'team' || key === 'rank') return v;
+  if (key === 'team' || key === 'rank' || key === 'record') return v;
   if (EPA_0_100_COLS.has(key)) return v.toFixed(1); // fixed 0-100 scale
   if (key.startsWith('points')) return v.toFixed(1); // raw per-game average
   return v.toFixed(2); // turnovers: raw per-game average
@@ -130,7 +131,16 @@ const Power = {
     const teamRatings = ctx.teamRatings || {};
     const pr = teamRatings.power_rankings || {};
     const meta = teamRatings.power_ranking_meta || null;
-    const rows = Object.entries(pr).map(([team, info]) => ({ team, rank: info.rank, score: info.score_display, sos: info.sos_display, ...info.ratings_display }));
+    const records = teamRatings.team_records || {};
+    const rows = Object.entries(pr).map(([team, info]) => {
+      const rec = records[team];
+      const played = rec ? rec.wins + rec.losses + rec.ties : 0;
+      return {
+        team, rank: info.rank, score: info.score_display, sos: info.sos_display, ...info.ratings_display,
+        record: rec ? `${rec.wins}-${rec.losses}${rec.ties ? '-' + rec.ties : ''}` : '—',
+        recordPct: played ? (rec.wins + rec.ties * 0.5) / played : null,
+      };
+    });
 
     if (!rows.length) {
       el.innerHTML = `<div class="panel"><h2>Power Rankings</h2><p class="muted">No rating data yet.</p></div>`;
@@ -140,6 +150,7 @@ const Power = {
     const { col, dir } = this._sort;
     rows.sort((a, b) => {
       if (col === 'team') return dir * a.team.localeCompare(b.team);
+      if (col === 'record') return dir * ((a.recordPct ?? -1) - (b.recordPct ?? -1)) || a.team.localeCompare(b.team);
       return dir * ((a[col] ?? 0) - (b[col] ?? 0)) || a.team.localeCompare(b.team);
     });
 

@@ -1304,6 +1304,34 @@ def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict
     }
 
 
+def season_records(played_games: list[dict], season: int) -> dict[str, dict[str, int]]:
+    """Each team's win-loss-tie record for ONE season, straight off final scores -- same
+    normalize_team() mapping `ratings`'s own keys use, so the frontend can look a team up
+    directly without a second translation step. Ties count for neither side (NFL regular-
+    season ties are rare but real, e.g. overtime)."""
+    records: dict[str, dict[str, int]] = {}
+    for g in played_games:
+        if int(g["season"]) != season:
+            continue
+        try:
+            home, away = normalize_team(g["home_team"]), normalize_team(g["away_team"])
+        except UnknownTeamError:
+            continue
+        home_pts, away_pts = float(g["home_score"]), float(g["away_score"])
+        records.setdefault(home, {"wins": 0, "losses": 0, "ties": 0})
+        records.setdefault(away, {"wins": 0, "losses": 0, "ties": 0})
+        if home_pts > away_pts:
+            records[home]["wins"] += 1
+            records[away]["losses"] += 1
+        elif away_pts > home_pts:
+            records[away]["wins"] += 1
+            records[home]["losses"] += 1
+        else:
+            records[home]["ties"] += 1
+            records[away]["ties"] += 1
+    return records
+
+
 # nflverse's games.csv uses the REAL contemporary team code for every season it covers --
 # STL 2007-2015, SD 2007-2016, OAK 2007-2019, then LA/LAC/LV starting the season each
 # franchise actually moved (verified directly against the live file: "STL" never appears
@@ -1786,8 +1814,21 @@ def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: i
     changed = False
     for week in range(1, current_week + 1):
         week_key = str(week)
-        if week_key in season_weeks:
-            continue  # already frozen -- never touched again
+        existing_week = season_weeks.get(week_key)
+        if existing_week is not None:
+            # Ratings/power_rankings/parlay_teams are frozen forever once computed -- but a
+            # field added to this snapshot AFTER a week was already frozen (e.g. team_records)
+            # would otherwise never backfill into it. Self-heals that one field in place
+            # without recomputing (or re-freezing) anything else about an already-frozen week.
+            if "team_records" not in existing_week:
+                records_cutoff = [
+                    r for r in all_rows
+                    if r.get("result") not in ("", "NA", None) and int(r["season"]) == current_season
+                    and int(r["week"]) < week
+                ]
+                existing_week["team_records"] = season_records(records_cutoff, current_season)
+                changed = True
+            continue
 
         this_week_days = [
             r.get("gameday") for r in all_rows
@@ -1821,6 +1862,10 @@ def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: i
                 t: {m: info["ratings_display"].get(m) for m in EPA_DISPLAY_METRICS}
                 for t, info in power.items() if info.get("ratings_display")
             },
+            # each team's record AS OF right before week W's first kickoff -- same cutoff as
+            # everything else in this snapshot, so a browsed past week shows the record that
+            # was actually true then, not today's.
+            "team_records": season_records(played_cutoff, current_season),
         }
         changed = True
 
@@ -1958,6 +2003,7 @@ def refresh(store, force: bool = False) -> str:
                                  points_bias_live, sd_home, sd_away, hist_score_freq)
     matchups = _freeze_score_distributions(store, matchups, date.today().isoformat())
     power = power_rankings(ratings, historical_bounds)
+    team_records = season_records(played, current_season)
     _refresh_parlay_snapshot(store, current_season, current_week, power, all_rows)
     refresh_weekly_power_rankings(store, all_rows, current_season, current_week)
 
@@ -1968,6 +2014,7 @@ def refresh(store, force: bool = False) -> str:
         "teams": ratings,
         "matchups": matchups,
         "power_rankings": power,
+        "team_records": team_records,
         "power_ranking_meta": {
             "method": "L2-regularized (L2=0.3) logistic regression, coefficients constrained "
                       ">= 0, jointly fit across all 8 stats at once against real game outcomes "

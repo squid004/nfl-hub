@@ -82,7 +82,7 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 .game-card-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
 .game-card-head .matchup { font-weight:600; }
 .line-move-chip { margin-left:auto; }
-.rank-badge { color:var(--dim); font-weight:700; font-size:.8em; }
+.team-record { color:var(--dim); font-weight:400; font-size:.85em; }
 .game-card-body {
   /* auto-fit/minmax instead of a fixed column count -- ML cards have 5 stat blocks
      (Market/ELWAY/History/Power Model/Pool edge), ATS cards have 4 (no pool-leverage system
