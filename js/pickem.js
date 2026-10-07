@@ -314,7 +314,10 @@ const Pickem = {
       const hasLine = effSpread != null;
       const favTeam = !hasLine ? null : (effSpread <= 0 ? g.home : g.away);
       const dogTeam = favTeam == null ? null : (favTeam === g.home ? g.away : g.home);
-      const favLabel = !hasLine ? '—' : (effSpread === 0 ? 'Pick’em' : `${favTeam} ${effSpread}`);
+      // Favorite's own line always shown negative (betting convention), regardless of
+      // which side it is -- effSpread itself is HOME-spread-signed (negative = home
+      // favored), so an away favorite needs the sign flipped here.
+      const favLabel = !hasLine ? '—' : (effSpread === 0 ? 'Pick’em' : `${favTeam} ${-Math.abs(effSpread)}`);
       const mine = (picks[g.game_id] || {}).pick;
       const mineIsDog = mine && dogTeam && mine === dogTeam;
 
@@ -531,8 +534,10 @@ const Pickem = {
     const records = (teamRatings && teamRatings.team_records) || {};
     const recordLabel = team => { const r = records[team]; return r ? ` <span class="team-record">(${r.wins}-${r.losses}${r.ties ? '-' + r.ties : ''})</span>` : ''; };
 
+    // Favorite's own line always shown negative (betting convention) -- spreadHome is
+    // HOME-spread-signed, so an away favorite needs the sign flipped here.
     const spreadFavLabel = (spreadHome, home, away) =>
-      spreadHome == null ? null : { team: spreadHome <= 0 ? home : away, label: spreadHome === 0 ? 'Pick’em' : `${spreadHome <= 0 ? home : away} ${spreadHome}` };
+      spreadHome == null ? null : { team: spreadHome <= 0 ? home : away, label: spreadHome === 0 ? 'Pick’em' : `${spreadHome <= 0 ? home : away} ${-Math.abs(spreadHome)}` };
 
     const chartsToWire = [];
 
@@ -549,7 +554,7 @@ const Pickem = {
       const hasLine = effSpread != null;
       const favTeam = !hasLine ? null : (effSpread <= 0 ? g.home : g.away);
       const dogTeam = favTeam == null ? null : (favTeam === g.home ? g.away : g.home);
-      const favLabel = !hasLine ? '—' : (effSpread === 0 ? 'Pick’em' : `${favTeam} ${effSpread}`);
+      const favLabel = !hasLine ? '—' : (effSpread === 0 ? 'Pick’em' : `${favTeam} ${-Math.abs(effSpread)}`);
       const mine = (picks[g.game_id] || {}).pick;
       const mineIsDog = mine && dogTeam && mine === dogTeam;
 
