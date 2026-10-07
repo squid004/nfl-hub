@@ -21,10 +21,10 @@ const App = {
       if (b.dataset.act === 'refresh') App.requestRefresh();
       if (b.dataset.act === 'power-sort') Power.sortBy(b.dataset.col);
       if (b.dataset.act === 'historical-sort') Historical.sortBy(b.dataset.col);
-      if (b.dataset.act === 'historical-toggle-agree') Historical.toggleAgreement();
-      if (b.dataset.act === 'historical-toggle-colorby') Historical.toggleColorBy();
-      if (b.dataset.act === 'historical-reset-filters') Historical.resetAllFilters();
-      if (b.dataset.act === 'historical-clear-cell') Historical.clearCellFilter();
+      if (b.dataset.act === 'model-trends-toggle-agree') ModelTrends.toggleAgreement();
+      if (b.dataset.act === 'model-trends-toggle-colorby') ModelTrends.toggleColorBy();
+      if (b.dataset.act === 'model-trends-reset-filters') ModelTrends.resetAllFilters();
+      if (b.dataset.act === 'model-trends-clear-cell') ModelTrends.clearCellFilter();
     });
     document.getElementById('week-select').addEventListener('change', e => {
       const v = e.target.value;
@@ -106,6 +106,7 @@ const App = {
       Power.render(ctx);
       Parlays.render(ctx);
       Historical.render(ctx);
+      ModelTrends.render(ctx);
       this.renderStatus(ctx);
     } catch (e) {
       document.getElementById('status').textContent = 'Error: ' + e.message;
