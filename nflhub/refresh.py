@@ -344,13 +344,22 @@ def _apply_edge(
             log.warning("edge sheet pull failed: %s", exc)
             summary["edge_sheet"] = f"unavailable ({exc})"
 
-    # national pick % — best-effort scrape, at most once/day PER WEEK, never overwrites a
-    # manual row. Keyed by (date, week) rather than date alone: the week can roll over
-    # mid-day (Tuesday ~3am ET) after that day's scrape already ran for the OLD week, and a
-    # date-only gate would then silently withhold the new week's data for the rest of the
-    # day even though it's already sitting on Yahoo's page ready to fetch.
-    today = datetime.now(timezone.utc).date().isoformat()
-    national_gate = f"{today}:{week}"
+    # national pick % — best-effort scrape, never overwrites a manual row. Normally once/day
+    # per week (picks are largely settled by midweek), but Wed/Thu UTC get refreshed every
+    # EDGE_NATIONAL_FAST_BUCKET_HOURS instead -- that's when the pool's picks are actively
+    # still rolling in, so the national% is moving fastest and most worth re-checking.
+    # Keyed by (date, week[, bucket]) rather than date alone: the week can roll over mid-day
+    # (Tuesday ~3am ET) after that day's scrape already ran for the OLD week, and a date-only
+    # gate would then silently withhold the new week's data for the rest of the day even
+    # though it's already sitting on Yahoo's page ready to fetch.
+    EDGE_NATIONAL_FAST_WEEKDAYS = (2, 3)  # Python weekday(): Mon=0 .. Wed=2, Thu=3
+    EDGE_NATIONAL_FAST_BUCKET_HOURS = 6   # -> 4 scrapes/day on those two days
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    if now.weekday() in EDGE_NATIONAL_FAST_WEEKDAYS:
+        national_gate = f"{today}:{week}:{now.hour // EDGE_NATIONAL_FAST_BUCKET_HOURS}"
+    else:
+        national_gate = f"{today}:{week}"
     if store.kv_get("edge_national_date") != national_gate:
         try:
             rows = edge_national.fetch_week(week, normalize_team)
