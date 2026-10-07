@@ -388,13 +388,13 @@ const Pickem = {
           ${matchup ? weatherChip(matchup.weather) : ''}
           ${lineMoveChip(move)}
         </div>
+        ${hasLine ? `<div class="market-line">${esc(o.book ?? 'Market')}: ${favLabel}</div>` : ''}
         <div class="game-card-body">
           <div class="stat-block">
             <div class="stat-label">Market</div>
             ${postGame
               ? `<div>${scorePart(g.away, g.away_score)} - ${scorePart(g.home, g.home_score)}</div>`
-              : `<div>${favLabel}</div>
-                 <div class="muted">${pct(o.implied_away)} / ${pct(o.implied_home)} &middot; ${o.book ?? '—'}</div>
+              : `<div>${favTeam} ${pct(favTeam === g.home ? o.implied_home : o.implied_away)}</div>
                  ${move ? `<div class="muted small">opened ${signed(move.open)}</div>` : ''}`}
           </div>
           <div class="stat-block">
