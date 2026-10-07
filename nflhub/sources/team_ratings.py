@@ -1780,6 +1780,82 @@ def _refresh_parlay_snapshot(store, season: int, week: int, power: dict[str, dic
     store.kv_set("parlay_ratings_snapshot", json.dumps({"season": season, "week": week, "teams": teams}))
 
 
+def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current_season: int, week: int) -> dict[str, dict]:
+    """The Moneyline/ATS "matchup" block (power model pick, score distribution, etc.) for
+    one week's own games, reconstructed from data as of right before that week's first
+    kickoff -- the SAME pipeline refresh() runs live for upcoming games, just pointed at a
+    week that's already been played instead of one that hasn't. Weather comes back None for
+    any already-past gameday (fetch_forecast_weather's own ~16-day forecast window can't
+    reach into the past), same graceful "no data" this project already shows for a game too
+    far out to forecast -- not a bug, just this mechanism's natural domain.
+
+    One known approximation, inherited from qb_quality_gap_data()/skill_epa_out_by_team_week()
+    rather than introduced here: those two build their trailing-EPA state from the FULL
+    current-season play-by-play fetch regardless of `played_cutoff`, so a backfilled week's
+    QB/skill-health adjustment uses each player's trailing EPA as of TODAY, not strictly as
+    of that week -- a small hindsight leak on an already-minor adjustment term, not a
+    structural error in the ratings/bias/score-distribution pieces (which ARE properly
+    cutoff-bound)."""
+    game_log_cutoff: list[dict] = []
+    raw_ratings, historical_bounds = compute_ratings(played_cutoff, current_season, game_log=game_log_cutoff)
+    ratings: dict[str, dict[str, float]] = {}
+    for raw_team, r in raw_ratings.items():
+        try:
+            ratings[normalize_team(raw_team)] = r
+        except UnknownTeamError:
+            continue
+
+    diff_mu = diff_sd = None
+    if game_log_cutoff:
+        diff_mu = {m: float(np.mean([r["diffs"][m] for r in game_log_cutoff])) for m in RATING_METRICS}
+        diff_sd = {m: float(np.std([r["diffs"][m] for r in game_log_cutoff])) or 1.0 for m in RATING_METRICS}
+
+    week_games_raw = [
+        r for r in all_rows
+        if int(r["season"]) == current_season and str(r.get("week")) == str(week)
+    ]
+    week_games = []
+    for r in week_games_raw:
+        try:
+            week_games.append({"home_team": normalize_team(r["home_team"]), "away_team": normalize_team(r["away_team"]),
+                                "gameday": r.get("gameday"), "week": week, "game_id": r.get("game_id")})
+        except (UnknownTeamError, ValueError, TypeError):
+            continue
+
+    qb_out_asof = _qb_out_doubtful_by_week(current_season)
+    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa = qb_quality_gap_data(played_cutoff, current_season)
+    qb_gap_week: dict[tuple[str, int], float] = {}
+    for (team, season, wk), is_out in qb_out_asof.items():
+        if season != current_season or wk != week or not is_out:
+            continue
+        primary = current_primary.get(team)
+        if primary is None:
+            continue
+        tp = current_trailing_epa.get(primary, league_avg_epa)
+        qb_gap_week[(team, wk)] = tp - league_avg_epa
+    skill_out_by_tw = skill_epa_out_by_team_week(current_season)
+    skill_out_week = {(team, wk): v for (team, season, wk), v in skill_out_by_tw.items() if season == current_season and wk == week}
+    hfa_logit = home_field_logit_by_season(played_cutoff).get(current_season, 0.0)
+
+    points_bias_by_season_map = points_bias_by_season(game_log_cutoff)
+    bias_asof = points_bias_by_season_map.get(current_season, {"home": 0.0, "away": 0.0})
+    points_bias_asof = {
+        "home": bias_asof["home"], "away": bias_asof["away"],
+        "fav_dog": points_fav_dog_bias_current(game_log_cutoff),
+    }
+    sd_home = sd_away = None
+    if game_log_cutoff:
+        home_resids = [r["home_score"] - r["home_pred_points"] for r in game_log_cutoff if r.get("home_pred_points") is not None]
+        away_resids = [r["away_score"] - r["away_pred_points"] for r in game_log_cutoff if r.get("away_pred_points") is not None]
+        sd_home = (float(np.std(home_resids)) or 1.0) if home_resids else None
+        sd_away = (float(np.std(away_resids)) or 1.0) if away_resids else None
+    hist_score_freq = historical_score_frequency(played_cutoff)
+
+    return matchup_callouts(ratings, week_games, historical_bounds, diff_mu, diff_sd,
+                             qb_gap_week, skill_out_week, hfa_logit,
+                             points_bias_asof, sd_home, sd_away, hist_score_freq)
+
+
 def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: int, current_week: int) -> None:
     """Backfills AND maintains a permanent per-week snapshot of the power rankings (kv
     "power_rankings_by_week", {season: {week: {...}}}) for the week dropdown's Power
@@ -1817,16 +1893,25 @@ def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: i
         existing_week = season_weeks.get(week_key)
         if existing_week is not None:
             # Ratings/power_rankings/parlay_teams are frozen forever once computed -- but a
-            # field added to this snapshot AFTER a week was already frozen (e.g. team_records)
-            # would otherwise never backfill into it. Self-heals that one field in place
-            # without recomputing (or re-freezing) anything else about an already-frozen week.
+            # field added to this snapshot AFTER a week was already frozen (e.g. team_records,
+            # matchups) would otherwise never backfill into it. Self-heals those fields in
+            # place without recomputing (or re-freezing) anything else about an already-frozen
+            # week.
+            records_cutoff = [
+                r for r in all_rows
+                if r.get("result") not in ("", "NA", None) and int(r["season"]) == current_season
+                and int(r["week"]) < week
+            ]
             if "team_records" not in existing_week:
-                records_cutoff = [
-                    r for r in all_rows
-                    if r.get("result") not in ("", "NA", None) and int(r["season"]) == current_season
-                    and int(r["week"]) < week
-                ]
                 existing_week["team_records"] = season_records(records_cutoff, current_season)
+                changed = True
+            if "matchups" not in existing_week:
+                played_cutoff = [
+                    r for r in all_rows
+                    if r.get("result") not in ("", "NA", None) and int(r["season"]) >= FIRST_SEASON
+                    and (int(r["season"]) < current_season or int(r["week"]) < week)
+                ]
+                existing_week["matchups"] = _week_matchups_asof(played_cutoff, all_rows, current_season, week)
                 changed = True
             continue
 
@@ -1866,6 +1951,9 @@ def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: i
             # everything else in this snapshot, so a browsed past week shows the record that
             # was actually true then, not today's.
             "team_records": season_records(played_cutoff, current_season),
+            # Moneyline/ATS card data (power model, score distribution) for THIS week's own
+            # games -- see _week_matchups_asof()'s own docstring for the cutoff/caveats.
+            "matchups": _week_matchups_asof(played_cutoff, all_rows, current_season, week),
         }
         changed = True
 

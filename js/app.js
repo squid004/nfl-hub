@@ -81,7 +81,7 @@ const App = {
       if (isPast) {
         const snap = weeklyPowerRankings?.[String(season)]?.[String(viewWeek)];
         teamRatings = snap
-          ? { generated: snap.generated, season, week: viewWeek, teams: snap.teams, matchups: {},
+          ? { generated: snap.generated, season, week: viewWeek, teams: snap.teams, matchups: snap.matchups || {},
               power_rankings: snap.power_rankings, team_records: snap.team_records }
           : null;
         parlaySnapshot = snap ? { season, week: viewWeek, teams: snap.parlay_teams } : null;
