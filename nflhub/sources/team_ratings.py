@@ -380,13 +380,14 @@ def _passer_game_stats(season: int, current_season: int) -> pd.DataFrame:
         path = os.path.join(DATA_DIR, f"passer_game_{season}.parquet")
         if os.path.exists(path):
             return pd.read_parquet(path)
-    cols = ["game_id", "season", "week", "season_type", "posteam", "play_type", "epa", "wp", "passer_player_id"]
+    cols = ["game_id", "season", "week", "season_type", "posteam", "play_type", "epa", "wp",
+            "passer_player_id", "passer_player_name"]
     df = pd.read_csv(PBP_URL.format(season=season), compression="gzip", usecols=cols, low_memory=False)
     df = df[(df["season_type"] == "REG") & (df["play_type"] == "pass")]
     df = df.dropna(subset=["wp", "epa", "posteam", "passer_player_id"])
     df = df[(df["wp"] >= WP_LO) & (df["wp"] <= WP_HI)]
     out = df.groupby(["game_id", "posteam", "passer_player_id"]).agg(
-        attempts=("epa", "size"), epa_sum=("epa", "sum")
+        attempts=("epa", "size"), epa_sum=("epa", "sum"), name=("passer_player_name", "first")
     ).reset_index().rename(columns={"posteam": "team"})
     if season < current_season:
         out.to_parquet(os.path.join(DATA_DIR, f"passer_game_{season}.parquet"))
@@ -408,6 +409,9 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
         passer exists yet for a future game, so that path infers "league-average backup" if
         the live injury report has the primary starter Out/Doubtful, else assumes the
         healthy primary plays -- see refresh()'s own qb_gap_upcoming construction).
+      - `passer_names` {passer_id: display name}: nflverse has no id shared with ESPN's live
+        injury feed, so matching `current_primary`'s id against that feed (refresh()'s own
+        live gate, see _primary_qb_out_live()) has to go through the player's name instead.
     `primary_so_far` is cumulative attempts THIS season so far, falling back to last
     season's leader before this season's first pass -- no lookahead, no full-season
     hindsight."""
@@ -508,8 +512,9 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
         elif team in last_season_leader:
             current_primary[team] = last_season_leader[team]
     current_trailing_epa = {p: ((sum(h) / len(h)) if h else league_avg_epa) for p, h in passer_hist.items()}
+    passer_names: dict[str, str] = dict(zip(passer_df["passer_player_id"], passer_df["name"]))
 
-    return gap_by_team_week, current_primary, current_trailing_epa, league_avg_epa
+    return gap_by_team_week, current_primary, current_trailing_epa, league_avg_epa, passer_names
 
 
 def skill_epa_history(current_season: int) -> tuple[dict[str, list], float]:
@@ -1352,7 +1357,11 @@ def matchup_callouts(
             ratings[home].get(m) is not None and ratings[away].get(m) is not None for m in RATING_METRICS
         ):
             diffs = {m: ORIENTATION[m] * (ratings[home][m] - ratings[away][m]) for m in RATING_METRICS}
-            delta_raw = sum(POWER_WEIGHTS[m] * ((diffs[m] - diff_mu[m]) / diff_sd[m]) for m in RATING_METRICS)
+            # Each of the 8 stats' own standardized, weighted contribution to delta_raw --
+            # same sum as before, just captured per-term instead of only the total, so the
+            # frontend can show "how much of delta came from pass offense EPA" etc.
+            rating_terms = {m: POWER_WEIGHTS[m] * ((diffs[m] - diff_mu[m]) / diff_sd[m]) for m in RATING_METRICS}
+            delta_raw = sum(rating_terms.values())
             home_qb_gap = (qb_gap_upcoming or {}).get((home, week), 0.0)
             away_qb_gap = (qb_gap_upcoming or {}).get((away, week), 0.0)
             home_skill_out = (skill_out_upcoming or {}).get((home, week), 0.0)
@@ -1382,7 +1391,12 @@ def matchup_callouts(
                             "momentum_term": round(MOMENTUM_WEIGHT * streak_diff, 4),
                             "home_qb_gap": round(home_qb_gap, 4), "away_qb_gap": round(away_qb_gap, 4),
                             "home_skill_out": round(home_skill_out, 4), "away_skill_out": round(away_skill_out, 4),
-                            "home_streak": home_streak, "away_streak": away_streak}
+                            "home_streak": home_streak, "away_streak": away_streak,
+                            # All 8 of POWER_WEIGHTS' own stats, individually -- the frontend
+                            # currently only charts the 4 EPA ones (rush/pass off+def), but
+                            # points/turnovers are included too rather than arbitrarily left
+                            # out of an otherwise-complete breakdown.
+                            "rating_terms": {m: round(v, 4) for m, v in rating_terms.items()}}
 
         score_distribution = None
         if (power_model is not None and points_bias is not None and sd_home and sd_away and hist_score_freq
@@ -1725,6 +1739,38 @@ def _qb_out_doubtful_by_week(current_season: int) -> dict[tuple[str, int, int], 
     return out
 
 
+_ESPN_QB_OUT_STATUSES = {"Out", "Doubtful"}
+
+
+def _primary_qb_out_live(team: str, primary_id: str | None, passer_names: dict[str, str],
+                          injuries: dict[str, list[dict]] | None) -> bool:
+    """True when `team`'s current_primary passer (identified by name -- nflverse's
+    passer_player_id has no equivalent on ESPN's side) is listed at QB with status Out or
+    Doubtful on ESPN's live injury feed (nfl_schedule.fetch_injuries(), the same feed the
+    game-card's QB chip reads). Only used for refresh()'s own live/upcoming gate -- see its
+    comment for why this stays a separate source from the nflverse-based historical path.
+
+    Matches on LAST NAME only: nflverse spells passer names "F.Lastname" (e.g.
+    "C.Williams", no space -- verified against a live pull), ESPN spells them
+    "Firstname Lastname" ("Caleb Williams"), so there's no full-name string that's equal
+    on both sides. Same last-name-only approach js/pickem.js's elwayStaleQb() already uses
+    for a different source pairing with the same mismatch."""
+    nflverse_name = passer_names.get(primary_id or "")
+    if not nflverse_name or "." not in nflverse_name:
+        return False
+    target_last = nflverse_name.split(".", 1)[-1].strip().lower()
+    for inj in (injuries or {}).get(team, []):
+        if inj.get("position") != "QB":
+            continue
+        espn_name = _norm_player_name(inj.get("player", ""))
+        espn_last = espn_name.split()[-1] if espn_name else ""
+        if espn_last != target_last:
+            continue
+        if inj.get("status") in _ESPN_QB_OUT_STATUSES:
+            return True
+    return False
+
+
 # Mid-game QB injury: a DIFFERENT signal from _qb_out_doubtful_by_week above (which only
 # ever sees PRE-game report status) -- a starter healthy enough to start, then hurt partway
 # through. Ported from research/edge_signal_test_v34_midgame_qb_injury.py once that
@@ -1988,7 +2034,7 @@ def refresh_historical(store, force: bool = False) -> str:
     game_log: list[dict] = []
     compute_ratings(played, current_season, game_log=game_log)
     qb_out = _qb_out_doubtful_by_week(current_season)
-    qb_gap, _primary, _trailing, _league_avg = qb_quality_gap_data(played, current_season)
+    qb_gap, _primary, _trailing, _league_avg, _names = qb_quality_gap_data(played, current_season)
     skill_out = skill_epa_out_by_team_week(current_season)
     hfa_by_season = home_field_logit_by_season(played)
     midgame_qb_injury = midgame_qb_injury_by_week(current_season)
@@ -2091,7 +2137,7 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
             continue
 
     qb_out_asof = _qb_out_doubtful_by_week(current_season)
-    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa = qb_quality_gap_data(played_cutoff, current_season)
+    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa, _names = qb_quality_gap_data(played_cutoff, current_season)
     qb_gap_week: dict[tuple[str, int], float] = {}
     for (team, season, wk), is_out in qb_out_asof.items():
         if season != current_season or wk != week or not is_out:
@@ -2133,8 +2179,10 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
 # evolves. Current bump (2026-10-07): momentum terms, the non-EPA breakdown fields, and the
 # neutral-site HFA fix + stadium/location fields were all missing from weeks backfilled
 # before those shipped. v3: corrected STADIUM_LOCATIONS spellings for a few international
-# venues (Azteca/Corinthians/Maracana/Melbourne) that were wrong or missing in v2.
-MATCHUPS_SCHEMA_VERSION = 3
+# venues (Azteca/Corinthians/Maracana/Melbourne) that were wrong or missing in v2. v4: added
+# `rating_terms`, each of the 8 POWER_WEIGHTS stats' own individual weighted contribution to
+# delta_raw (previously only the combined delta_raw was exposed).
+MATCHUPS_SCHEMA_VERSION = 4
 
 
 def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: int, current_week: int) -> None:
@@ -2284,13 +2332,19 @@ def _freeze_score_distributions(store, matchups: dict[str, dict], today: str) ->
     return matchups
 
 
-def refresh(store, force: bool = False) -> str:
-    """Rebuild team EPA ratings at most once per day."""
+def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None = None) -> str:
+    """Rebuild team EPA ratings at most once per day. `injuries` (ESPN's live feed, see
+    _primary_qb_out_live()) is normally passed in by refresh.py, which already fetches it
+    for the game-card QB chip earlier in the same run -- re-fetched here only for a
+    standalone/test call that doesn't have it."""
     today = date.today().isoformat()
     if not force and store.kv_get("team_ratings_date") == today:
         return "cached"
 
     from . import nfl_schedule  # local import: avoid a hard dependency for callers that don't need it
+
+    if injuries is None:
+        injuries = nfl_schedule.fetch_injuries()
 
     current_season, current_week = nfl_schedule.current_week()
 
@@ -2337,17 +2391,24 @@ def refresh(store, force: bool = False) -> str:
     # currently Out/Doubtful (no actual passer exists yet for a future game, so "league-
     # average backup" is the best available estimate of who plays; a healthy primary
     # starter gets gap=0, same as compute_backtest_scatter()'s historical rows).
-    qb_out_live = _qb_out_doubtful_by_week(current_season)
-    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa = qb_quality_gap_data(played, current_season)
+    #
+    # The LIVE gate here uses ESPN's injury feed (`injuries`, same one the game-card's QB
+    # chip reads), not nflverse's weekly report that every historical/backtested path below
+    # still uses: nflverse's `report_status` field routinely sits blank until the Friday
+    # pregame report, days after ESPN already has a real answer (confirmed against Caleb
+    # Williams' 2026 wk5 report -- ESPN had him Out Monday, nflverse's report_status was
+    # still blank Wednesday). This is a timeliness swap for THIS week's live prediction
+    # only, not an accuracy claim -- QB_QUALITY_GAP_WEIGHT was fit against, and every
+    # backtested number still comes from, nflverse exclusively (ESPN's feed has no
+    # historical archive to validate against, same reason weather comes from a separate
+    # live source instead of nflverse).
+    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa, passer_names = qb_quality_gap_data(played, current_season)
     qb_gap_upcoming: dict[tuple[str, int], float] = {}
-    for (team, season, week), is_out in qb_out_live.items():
-        if season != current_season or not is_out:
-            continue
-        primary = current_primary.get(team)
-        if primary is None:
+    for team, primary in current_primary.items():
+        if not _primary_qb_out_live(team, primary, passer_names, injuries):
             continue
         tp = current_trailing_epa.get(primary, league_avg_epa)
-        qb_gap_upcoming[(team, week)] = tp - league_avg_epa
+        qb_gap_upcoming[(team, current_week)] = tp - league_avg_epa
     skill_out_by_tw = skill_epa_out_by_team_week(current_season)
     skill_out_upcoming = {(team, week): v for (team, season, week), v in skill_out_by_tw.items() if season == current_season}
     hfa_logit_current = home_field_logit_by_season(played).get(current_season, 0.0)

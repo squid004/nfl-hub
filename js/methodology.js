@@ -9,7 +9,7 @@
 // and rejected or put on hold -- update BOTH this file and docs/model-methodology.md in the
 // same change. This page is the user-facing mirror of that doc, not a one-time snapshot.
 // Bump LAST_UPDATED below whenever either is touched.
-const METHODOLOGY_LAST_UPDATED = '2026-10-07';
+const METHODOLOGY_LAST_UPDATED = '2026-10-08';
 
 const Methodology = {
   _built: false,
@@ -109,6 +109,16 @@ const Methodology = {
           everywhere for comparison. <code>delta_win_prob(delta)</code> converts the
           composite into a calibrated win probability via a curve fit against real
           backtested accuracy at each confidence level.</p>
+        <p class="small"><strong>QB Out/Doubtful detection uses two different sources:</strong>
+          every fit/backtest/historical reconstruction uses nflverse's weekly injury report
+          exclusively (the only source with a historical archive to validate against). The
+          LIVE prediction for the current/upcoming week instead uses ESPN's live injury feed
+          (same one the game-card's QB chip reads), because nflverse's status field routinely
+          sits blank until the Friday pregame report, days after ESPN already has a real
+          answer -- confirmed against a live case (Caleb Williams, CHI 2026 wk5: ESPN said
+          Out Monday, nflverse was still blank Wednesday). Timeliness fix for that one path
+          only, same reasoning as using a separate live source for weather -- nflverse
+          doesn't forecast that either.</p>
         <p class="small"><strong>Neutral-site exception:</strong> the HFA term (and the
           score-distribution pipeline's home/away points bias) is forced to exactly 0 for
           neutral-site games. nflverse's own <code>location</code> field is inconsistent --
@@ -185,6 +195,7 @@ const Methodology = {
       ['2026-10-07', 'Momentum (signed win/loss streak) added', 'Isolated +6 games (63.10%&rarr;63.22%); cumulative 62.88%&rarr;63.22% (+17 games, 829 flips) BEFORE the neutral-site fix below. Calibration z=4.35, p&lt;0.0001', 'good', 'Shipped'],
       ['2026-10-07', 'Trap game tested', 'Sign consistent everywhere tried, but select/confirm split failed to replicate independently (select z=-3.08, confirm z=-1.77)', 'warn', 'Parked, unconfirmed'],
       ['2026-10-07', 'Neutral-site HFA bug fixed', '71 neutral-site games (international series, old Toronto Series) were wrongly getting home-field credit. Cumulative lift from HFA+momentum+QB+skill revised down to +10 games (62.87%&rarr;63.07%) once corrected -- smaller, but honest. 3 already-backfilled weeks self-healed in place', 'good', 'Bug fix'],
+      ['2026-10-08', 'Live QB Out/Doubtful gate switched to ESPN&rsquo;s feed', 'No backtested-effect number -- changes WHEN the existing QB-health term fires this week, not what it&rsquo;s fit against. Found live: Caleb Williams (CHI, wk5) was already Out on ESPN Monday, nflverse&rsquo;s report_status was still blank Wednesday', 'good', 'Shipped (timeliness only)'],
     ];
     const body = rows.map(([date, change, effect, cls, status]) => `
       <tr>

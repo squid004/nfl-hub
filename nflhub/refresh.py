@@ -160,7 +160,10 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
             summary["errors"].append(f"fantasypros: {exc}")
             summary["fantasypros"] = "error"
 
-    # 4. news + injuries, filtered to players you actually roster
+    # 4. news + injuries, filtered to players you actually roster -- `injuries` is also
+    # reused below by team_ratings.refresh()'s live QB-health gate, so it's initialized
+    # here (not just inside the try) in case the fetch itself fails.
+    injuries: dict = {}
     try:
         rostered = _rostered_names(week)
         injuries = nfl_schedule.fetch_injuries()
@@ -208,7 +211,7 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     # once/day; descriptive context for pick decisions -- backtesting in research/ found it
     # does not beat the closing market spread, so it's not used to auto-generate picks)
     try:
-        summary["team_ratings"] = team_ratings.refresh(store)
+        summary["team_ratings"] = team_ratings.refresh(store, injuries=injuries)
     except Exception as exc:  # noqa: BLE001
         log.exception("team_ratings refresh failed")
         summary["errors"].append(f"team_ratings: {exc}")

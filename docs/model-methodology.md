@@ -92,6 +92,18 @@ converts the composite into a calibrated win probability via a curve fit against
 backtested accuracy at each confidence level (QB-injury games excluded from that specific
 fit, so an injury-widened delta doesn't inflate its own calibration).
 
+**QB Out/Doubtful detection uses two different sources depending on purpose.** Every fit,
+backtest, and historical reconstruction uses nflverse's weekly injury report exclusively
+(`_qb_out_doubtful_by_week()`) — the only source with a historical archive to validate
+against. The LIVE prediction for the current/upcoming week instead uses ESPN's live injury
+feed (`_primary_qb_out_live()`, same feed the game-card's QB chip reads), because nflverse's
+`report_status` field routinely sits blank until the Friday pregame report, days after ESPN
+already has a real answer — confirmed against Caleb Williams' 2026 wk5 report (ESPN: Out,
+Monday; nflverse: still blank, Wednesday). This is a **timeliness** swap for that one path
+only, not an accuracy claim — same reasoning as using a separate live source for weather,
+since nflverse doesn't forecast either. Matches on last name only (nflverse spells passer
+names "F.Lastname", e.g. "C.Williams"; ESPN spells them "Firstname Lastname").
+
 **Why QB/skill health don't move hit rate, mechanically**: the term is small relative to
 everything else in `delta` (mean magnitude ≈0.10, 90th percentile ≈0.23) and only nonzero
 for the ~1,200 graded games with a report-listed Out/Doubtful QB. It *can* flip a pick (62
@@ -175,6 +187,7 @@ graded decided game available at the time.
 | 2026-10-07 | Momentum (signed win/loss streak) added (v35) | Isolated: 63.10%→63.22% (+6 games). Cumulative (vs. the pure 8-stat baseline): 62.88%→63.22% (+17 games, BEFORE the neutral-site fix below). Calibration z=4.35, p<0.0001 — survives *on top of* an already-recency-weighted rating | **Shipped** |
 | 2026-10-07 | Trap game tested (v36) | Sign consistent (hypothesis-correct) at every threshold tried, but a proper chronological select/confirm split failed to replicate independently (select z=-3.08, confirm z=-1.77) | Not shipped — parked as "plausible, underpowered" |
 | 2026-10-07 | Neutral-site HFA bug found and fixed | 71 REG-season games since 2007 (international series, old Buffalo Toronto Series) were wrongly getting home-field credit because nflverse's own `location` field mislabels some of them "Home." Cumulative lift from HFA+momentum+QB+skill revised down to 62.87%→63.07% (+10 games) once corrected. 3 already-backfilled weeks (1, 3, 4) self-healed in place via a new schema-version mechanism | **Bug fix** |
+| 2026-10-08 | Live QB Out/Doubtful gate switched to ESPN's feed for the current/upcoming week | No backtested-effect number — this changes WHEN the existing QB-health correction fires this week, not what it's fit against. Found via a live case: Caleb Williams (CHI, 2026 wk5) was already "Out" on ESPN Monday but nflverse's `report_status` was still blank Wednesday, so the live card's QB chip and the model's QB-health term disagreed | **Shipped** — timeliness fix for the live prediction only; every backtest/fit/historical path stays on nflverse exclusively |
 
 **Net effect across the whole timeline**: the model's backtested SU hit rate moved from
 **62.87%** (pure 8-stat composite, no corrections) to **63.07%** (current, with QB/skill
