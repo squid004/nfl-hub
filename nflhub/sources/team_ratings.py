@@ -227,10 +227,42 @@ SKILL_EPA_OUT_WEIGHT = -0.0362
 HFA_SHRINKAGE_K = 100
 HFA_WEIGHT = 0.9169
 
+# Neutral-site games get none of the home-field term above -- confirmed as a real,
+# recurring gap, not a one-off: nflverse's games.csv `location` column correctly flags 72
+# REG-season neutral games since 2007 (growing fast with the international series -- 8
+# already in 2026) and we use that as the primary signal. But `location` alone isn't fully
+# reliable: the 2026 wk5 PHI@JAX game at Tottenham Hotspur Stadium is still tagged "Home" in
+# nflverse's own data even though JAX obviously has no real home-field edge playing in
+# London -- confirmed live, `stadium_id` for that row even still reads "JAX00" (their normal
+# stadium's id), so this is a genuine upstream data quirk, not a misread on our end. Same
+# pattern bit Buffalo's old "Toronto Series" (2008-2013, Rogers Centre) -- also tagged
+# "Home." _NEUTRAL_SITE_STADIUMS is a small, manually-curated fallback for exactly these
+# known mislabeled cases; extend it if the international series adds a new venue nflverse
+# hasn't started flagging correctly yet.
+_NEUTRAL_SITE_STADIUMS = {
+    "Tottenham Hotspur Stadium", "Tottenham Stadium", "Wembley Stadium", "Twickenham Stadium",
+    "Allianz Arena", "FC Bayern Munich Stadium", "Deutsche Bank Park",
+    "Azteca Stadium", "Estadio Banorte", "Arena Corinthians", "Neo Química Arena",
+    "Maracana Stadium", "Melbourne Cricket Ground", "Bernabeu", "Stade de France",
+    "Rogers Centre",
+}
+
+
+def is_neutral_site(row: dict) -> bool:
+    """True if this game gets no home-field edge for either side -- nflverse's own
+    `location` field (anything other than "Home") first, then the manual fallback list
+    above for known cases that field still mislabels (see HFA_WEIGHT's own comment)."""
+    if row.get("location") and row["location"] != "Home":
+        return True
+    return (row.get("stadium") or "") in _NEUTRAL_SITE_STADIUMS
+
 
 def _home_win_rate_by_season(played_games: list[dict]) -> dict[int, tuple[int, int]]:
     """{season: (home_wins, decided_games)} straight off the same `played` games.csv rows
-    refresh()/refresh_historical() already fetch -- no new network call needed for this."""
+    refresh()/refresh_historical() already fetch -- no new network call needed for this.
+    Neutral-site games excluded entirely (see is_neutral_site()) -- a neutral game's result
+    carries no home-field signal one way or the other, and leaving it in would dilute the
+    real trailing home-win rate toward 50% for no good reason."""
     out: dict[int, list[int]] = defaultdict(lambda: [0, 0])
     for g in played_games:
         try:
@@ -238,7 +270,7 @@ def _home_win_rate_by_season(played_games: list[dict]) -> dict[int, tuple[int, i
             home_pts, away_pts = float(g["home_score"]), float(g["away_score"])
         except (ValueError, TypeError):
             continue
-        if home_pts == away_pts:
+        if home_pts == away_pts or is_neutral_site(g):
             continue
         out[season][1] += 1
         if home_pts > away_pts:
@@ -655,10 +687,12 @@ def points_bias_by_season(game_log: list[dict]) -> dict[int, dict[str, float]]:
     """Trailing-5-season home/away points-prediction bias (actual - predicted), shrunk
     toward the all-time-to-date average with HFA_SHRINKAGE_K pseudo-games -- same structure
     as home_field_logit_by_season(), just in raw points instead of logit units. No
-    lookahead: season S's value only uses games from seasons strictly before S."""
+    lookahead: season S's value only uses games from seasons strictly before S. Neutral-site
+    games excluded (see is_neutral_site()) -- same reasoning as _home_win_rate_by_season:
+    there's no real home/away scoring asymmetry to measure in a game with no true home side."""
     by_season: dict[int, dict[str, list[float]]] = defaultdict(lambda: {"home": [], "away": []})
     for r in game_log:
-        if r.get("home_pred_points") is None or r.get("away_pred_points") is None:
+        if r.get("home_pred_points") is None or r.get("away_pred_points") is None or r.get("neutral"):
             continue
         by_season[r["season"]]["home"].append(r["home_score"] - r["home_pred_points"])
         by_season[r["season"]]["away"].append(r["away_score"] - r["away_pred_points"])
@@ -803,6 +837,54 @@ def score_dist_to_whole_percentages(dist: np.ndarray) -> list[dict[str, int]]:
 # anomaly, not current reality, so it's kept. research/weather_scoring_analysis.py has the
 # broader historical coordinate set used for backtesting (includes eras like LA's 2016-2019
 # outdoor Coliseum stint), which is intentionally wider than this live-application set.
+# Display-only "City, ST" / "City, Country" for every stadium that can show up as `stadium`
+# on a live or backfilled game row -- the 32 current teams' own buildings (names taken
+# verbatim from nflverse's own 2026 games.csv, which is also what every card displays, so
+# this table only ever needs to AGREE with that text, never predict it) plus every known
+# neutral/international-series venue from _NEUTRAL_SITE_STADIUMS above. Keyed by stadium
+# NAME, not team -- a neutral-site game's `stadium` is the actual venue, not the home team's
+# regular building, so this lookup works unchanged for both cases; an unmapped name (a new
+# venue, or nflverse renaming one) just shows no location rather than guessing.
+STADIUM_LOCATIONS = {
+    "State Farm Stadium": "Glendale, AZ", "Mercedes-Benz Stadium": "Atlanta, GA",
+    "M&T Bank Stadium": "Baltimore, MD", "Highmark Stadium": "Orchard Park, NY",
+    "Bank of America Stadium": "Charlotte, NC", "Soldier Field": "Chicago, IL",
+    "Paycor Stadium": "Cincinnati, OH", "Huntington Bank Field": "Cleveland, OH",
+    "AT&T Stadium": "Arlington, TX", "Empower Field at Mile High": "Denver, CO",
+    "Ford Field": "Detroit, MI", "Lambeau Field": "Green Bay, WI",
+    "Reliant Stadium": "Houston, TX", "NRG Stadium": "Houston, TX",
+    "Lucas Oil Stadium": "Indianapolis, IN", "EverBank Stadium": "Jacksonville, FL",
+    "GEHA Field at Arrowhead Stadium": "Kansas City, MO", "SoFi Stadium": "Inglewood, CA",
+    "Allegiant Stadium": "Las Vegas, NV", "Hard Rock Stadium": "Miami Gardens, FL",
+    "U.S. Bank Stadium": "Minneapolis, MN", "Gillette Stadium": "Foxborough, MA",
+    "Caesars Superdome": "New Orleans, LA", "MetLife Stadium": "East Rutherford, NJ",
+    "Lincoln Financial Field": "Philadelphia, PA", "Acrisure Stadium": "Pittsburgh, PA",
+    "Lumen Field": "Seattle, WA", "Levi's Stadium": "Santa Clara, CA",
+    "Raymond James Stadium": "Tampa, FL", "Nissan Stadium": "Nashville, TN",
+    "Northwest Stadium": "Landover, MD",
+    # retired/former names for current teams' own buildings -- still show up verbatim on
+    # older rows (e.g. a relocated-game host or a backfilled past week), confirmed live
+    # against games.csv rather than guessed.
+    "TIAA Bank Stadium": "Jacksonville, FL", "Alltel Stadium": "Jacksonville, FL",
+    "FirstEnergy Stadium": "Cleveland, OH", "Qualcomm Stadium": "San Diego, CA",
+    "Cowboys Stadium": "Arlington, TX", "Dolphin Stadium": "Miami Gardens, FL",
+    "Mercedes-Benz Superdome": "New Orleans, LA", "Louisiana Superdome": "New Orleans, LA",
+    "University of Phoenix Stadium": "Glendale, AZ",
+    # neutral/international-series venues (see _NEUTRAL_SITE_STADIUMS) -- names verified
+    # live against games.csv's own actual text, not guessed (nflverse uses more than one
+    # spelling for some of these across seasons).
+    "Tottenham Hotspur Stadium": "London, England", "Tottenham Stadium": "London, England",
+    "Wembley Stadium": "London, England", "Twickenham Stadium": "London, England",
+    "Allianz Arena": "Munich, Germany", "FC Bayern Munich Stadium": "Munich, Germany",
+    "Deutsche Bank Park": "Frankfurt, Germany",
+    "Azteca Stadium": "Mexico City, Mexico", "Estadio Banorte": "Monterrey, Mexico",
+    "Arena Corinthians": "São Paulo, Brazil", "Neo Química Arena": "São Paulo, Brazil",
+    "Maracana Stadium": "Rio de Janeiro, Brazil",
+    "Melbourne Cricket Ground": "Melbourne, Australia",
+    "Bernabeu": "Madrid, Spain", "Stade de France": "Paris, France",
+    "Rogers Centre": "Toronto, ON, Canada",
+}
+
 STADIUM_COORDS = {
     "BAL": (39.2780, -76.6227), "BUF": (42.7738, -78.7870), "CAR": (35.2258, -80.8528),
     "CHI": (41.8623, -87.6167), "CIN": (39.0954, -84.5160), "CLE": (41.5061, -81.6995),
@@ -1064,7 +1146,7 @@ def compute_ratings(
                     "game_id": gid, "season": season, "week": int(g.get("week") or 0),
                     "gameday": g.get("gameday", ""), "home": home, "away": away,
                     "home_score": int(home_pts), "away_score": int(away_pts),
-                    "spread_line": spread_line,
+                    "spread_line": spread_line, "neutral": is_neutral_site(g),
                     "diffs": {m: ORIENTATION[m] * (rating[home][m] - rating[away][m]) for m in RATING_METRICS},
                     # same pregame rating[home]/rating[away] snapshot the diffs above use --
                     # reuses predict_points() directly instead of a second, parallel rating
@@ -1280,8 +1362,11 @@ def matchup_callouts(
             qb_diff = home_qb_gap - away_qb_gap
             skill_diff = home_skill_out - away_skill_out
             streak_diff = home_streak - away_streak
+            # Neutral-site games (international series, etc. -- see is_neutral_site()) get
+            # NO home-field term at all -- there's no real "home" side to credit.
+            effective_hfa_logit = 0.0 if g.get("neutral") else hfa_logit
             delta = (delta_raw + QB_QUALITY_GAP_WEIGHT * qb_diff + SKILL_EPA_OUT_WEIGHT * skill_diff
-                     + HFA_WEIGHT * hfa_logit + MOMENTUM_WEIGHT * streak_diff)
+                     + HFA_WEIGHT * effective_hfa_logit + MOMENTUM_WEIGHT * streak_diff)
             fav = home if delta > 0 else away if delta < 0 else None
             # Every non-EPA term `delta` actually applied to THIS matchup -- surfaced so the
             # frontend can call each one out explicitly instead of a prose narrative (removed
@@ -1290,7 +1375,8 @@ def matchup_callouts(
             # sentence (e.g. "PHI on a 3-game win streak") without re-deriving anything.
             power_model = {"favorite": fav, "prob": round(delta_win_prob(delta), 4),
                             "delta": round(delta, 4), "delta_raw": round(delta_raw, 4),
-                            "hfa_term": round(HFA_WEIGHT * hfa_logit, 4),
+                            "neutral_site": bool(g.get("neutral")),
+                            "hfa_term": round(HFA_WEIGHT * effective_hfa_logit, 4),
                             "qb_term": round(QB_QUALITY_GAP_WEIGHT * qb_diff, 4),
                             "skill_term": round(SKILL_EPA_OUT_WEIGHT * skill_diff, 4),
                             "momentum_term": round(MOMENTUM_WEIGHT * streak_diff, 4),
@@ -1301,7 +1387,10 @@ def matchup_callouts(
         score_distribution = None
         if (power_model is not None and points_bias is not None and sd_home and sd_away and hist_score_freq
                 and base_home is not None and base_away is not None):
-            hb, ab = points_bias.get("home", 0.0), points_bias.get("away", 0.0)
+            # Same neutral-site exception as the HFA term above -- no real home/away
+            # scoring asymmetry to correct for when neither side is actually at home.
+            hb = 0.0 if g.get("neutral") else points_bias.get("home", 0.0)
+            ab = 0.0 if g.get("neutral") else points_bias.get("away", 0.0)
             fb = points_bias.get("fav_dog", 0.0)
             mean_home = base_home + hb + (fb if base_home > base_away else -fb)
             mean_away = base_away + ab + (fb if base_away > base_home else -fb)
@@ -1319,6 +1408,8 @@ def matchup_callouts(
 
         out[f"{away}@{home}"] = {
             "home": home, "away": away, "game_id": g.get("game_id"), "gameday": gameday,
+            "stadium": g.get("stadium"), "stadium_location": STADIUM_LOCATIONS.get(g.get("stadium"), ""),
+            "neutral_site": bool(g.get("neutral")),
             "home_ratings": ratings[home], "away_ratings": ratings[away],
             "home_ratings_display": ratings_display.get(home), "away_ratings_display": ratings_display.get(away),
             "callouts": callouts,
@@ -1763,7 +1854,7 @@ def compute_backtest_scatter(
         delta_raw = sum(POWER_WEIGHTS[m] * ((r["diffs"][m] - mu[m]) / sd[m]) for m in RATING_METRICS)
         qb_gap_diff = qb_gap.get((r["home"], r["season"], r["week"]), 0.0) - qb_gap.get((r["away"], r["season"], r["week"]), 0.0)
         skill_diff = skill_out.get((r["home"], r["season"], r["week"]), 0.0) - skill_out.get((r["away"], r["season"], r["week"]), 0.0)
-        hfa = HFA_WEIGHT * hfa_by_season.get(r["season"], 0.0)
+        hfa = 0.0 if r.get("neutral") else HFA_WEIGHT * hfa_by_season.get(r["season"], 0.0)
         streak_diff = streak.get((r["home"], r["season"], r["week"]), 0) - streak.get((r["away"], r["season"], r["week"]), 0)
         delta = (delta_raw + QB_QUALITY_GAP_WEIGHT * qb_gap_diff + SKILL_EPA_OUT_WEIGHT * skill_diff
                  + hfa + MOMENTUM_WEIGHT * streak_diff)
@@ -1785,6 +1876,7 @@ def compute_backtest_scatter(
             "away_qb_injured_ingame": midgame_qb_injury.get((r["away"], r["season"], r["week"]), False),
             "home_streak": streak.get((r["home"], r["season"], r["week"]), 0),
             "away_streak": streak.get((r["away"], r["season"], r["week"]), 0),
+            "neutral": bool(r.get("neutral")),
         })
     return out
 
@@ -1993,7 +2085,8 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
     for r in week_games_raw:
         try:
             week_games.append({"home_team": normalize_team(r["home_team"]), "away_team": normalize_team(r["away_team"]),
-                                "gameday": r.get("gameday"), "week": week, "game_id": r.get("game_id")})
+                                "gameday": r.get("gameday"), "week": week, "game_id": r.get("game_id"),
+                                "neutral": is_neutral_site(r), "stadium": r.get("stadium")})
         except (UnknownTeamError, ValueError, TypeError):
             continue
 
@@ -2029,6 +2122,19 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
     return matchup_callouts(ratings, week_games, historical_bounds, diff_mu, diff_sd,
                              qb_gap_week, skill_out_week, hfa_logit,
                              points_bias_asof, sd_home, sd_away, hist_score_freq)
+
+
+# Bump whenever matchup_callouts()'s/power_model's own output schema meaningfully changes
+# (a new field, a corrected calculation) -- refresh_weekly_power_rankings' self-heal below
+# recomputes a frozen week's `matchups` whenever its stored schema version is behind this
+# one, so a fix like this one doesn't silently stay broken in weeks already backfilled
+# before it shipped. Ratings/power_rankings/team_records are NOT versioned this way -- they
+# don't change retroactively, only `matchups`' shape (and the live model logic feeding it)
+# evolves. Current bump (2026-10-07): momentum terms, the non-EPA breakdown fields, and the
+# neutral-site HFA fix + stadium/location fields were all missing from weeks backfilled
+# before those shipped. v3: corrected STADIUM_LOCATIONS spellings for a few international
+# venues (Azteca/Corinthians/Maracana/Melbourne) that were wrong or missing in v2.
+MATCHUPS_SCHEMA_VERSION = 3
 
 
 def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: int, current_week: int) -> None:
@@ -2080,13 +2186,14 @@ def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: i
             if "team_records" not in existing_week:
                 existing_week["team_records"] = season_records(records_cutoff, current_season)
                 changed = True
-            if "matchups" not in existing_week:
+            if existing_week.get("matchups_schema") != MATCHUPS_SCHEMA_VERSION:
                 played_cutoff = [
                     r for r in all_rows
                     if r.get("result") not in ("", "NA", None) and int(r["season"]) >= FIRST_SEASON
                     and (int(r["season"]) < current_season or int(r["week"]) < week)
                 ]
                 existing_week["matchups"] = _week_matchups_asof(played_cutoff, all_rows, current_season, week)
+                existing_week["matchups_schema"] = MATCHUPS_SCHEMA_VERSION
                 changed = True
             continue
 
@@ -2129,6 +2236,7 @@ def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: i
             # Moneyline/ATS card data (power model, score distribution) for THIS week's own
             # games -- see _week_matchups_asof()'s own docstring for the cutoff/caveats.
             "matchups": _week_matchups_asof(played_cutoff, all_rows, current_season, week),
+            "matchups_schema": MATCHUPS_SCHEMA_VERSION,
         }
         changed = True
 
@@ -2219,7 +2327,8 @@ def refresh(store, force: bool = False) -> str:
     for r in upcoming_raw:
         try:
             upcoming.append({"home_team": normalize_team(r["home_team"]), "away_team": normalize_team(r["away_team"]),
-                              "gameday": r.get("gameday"), "week": int(r.get("week") or 0), "game_id": r.get("game_id")})
+                              "gameday": r.get("gameday"), "week": int(r.get("week") or 0), "game_id": r.get("game_id"),
+                              "neutral": is_neutral_site(r), "stadium": r.get("stadium")})
         except (UnknownTeamError, ValueError, TypeError):
             continue
 

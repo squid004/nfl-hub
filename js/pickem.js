@@ -186,6 +186,19 @@ function weatherChip(wx) {
   return ` <span class="chip bad" title="${esc(forecastSummary(wx))}">Bad Weather</span>`;
 }
 
+// Stadium + "City, ST"/"City, Country" line for the card header, plus a Neutral Site chip
+// when nflverse's own location flag (or our manual fallback for games it still mislabels,
+// e.g. JAX's London "home" games) says neither side gets a home-field edge -- see
+// is_neutral_site()/STADIUM_LOCATIONS in team_ratings.py for how this is derived.
+function stadiumLineHtml(matchup) {
+  if (!matchup || !matchup.stadium) return '';
+  const loc = matchup.stadium_location ? `, ${matchup.stadium_location}` : '';
+  const neutralChip = matchup.neutral_site
+    ? ` <span class="chip warn" title="Neither team gets a home-field edge here -- no HFA term applied to the Power Model pick for this game.">Neutral Site</span>`
+    : '';
+  return `<div class="stadium-line muted small">${esc(matchup.stadium)}${esc(loc)}${neutralChip}</div>`;
+}
+
 // Full forecast for the card's details layer -- everything fetch_forecast_weather() returns,
 // not just the 3 fields the points-prediction adjustment actually uses.
 function forecastSummary(wx) {
@@ -396,6 +409,7 @@ const Pickem = {
           ${matchup ? weatherChip(matchup.weather) : ''}
           ${lineMoveChip(move)}
         </div>
+        ${stadiumLineHtml(matchup)}
         ${hasLine ? `<div class="market-line">${esc(o.book ?? 'Market')}: ${favLabel}</div>` : ''}
         <div class="game-card-body">
           <div class="stat-block">
@@ -620,6 +634,7 @@ const Pickem = {
           ${matchup ? weatherChip(matchup.weather) : ''}
           ${lineMoveChip(move)}
         </div>
+        ${stadiumLineHtml(matchup)}
         <div class="game-card-body">
           <div class="stat-block">
             <div class="stat-label">Market</div>
