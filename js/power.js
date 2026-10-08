@@ -108,6 +108,41 @@ const GROUP_META = {
 };
 const GROUP_ORDER = ['elite', 'above', 'average', 'below', 'weak'];
 
+// Per-metric tier boundary (the group's own min value) for the radar popup's bullseye
+// bands -- same classifyTeams() groups already driving the table's cell colors and the
+// distribution panel, just read back as 4 threshold numbers per metric instead of team
+// lists. An empty tier (e.g. nobody is "weak" in some metric this week) collapses to the
+// next real boundary down rather than leaving a gap.
+function tierCutoffs(classifications, key) {
+  const c = classifications[key];
+  if (!c) return null;
+  const minOf = teams => (teams.length ? Math.min(...teams.map(t => t.value)) : null);
+  let elite = minOf(c.elite), above = minOf(c.above), average = minOf(c.average), below = minOf(c.below);
+  if (elite == null) elite = above ?? average ?? below ?? 100;
+  if (above == null) above = average ?? below ?? elite;
+  if (average == null) average = below ?? above;
+  if (below == null) below = average;
+  return { below, average, above, elite };
+}
+
+// Remaps a raw 0-100 EPA value into "how far through its own tier," on a SHARED 0-100
+// scale across every axis -- Weak maps to 0-20, Below to 20-40, Average to 40-60, Above to
+// 60-80, Elite to 80-100. That's what turns the radar's tier boundaries into true
+// concentric circles instead of a lopsided 4-point polygon, since every axis's own
+// boundary then sits at the same radius regardless of that metric's real cutoffs.
+function normalizeToTier(value, cutoffs) {
+  if (value == null || !cutoffs) return null;
+  const { below, average, above, elite } = cutoffs;
+  const bands = [[0, below, 0, 20], [below, average, 20, 40], [average, above, 40, 60], [above, elite, 60, 80], [elite, 100, 80, 100]];
+  for (const [lo, hi, nlo, nhi] of bands) {
+    if (value <= hi) {
+      const t = hi > lo ? (value - lo) / (hi - lo) : 0;
+      return Math.max(0, Math.min(100, nlo + t * (nhi - nlo)));
+    }
+  }
+  return 100;
+}
+
 function fmtPowerVal(key, v) {
   if (v == null) return '—';
   if (key === 'team' || key === 'rank' || key === 'record') return v;
@@ -203,6 +238,12 @@ const Power = {
       </div>
       ${this._distributionPanel(rows, classifications)}`;
 
+    // Read by the radar popup's hover/click handlers below, which are wired ONCE (see
+    // _hoverWired) but need whatever the CURRENT render's data is, not a stale closure from
+    // whenever they were first attached -- every reload replaces these.
+    this._lastRows = rows;
+    this._lastClassifications = classifications;
+
     // Delegated, wired once -- #power itself survives every re-render (only its innerHTML's
     // children get replaced), so this never needs rewiring on sort/reload.
     if (!this._hoverWired) {
@@ -211,14 +252,141 @@ const Power = {
       };
       el.addEventListener('mouseover', e => {
         const tr = e.target.closest('tr[data-team]');
-        if (tr) highlight(tr.dataset.team, true);
+        if (!tr) return;
+        highlight(tr.dataset.team, true);
+        if (!this._pinnedTeam) this._showRadar(tr.dataset.team, tr);
       });
       el.addEventListener('mouseout', e => {
         const tr = e.target.closest('tr[data-team]');
-        if (tr) highlight(tr.dataset.team, false);
+        if (!tr) return;
+        highlight(tr.dataset.team, false);
+        if (!this._pinnedTeam) this._hideRadar();
+      });
+      el.addEventListener('click', e => {
+        const tr = e.target.closest('tr[data-team]');
+        if (!tr) return;
+        if (this._pinnedTeam === tr.dataset.team) {
+          this._pinnedTeam = null;
+          this._hideRadar();
+        } else {
+          this._pinnedTeam = tr.dataset.team;
+          this._showRadar(tr.dataset.team, tr);
+        }
+      });
+      // Click anywhere outside the table/popup unpins -- otherwise a pinned popup can only
+      // ever be dismissed by re-clicking the exact same row.
+      document.addEventListener('click', e => {
+        if (!this._pinnedTeam) return;
+        if (e.target.closest('#power') || e.target.closest('.power-radar-popup')) return;
+        this._pinnedTeam = null;
+        this._hideRadar();
       });
       this._hoverWired = true;
     }
+  },
+
+  // Built once, appended to <body> (not inside #power's own innerHTML, which gets fully
+  // replaced every render/reload -- a child element there would lose its Plotly chart and
+  // any open/pinned state every ~90s).
+  _ensureRadarPopup() {
+    if (this._radarPopup) return this._radarPopup;
+    const popup = document.createElement('div');
+    popup.className = 'power-radar-popup';
+    popup.hidden = true;
+    popup.innerHTML = `<div class="power-radar-cap"></div><div class="power-radar-chart"></div>
+      <div class="power-radar-pin-hint">Click a row to pin this open</div>`;
+    document.body.appendChild(popup);
+    this._radarPopup = popup;
+    return popup;
+  },
+
+  _hideRadar() {
+    if (this._radarPopup) this._radarPopup.hidden = true;
+  },
+
+  // Positions near the hovered/clicked row, clamped to stay fully on-screen either way.
+  _showRadar(team, anchorEl) {
+    const rows = this._lastRows, classifications = this._lastClassifications;
+    if (!rows || !classifications) return;
+    const row = rows.find(r => r.team === team);
+    if (!row) return;
+
+    const popup = this._ensureRadarPopup();
+    popup.querySelector('.power-radar-cap').textContent = `${team} — EPA profile`;
+    popup.querySelector('.power-radar-pin-hint').textContent = this._pinnedTeam === team ? 'Click the row again to unpin' : 'Click a row to pin this open';
+    popup.hidden = false;
+
+    const rect = anchorEl.getBoundingClientRect();
+    const width = 260, height = popup.offsetHeight || 300;
+    let left = rect.right + 10;
+    if (left + width > window.innerWidth - 8) left = rect.left - width - 10;
+    if (left < 8) left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left));
+    let top = rect.top;
+    if (top + height > window.innerHeight - 8) top = Math.max(8, window.innerHeight - height - 8);
+    popup.style.left = `${left}px`;
+    popup.style.top = `${top}px`;
+
+    this._drawRadar(popup.querySelector('.power-radar-chart'), team, row, classifications);
+  },
+
+  // True-circle bullseye (see tierCutoffs()/normalizeToTier() above): the angular axis is
+  // numeric (0-360deg) with the 4 stat names as custom tick labels at 0/90/180/270, instead
+  // of a 4-slot category axis -- that's what lets a tier boundary render as a smooth ring
+  // instead of a 4-point diamond, now that every axis's own cutoff sits at the same radius.
+  _drawRadar(el, team, row, classifications) {
+    const cs = getComputedStyle(document.documentElement);
+    const cssVar = name => cs.getPropertyValue(name).trim();
+    const colors = {
+      text: cssVar('--text'), dim: cssVar('--dim'), accent: cssVar('--accent'),
+      weak: cssVar('--bad'), below: cssVar('--warn'), average: cssVar('--dim'),
+      above: '#8fd9b6', elite: cssVar('--good'),
+    };
+    const hexA = (hex, opacity) => {
+      const h = hex.replace('#', '');
+      if (h.length !== 6) return hex; // not a plain hex var (e.g. a color-mix()) -- skip alpha
+      return `#${h}${Math.round(opacity * 255).toString(16).padStart(2, '0')}`;
+    };
+    const steps = 72;
+    const circleTheta = Array.from({ length: steps + 1 }, (_, i) => (360 * i) / steps);
+    const ringR = v => circleTheta.map(() => v);
+    const band = (r, color) => ({
+      type: 'scatterpolar', r, theta: circleTheta, fill: 'tonext',
+      fillcolor: hexA(color, 0.2), line: { color: 'rgba(255,255,255,.2)', width: 1 },
+      hoverinfo: 'skip', showlegend: false,
+    });
+    const bandTraces = DIST_METRICS.every(([k]) => classifications[k]) ? [
+      { type: 'scatterpolar', r: ringR(0), theta: circleTheta, line: { color: 'rgba(0,0,0,0)', width: 0 }, hoverinfo: 'skip', showlegend: false },
+      band(ringR(20), colors.weak), band(ringR(40), colors.below),
+      band(ringR(60), colors.average), band(ringR(80), colors.above), band(ringR(100), colors.elite),
+    ] : [];
+
+    const axisAngles = [0, 90, 180, 270];
+    const raw = DIST_METRICS.map(([k]) => row[k]);
+    const norm = DIST_METRICS.map(([k], i) => normalizeToTier(raw[i], tierCutoffs(classifications, k)) ?? 0);
+    const teamTrace = {
+      type: 'scatterpolar',
+      r: [...norm, norm[0]], theta: [...axisAngles, axisAngles[0]],
+      text: [...raw.map(v => (v == null ? '—' : v.toFixed(0))), raw[0] == null ? '—' : raw[0].toFixed(0)],
+      line: { color: colors.accent, width: 2.5 },
+      fill: 'toself', fillcolor: hexA(colors.accent, 0.35),
+      marker: { color: colors.accent, size: 6 },
+      textposition: 'top center', textfont: { color: colors.text, size: 10 },
+      mode: 'lines+markers+text', hovertemplate: '%{text}/100<extra></extra>', showlegend: false,
+    };
+
+    Plotly.react(el, [...bandTraces, teamTrace], {
+      polar: {
+        bgcolor: 'transparent',
+        radialaxis: { range: [0, 100], showticklabels: false, gridcolor: 'rgba(255,255,255,.12)', linecolor: 'rgba(255,255,255,.12)' },
+        angularaxis: {
+          color: colors.text, gridcolor: 'rgba(255,255,255,.12)',
+          tickmode: 'array', tickvals: axisAngles, ticktext: DIST_METRICS.map(([, label]) => label),
+          rotation: 90, direction: 'clockwise',
+        },
+      },
+      paper_bgcolor: 'transparent', font: { color: colors.text, size: 10 },
+      margin: { t: 24, b: 8, l: 24, r: 24 }, showlegend: false,
+    }, { displayModeBar: false, responsive: true, staticPlot: true });
   },
 
   // One number-line strip per EPA stat, every team positioned at its actual 0-100 value (not

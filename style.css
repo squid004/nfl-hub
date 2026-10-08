@@ -174,7 +174,16 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
   width:14px; height:14px; margin:-7px 0 0 -7px; z-index:2;
   box-shadow:0 0 0 3px var(--accent);
 }
-#power tbody tr[data-team]:hover { background:var(--panel2); cursor:default; }
+#power tbody tr[data-team]:hover { background:var(--panel2); cursor:pointer; }
+.power-radar-popup {
+  position:fixed; z-index:50; background:var(--panel); border:1px solid var(--line);
+  border-radius:10px; padding:10px 12px; box-shadow:0 10px 30px rgba(0,0,0,.45);
+  width:260px;
+}
+.power-radar-popup[hidden] { display:none; }
+.power-radar-cap { text-align:center; font-size:12px; font-weight:700; margin-bottom:2px; }
+.power-radar-chart { width:100%; height:230px; }
+.power-radar-pin-hint { text-align:center; font-size:10px; color:var(--dim); margin-top:2px; }
 .dist-summary { margin-top:4px; }
 .dist-tiers { margin:4px 0 0; padding-left:18px; font-size:.82rem; color:var(--dim); }
 .dist-tiers li { margin-bottom:3px; }
