@@ -266,38 +266,60 @@ function forecastHtml(matchup, home, away) {
   return (forecast + proj) || '<div class="muted small">No forecast data yet.</div>';
 }
 
-// Every non-EPA term delta actually applied to this matchup, called out explicitly instead
-// of folding them into prose -- each row traces directly to a field team_ratings.py now
-// puts on power_model (see matchup_callouts()'s own comment for why). A term sitting at
-// exactly 0 still gets a row ("no QB out this week") so absence reads as confirmed-checked,
-// not silently skipped.
+// Every term that moved delta this matchup -- the 8-stat composite rating (power_model.
+// rating_terms, minus turnovers_def_forced, which has never once had a nonzero weighted
+// contribution in any matchup frozen this season -- dead weight) plus the 4 additive
+// corrections. Oriented to whichever team is the actual FAVORITE, not home/away: +/green
+// always means "helped the favorite win," -/red always means "worked against them" -- so
+// e.g. home-field advantage shows red whenever the AWAY team is favored, since that edge is
+// then working against the favorite. The caption states whose perspective the table is in
+// once, instead of repeating "(favors X)" on every row.
 function powerModelBreakdownHtml(matchup, home, away) {
   const pm = matchup && matchup.power_model;
   if (!pm) return '<div class="muted small">No power model data yet.</div>';
+  const hr = matchup.home_ratings_display || {};
+  const ar = matchup.away_ratings_display || {};
+  const rt = pm.rating_terms || {};
 
-  const row = (label, term, detail) => {
+  // No favorite only on an exact-0 delta (true pick'em) -- falls back to the home
+  // perspective, an arbitrary but consistent choice since there's no favorite to orient to.
+  const flip = (pm.favorite ? pm.favorite === home : true) ? 1 : -1;
+  const row = (label, rawTerm, detail) => {
+    const term = (rawTerm || 0) * flip;
     const cls = term > 0 ? 'result-good' : term < 0 ? 'result-bad' : 'muted';
-    const sideNote = term !== 0 ? ` (favors ${term > 0 ? home : away})` : '';
-    return `<tr><td>${label}</td><td class="num ${cls}">${term >= 0 ? '+' : ''}${term.toFixed(4)}${sideNote}</td><td class="muted small">${detail}</td></tr>`;
+    return `<tr><td>${label}</td><td class="num ${cls}">${term >= 0 ? '+' : ''}${term.toFixed(4)}</td><td class="muted small">${detail}</td></tr>`;
   };
+  const vs = (key, digits) => `${home} ${(hr[key] ?? 0).toFixed(digits)} vs ${away} ${(ar[key] ?? 0).toFixed(digits)}`;
 
   const hfaDetail = pm.hfa_term !== 0 ? `${home} gets the standard home-field edge` : 'no home-field term';
   const qbDetail = pm.home_qb_gap || pm.away_qb_gap
     ? `${pm.home_qb_gap ? home : away} starting a backup (trailing EPA/dropback gap ${(pm.home_qb_gap || pm.away_qb_gap).toFixed(3)})`
-    : 'no Out/Doubtful starting QB either side';
+    : 'Not applied';
   const skillDetail = pm.home_skill_out || pm.away_skill_out
     ? `${pm.home_skill_out ? home : away} missing skill-position EPA (${(pm.home_skill_out || pm.away_skill_out).toFixed(3)} summed)`
-    : 'no Out/Doubtful RB/WR/TE/FB either side';
+    : 'Not applied';
   const streakDetail = pm.home_streak || pm.away_streak
     ? `${home} ${pm.home_streak >= 0 ? pm.home_streak + 'W' : Math.abs(pm.home_streak) + 'L'} streak, ${away} ${pm.away_streak >= 0 ? pm.away_streak + 'W' : Math.abs(pm.away_streak) + 'L'} streak`
-    : 'neither team on a streak entering this week';
+    : 'Not applied';
+
+  const caption = pm.favorite
+    ? `${pm.favorite} <span class="result-good">+${Math.abs(pm.delta).toFixed(2)}</span>`
+    : `Pick&rsquo;em <span class="muted">${pm.delta.toFixed(2)}</span>`;
 
   return `<table class="power-breakdown small">
-    <thead><tr><th>Non-EPA factor</th><th class="num">Delta contribution</th><th>Why</th></tr></thead>
+    <caption>${caption}</caption>
+    <thead><tr><th>Term</th><th class="num">Delta contribution</th><th>Why</th></tr></thead>
     <tbody>
+      ${row('Rush Offense', rt.rush_off_epa, vs('rush_off_epa', 0))}
+      ${row('Pass Offense', rt.pass_off_epa, vs('pass_off_epa', 0))}
+      ${row('Rush Defense', rt.rush_def_epa_allowed, vs('rush_def_epa_allowed', 0))}
+      ${row('Pass Defense', rt.pass_def_epa_allowed, vs('pass_def_epa_allowed', 0))}
+      ${row('Points/G', rt.points_off, vs('points_off', 1))}
+      ${row('Points Allowed/G', rt.points_def_allowed, vs('points_def_allowed', 1))}
+      ${row('Turnovers/G', rt.turnovers_off, vs('turnovers_off', 2))}
       ${row('Home-field advantage', pm.hfa_term, hfaDetail)}
       ${row('QB health', pm.qb_term, qbDetail)}
-      ${row('Skill-position health', pm.skill_term, skillDetail)}
+      ${row('Flex Health', pm.skill_term, skillDetail)}
       ${row('Momentum', pm.momentum_term, streakDetail)}
     </tbody>
   </table>`;
@@ -450,7 +472,7 @@ const Pickem = {
             ${epaMatchupVizHtml(matchup, g.home, g.away)}
           </div>
           <div class="game-card-matchup">
-            <div class="stat-label" title="Everything the Power Model adds on top of the pure 8-stat EPA composite for this specific matchup -- see the Methodology tab for the full fit/weight for each.">Non-EPA factors applied</div>
+            <div class="stat-label" title="Every term that moved delta for this matchup -- the 8-stat composite rating plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
             ${powerModelBreakdownHtml(matchup, g.home, g.away)}
           </div>
         </details>
