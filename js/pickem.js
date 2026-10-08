@@ -170,7 +170,7 @@ function matchupFor(teamRatings, home, away) {
 // team's offense directly against the OTHER team's defense in the same cell, since that's
 // the actual matchup -- a table of each team's own 4 stats side by side (the old layout)
 // made you jump between rows/columns to compare the two numbers that actually face off.
-const PHASES = [['rush', 'Rush'], ['pass', 'Pass']];
+const PHASES = [['pass', 'Pass'], ['rush', 'Rush']];
 
 // Header chip only fires for weather bad enough to matter -- the projected score already
 // carries the weather adjustment (and says so) regardless, this is just the at-a-glance flag,
@@ -200,25 +200,41 @@ function forecastSummary(wx) {
   return parts.join(', ');
 }
 
-// Not currently rendered anywhere -- EPA table hidden for now, kept intact for an easy
-// re-add rather than deleted outright.
-function matchupTableHtml(matchup, home, away) {
+// EPA matchup visual: zero-centered vertical gauges, one column per team's OWN offense vs
+// the opponent's defense (Pass above Rush in each column), up/green = offense winning that
+// phase, down/red = defense holding -- a fixed rule regardless of which column, so there's
+// nothing to re-learn switching sides. Banner states each column's pairing once; the
+// opponent's defense is inferred (not spelled out again per row). MAX_SCALE is a fixed
+// full-gauge range (not auto-scaled per matchup) so a 25-point mismatch always reads as the
+// same bar size on every card, not just relative to that one game's own numbers.
+const EPA_VIZ_MAX_SCALE = 50;
+function epaMatchupVizHtml(matchup, home, away) {
   if (!matchup) return '<div class="muted small">No rating data yet.</div>';
   const hr = matchup.home_ratings_display || {};
   const ar = matchup.away_ratings_display || {};
-  const fmt = v => v != null ? v.toFixed(0) : '—';
-  const cell = (offTeam, offR, phase, defTeam, defR) => {
-    const off = offR[`${phase}_off_epa`], def = defR[`${phase}_def_epa_allowed`];
-    return `<td class="num" title="${offTeam} ${phase} offense ${fmt(off)}/100 vs ${defTeam} ${phase} defense ${fmt(def)}/100 (both 0-100, 100 = best ever recorded in the 2007-present dataset)">${fmt(off)} vs ${fmt(def)}</td>`;
-  };
-  const row = (offTeam, offR, defTeam, defR) => `<tr>
-    <td>${offTeam} off &rarr; ${defTeam} def</td>
-    ${PHASES.map(([phase]) => cell(offTeam, offR, phase, defTeam, defR)).join('')}
-  </tr>`;
-  return `<table class="mini-ratings matchup-matrix">
-    <thead><tr><th></th>${PHASES.map(([, label]) => `<th class="num">${label} (off vs def)</th>`).join('')}</tr></thead>
-    <tbody>${row(away, ar, home, hr)}${row(home, hr, away, ar)}</tbody>
-  </table>`;
+  const cols = [[away, ar, home, hr], [home, hr, away, ar]];
+  const gauges = cols.map(([offTeam, offR, defTeam, defR]) => {
+    const bars = PHASES.map(([phase, label]) => {
+      const off = offR[`${phase}_off_epa`], def = defR[`${phase}_def_epa_allowed`];
+      if (off == null || def == null) return `<div class="vgauge"><div class="vgauge-track"><div class="vgauge-center"></div></div><div class="vgauge-mag muted">&mdash;</div><div class="vgauge-tag">${label}</div></div>`;
+      const diff = off - def;
+      const cls = diff >= 0 ? 'good' : 'bad';
+      const h = Math.min(50, Math.abs(diff) / EPA_VIZ_MAX_SCALE * 50);
+      return `<div class="vgauge" title="${offTeam} ${label.toLowerCase()} offense ${off.toFixed(0)}/100 vs ${defTeam} ${label.toLowerCase()} defense ${def.toFixed(0)}/100">
+        <div class="vgauge-track">
+          <div class="vgauge-center"></div>
+          <div class="vgauge-bar ${cls}" style="height:${h}%;"></div>
+        </div>
+        <div class="vgauge-mag result-${cls === 'good' ? 'good' : 'bad'}">${diff >= 0 ? '+' : '-'}${Math.abs(diff).toFixed(0)}</div>
+        <div class="vgauge-tag">${label}</div>
+      </div>`;
+    }).join('');
+    return `<div class="epa-viz-col"><div class="vgauge-row">${bars}</div></div>`;
+  }).join('');
+  return `<div class="epa-viz">
+    <div class="epa-viz-banner"><div>${away} Offense</div><div>${home} Offense</div></div>
+    <div class="epa-viz-grid">${gauges}</div>
+  </div>`;
 }
 
 // Weather-adjusted projected score + the forecast itself -- an O/U-flavored mechanism (it
@@ -415,6 +431,10 @@ const Pickem = {
         </div>
         <details class="game-card-details">
           <summary>Details</summary>
+          <div class="game-card-matchup">
+            <div class="stat-label" title="Each side's own offense (0-100 EPA scale) against the OTHER side's defense -- the 8-stat foundation every prediction on this card is built from, before any of the adjustments below.">EPA matchup</div>
+            ${epaMatchupVizHtml(matchup, g.home, g.away)}
+          </div>
           <div class="game-card-matchup">
             <div class="stat-label" title="Everything the Power Model adds on top of the pure 8-stat EPA composite for this specific matchup -- see the Methodology tab for the full fit/weight for each.">Non-EPA factors applied</div>
             ${powerModelBreakdownHtml(matchup, g.home, g.away)}
@@ -631,6 +651,10 @@ const Pickem = {
         </div>
         <details class="game-card-details" id="ats-details-${g.game_id}">
           <summary>Details</summary>
+          ${matchup ? `<div class="game-card-matchup">
+            <div class="stat-label" title="Each side's own offense (0-100 EPA scale) against the OTHER side's defense -- the 8-stat foundation every prediction on this card is built from.">EPA matchup</div>
+            ${epaMatchupVizHtml(matchup, g.home, g.away)}
+          </div>` : ''}
           ${matchup ? `<div class="game-card-matchup">
             <div class="stat-label" title="Own-offense-vs-opponent-defense point projection plus the live forecast for outdoor stadiums within the ~16-day window. Descriptive context only -- backtesting found neither beats the market total.">Projected Score + Forecast</div>
             ${forecastHtml(matchup, g.home, g.away)}

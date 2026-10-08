@@ -98,10 +98,27 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 .power-breakdown td, .power-breakdown th { white-space:normal; }
 .power-breakdown td:first-child { font-weight:600; }
 .dist-chart { width:100%; height:220px; margin-top:4px; }
-.mini-ratings { border-collapse:collapse; font-size:.78rem; margin-top:2px; }
-.mini-ratings th, .mini-ratings td { padding:1px 8px 1px 0; text-align:right; }
-.mini-ratings th:first-child, .mini-ratings td:first-child { text-align:left; font-weight:600; }
 .game-card-details { margin-top:8px; }
+
+/* EPA matchup viz: zero-centered vertical gauges, one column per team's own offense vs the
+   opponent's defense. Fixed rule regardless of column -- up/green = offense winning that
+   phase, down/red = defense holding. */
+.epa-viz { background:var(--panel2); border:1px solid var(--line); border-radius:9px; overflow:hidden; margin-top:2px; }
+.epa-viz-banner { display:flex; border-bottom:1px solid var(--line); }
+.epa-viz-banner div { flex:1; text-align:center; padding:7px 4px; font-size:.78rem; font-weight:700; letter-spacing:.01em; }
+.epa-viz-banner div:first-child { border-right:1px solid var(--line); }
+.epa-viz-grid { display:grid; grid-template-columns:1fr 1fr; }
+.epa-viz-col { padding:12px 14px; }
+.epa-viz-col:first-child { border-right:1px solid var(--line); }
+.vgauge-row { display:flex; gap:18px; justify-content:center; }
+.vgauge { text-align:center; }
+.vgauge-track { position:relative; width:24px; height:88px; background:var(--line); border-radius:5px; margin:0 auto; }
+.vgauge-center { position:absolute; top:50%; left:-3px; right:-3px; height:1px; background:rgba(255,255,255,.35); }
+.vgauge-bar { position:absolute; left:0; right:0; border-radius:3px; }
+.vgauge-bar.good { background:var(--good); bottom:50%; }
+.vgauge-bar.bad { background:var(--bad); top:50%; }
+.vgauge-mag { font-size:.75rem; font-weight:700; margin-top:5px; }
+.vgauge-tag { font-size:.7rem; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; margin-top:4px; }
 .game-card-details summary { font-size:.8rem; color:var(--dim); cursor:pointer; }
 .game-card-details summary:hover { color:var(--text); }
 .game-card-pick { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
