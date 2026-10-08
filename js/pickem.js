@@ -237,46 +237,41 @@ function forecastHtml(matchup, home, away) {
   return (forecast + proj) || '<div class="muted small">No forecast data yet.</div>';
 }
 
-// Rule-based (not AI-generated) explanation: every clause traces to a real number already
-// on the card, so it's reproducible and never invents anything. Deliberately terse.
-function buildNarrative({ favTeam, dogTeam, marketMargin, el, histCell, bucketLabel, bucketRank, edgeRec, matchupCallouts }) {
-  const parts = [`${favTeam} favored by ${marketMargin} over ${dogTeam}.`];
+// Every non-EPA term delta actually applied to this matchup, called out explicitly instead
+// of folding them into prose -- each row traces directly to a field team_ratings.py now
+// puts on power_model (see matchup_callouts()'s own comment for why). A term sitting at
+// exactly 0 still gets a row ("no QB out this week") so absence reads as confirmed-checked,
+// not silently skipped.
+function powerModelBreakdownHtml(matchup, home, away) {
+  const pm = matchup && matchup.power_model;
+  if (!pm) return '<div class="muted small">No power model data yet.</div>';
 
-  if (el && el.home_win_prob != null && el.away_win_prob != null) {
-    const elwayFav = el.home_win_prob > el.away_win_prob ? 'home' : 'away';
-    const elwayFavTeam = elwayFav === 'home' ? el._home : el._away;
-    if (elwayFavTeam === favTeam) {
-      parts.push(`ELWAY agrees, projecting ${favTeam} by about ${Math.abs(el.spread_home).toFixed(1)}.`);
-    } else {
-      parts.push(`ELWAY disagrees — its avg-points model actually likes ${elwayFavTeam} `
-        + `against the market's lean toward ${favTeam}.`);
-    }
-  }
+  const row = (label, term, detail) => {
+    const cls = term > 0 ? 'result-good' : term < 0 ? 'result-bad' : 'muted';
+    const sideNote = term !== 0 ? ` (favors ${term > 0 ? home : away})` : '';
+    return `<tr><td>${label}</td><td class="num ${cls}">${term >= 0 ? '+' : ''}${term.toFixed(4)}${sideNote}</td><td class="muted small">${detail}</td></tr>`;
+  };
 
-  if (histCell && histCell.su != null) {
-    const suPct = Math.round(histCell.su * 100);
-    parts.push(suPct < 55
-      ? `Favorites ${bucketLabel} have only won ${suPct}% of the time historically — a live spot for an upset.`
-      : `Favorites ${bucketLabel} have won ${suPct}% of the time historically.`);
-  }
+  const hfaDetail = pm.hfa_term !== 0 ? `${home} gets the standard home-field edge` : 'no home-field term';
+  const qbDetail = pm.home_qb_gap || pm.away_qb_gap
+    ? `${pm.home_qb_gap ? home : away} starting a backup (trailing EPA/dropback gap ${(pm.home_qb_gap || pm.away_qb_gap).toFixed(3)})`
+    : 'no Out/Doubtful starting QB either side';
+  const skillDetail = pm.home_skill_out || pm.away_skill_out
+    ? `${pm.home_skill_out ? home : away} missing skill-position EPA (${(pm.home_skill_out || pm.away_skill_out).toFixed(3)} summed)`
+    : 'no Out/Doubtful RB/WR/TE/FB either side';
+  const streakDetail = pm.home_streak || pm.away_streak
+    ? `${home} ${pm.home_streak >= 0 ? pm.home_streak + 'W' : Math.abs(pm.home_streak) + 'L'} streak, ${away} ${pm.away_streak >= 0 ? pm.away_streak + 'W' : Math.abs(pm.away_streak) + 'L'} streak`
+    : 'neither team on a streak entering this week';
 
-  if (bucketRank && bucketRank.taken) {
-    parts.push(`This week's upset-budget model flags ${dogTeam} as one of its picks from this bucket.`);
-  }
-
-  if (edgeRec && edgeRec.recommendation === 'FADE') {
-    const fPct = edgeRec.f_estimate != null ? Math.round(edgeRec.f_estimate * 100) : null;
-    parts.push(`Pool-leverage likes fading ${favTeam} here too — only ~${fPct}% of your pool is expected `
-      + `on ${dogTeam}, so it pays off if it hits.`);
-  } else if (edgeRec && edgeRec.recommendation === 'CHALK') {
-    parts.push(`Pool-leverage says stick with the chalk here — not enough separation to justify fading ${favTeam}.`);
-  }
-
-  if (matchupCallouts && matchupCallouts.length) {
-    parts.push(...matchupCallouts);
-  }
-
-  return parts.join(' ');
+  return `<table class="power-breakdown small">
+    <thead><tr><th>Non-EPA factor</th><th class="num">Delta contribution</th><th>Why</th></tr></thead>
+    <tbody>
+      ${row('Home-field advantage', pm.hfa_term, hfaDetail)}
+      ${row('QB health', pm.qb_term, qbDetail)}
+      ${row('Skill-position health', pm.skill_term, skillDetail)}
+      ${row('Momentum', pm.momentum_term, streakDetail)}
+    </tbody>
+  </table>`;
 }
 
 const Pickem = {
@@ -366,12 +361,6 @@ const Pickem = {
         data-team="${team}" data-spread="${hasLine ? effSpread : ''}"
         class="${mine === team ? 'primary' : ''}">${team}</button>`;
 
-      const narrative = hasLine
-        ? buildNarrative({ favTeam, dogTeam, marketMargin: Math.abs(effSpread), el, histCell,
-                           bucketLabel, bucketRank, edgeRec: hasEdge ? edgeRec : null,
-                           matchupCallouts: matchup ? matchup.callouts : null })
-        : 'No market line yet for this game.';
-
       const edgeLabel = edgeRec && edgeRec.recommendation === 'NO_PLAY' ? 'NO PLAY' : edgeRec?.recommendation;
       const edgeChip = hasEdge
         ? `<span class="chip ${edgeRec.recommendation === 'FADE' ? 'good' : ''}"
@@ -426,7 +415,10 @@ const Pickem = {
         </div>
         <details class="game-card-details">
           <summary>Details</summary>
-          <p class="game-card-narrative">${esc(narrative)}</p>
+          <div class="game-card-matchup">
+            <div class="stat-label" title="Everything the Power Model adds on top of the pure 8-stat EPA composite for this specific matchup -- see the Methodology tab for the full fit/weight for each.">Non-EPA factors applied</div>
+            ${powerModelBreakdownHtml(matchup, g.home, g.away)}
+          </div>
         </details>
       </div>`;
     }).join('');

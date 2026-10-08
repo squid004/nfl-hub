@@ -1271,14 +1271,32 @@ def matchup_callouts(
         ):
             diffs = {m: ORIENTATION[m] * (ratings[home][m] - ratings[away][m]) for m in RATING_METRICS}
             delta_raw = sum(POWER_WEIGHTS[m] * ((diffs[m] - diff_mu[m]) / diff_sd[m]) for m in RATING_METRICS)
-            qb_diff = (qb_gap_upcoming or {}).get((home, week), 0.0) - (qb_gap_upcoming or {}).get((away, week), 0.0)
-            skill_diff = (skill_out_upcoming or {}).get((home, week), 0.0) - (skill_out_upcoming or {}).get((away, week), 0.0)
-            streak_diff = (streak_upcoming or {}).get((home, week), 0) - (streak_upcoming or {}).get((away, week), 0)
+            home_qb_gap = (qb_gap_upcoming or {}).get((home, week), 0.0)
+            away_qb_gap = (qb_gap_upcoming or {}).get((away, week), 0.0)
+            home_skill_out = (skill_out_upcoming or {}).get((home, week), 0.0)
+            away_skill_out = (skill_out_upcoming or {}).get((away, week), 0.0)
+            home_streak = (streak_upcoming or {}).get((home, week), 0)
+            away_streak = (streak_upcoming or {}).get((away, week), 0)
+            qb_diff = home_qb_gap - away_qb_gap
+            skill_diff = home_skill_out - away_skill_out
+            streak_diff = home_streak - away_streak
             delta = (delta_raw + QB_QUALITY_GAP_WEIGHT * qb_diff + SKILL_EPA_OUT_WEIGHT * skill_diff
                      + HFA_WEIGHT * hfa_logit + MOMENTUM_WEIGHT * streak_diff)
             fav = home if delta > 0 else away if delta < 0 else None
+            # Every non-EPA term `delta` actually applied to THIS matchup -- surfaced so the
+            # frontend can call each one out explicitly instead of a prose narrative (removed
+            # 2026-10-07 per user direction). Weighted terms are in delta-equivalent units,
+            # signed home-minus-away like delta itself; raw values let the UI phrase its own
+            # sentence (e.g. "PHI on a 3-game win streak") without re-deriving anything.
             power_model = {"favorite": fav, "prob": round(delta_win_prob(delta), 4),
-                            "delta": round(delta, 4), "delta_raw": round(delta_raw, 4)}
+                            "delta": round(delta, 4), "delta_raw": round(delta_raw, 4),
+                            "hfa_term": round(HFA_WEIGHT * hfa_logit, 4),
+                            "qb_term": round(QB_QUALITY_GAP_WEIGHT * qb_diff, 4),
+                            "skill_term": round(SKILL_EPA_OUT_WEIGHT * skill_diff, 4),
+                            "momentum_term": round(MOMENTUM_WEIGHT * streak_diff, 4),
+                            "home_qb_gap": round(home_qb_gap, 4), "away_qb_gap": round(away_qb_gap, 4),
+                            "home_skill_out": round(home_skill_out, 4), "away_skill_out": round(away_skill_out, 4),
+                            "home_streak": home_streak, "away_streak": away_streak}
 
         score_distribution = None
         if (power_model is not None and points_bias is not None and sd_home and sd_away and hist_score_freq
