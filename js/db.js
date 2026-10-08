@@ -187,6 +187,18 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return null; }
   },
 
+  // [{season, week, home, away, home_score, away_score, elway_favorite, winner}, ...] --
+  // every COMPLETED game that has a stored ELWAY pick (written by nflhub.refresh; see
+  // nflhub/sources/elway.py's score_history()). Starts wherever this app began recording
+  // ELWAY picks (2026 wk2 currently) -- there's no row for an earlier game, by construction,
+  // not a bug. Market/Power Rankings already have a full historical record via
+  // historicalPower() above; this is the one piece that dataset doesn't have.
+  async elwayScoreHistory() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'elway_score_history').maybeSingle();
+    if (!data) return [];
+    try { return JSON.parse(data.value) || []; } catch { return []; }
+  },
+
   async spreadHistory(week) {
     try {
       const { data, error } = await this._c().from('spread_history').select('game_id,captured_at,spread_home')

@@ -190,6 +190,17 @@ const ModelTrends = {
       teams.forEach(t => teamOpts.push(`<option value="${esc(t)}">${esc(t)}</option>`));
 
       el.innerHTML = `
+        <div class="panel" id="season-hitrate-panel">
+          <h2>This season: hit rate by model</h2>
+          <p class="muted small">Straight-up pick accuracy, 2026 only, each model scored
+            against whatever games it actually has a pick for. ELWAY has no pick before this
+            app started recording it (wk2) and excludes any week still in progress -- Market
+            and Power Rankings aren't held back by that, so their games-counted totals run
+            ahead of ELWAY's by design, not by bug.</p>
+          <div id="season-hitrate-summary" class="muted small"></div>
+          <div id="season-hitrate-chart"></div>
+        </div>
+
         <div class="panel" id="backtest-panel">
           <h2>Model vs. market, every graded game</h2>
           <p class="muted small">Market spread against the live Power Rankings model's own
@@ -277,6 +288,8 @@ const ModelTrends = {
       this._renderBacktestChart(scatter);
       this._scatterGenerated = data.generated;
     }
+
+    this._drawSeasonHitRate(scatter, ctx.elwayScoreHistory || []);
   },
 
   // Wired exactly once, right where these elements are created -- the shell (and these
@@ -503,5 +516,84 @@ const ModelTrends = {
       if (!ev.points || !ev.points[0]) return;
       this.setCellFilter(Number(ev.points[0].y), Number(ev.points[0].x));
     });
+  },
+
+  // Straight-up hit rate for all 3 prediction sources, by week, THIS season only (the only
+  // season ELWAY's own history -- a live-DB join, not an nflverse signal -- can cover).
+  // Market/Power Rankings come from the existing nflverse-driven backtest `scatter`
+  // (already has every played game, every season); ELWAY comes from its own separate
+  // `elwayHistory` (see nflhub/sources/elway.py's score_history()), which simply has no
+  // row before this app started recording picks or for a week still in progress -- that
+  // shows up here as a gap in ELWAY's bars, not a fabricated 0%, since a week with zero
+  // decided ELWAY games is left out of its own series rather than counted.
+  _drawSeasonHitRate(scatter, elwayHistory) {
+    const chartEl = document.getElementById('season-hitrate-chart');
+    if (!chartEl) return;
+    const cs = getComputedStyle(document.documentElement);
+    const cssVar = name => cs.getPropertyValue(name).trim();
+    const colors = {
+      text: cssVar('--text'), dim: cssVar('--dim'), line: cssVar('--line'), panel: cssVar('--panel2'),
+      market: cssVar('--accent'), elway: cssVar('--warn'), power: cssVar('--good'),
+    };
+
+    const season = scatter.length ? Math.max(...scatter.map(r => r.season)) : null;
+    const seasonRows = season != null ? scatter.filter(r => r.season === season) : [];
+
+    const byWeek = new Map();  // week -> { market:{hit,n}, elway:{hit,n}, power:{hit,n} }
+    const bump = (week, key, isHit) => {
+      if (!byWeek.has(week)) byWeek.set(week, { market: { hit: 0, n: 0 }, elway: { hit: 0, n: 0 }, power: { hit: 0, n: 0 } });
+      const b = byWeek.get(week)[key];
+      b.n++; if (isHit) b.hit++;
+    };
+    seasonRows.forEach(r => {
+      const mkt = marketOutcome(r);
+      if (mkt === 'hit' || mkt === 'miss') bump(r.week, 'market', mkt === 'hit');
+      if (r.outcome === 'hit' || r.outcome === 'miss') bump(r.week, 'power', r.outcome === 'hit');
+    });
+    elwayHistory.filter(r => season == null || r.season === season).forEach(r => {
+      if (!r.elway_favorite || !r.winner) return;  // pick'em or tie -- not decidable
+      bump(r.week, 'elway', r.elway_favorite === r.winner);
+    });
+
+    const weeks = Array.from(byWeek.keys()).sort((a, b) => a - b);
+    const pct = b => b.n ? 100 * b.hit / b.n : null;
+
+    const totals = { market: { hit: 0, n: 0 }, elway: { hit: 0, n: 0 }, power: { hit: 0, n: 0 } };
+    weeks.forEach(w => {
+      const b = byWeek.get(w);
+      ['market', 'elway', 'power'].forEach(k => { totals[k].hit += b[k].hit; totals[k].n += b[k].n; });
+    });
+    const fmt = (label, t) => `${label} ${t.n ? (100 * t.hit / t.n).toFixed(1) + '%' : '—'} (${t.hit}/${t.n})`;
+    const summaryEl = document.getElementById('season-hitrate-summary');
+    if (summaryEl) summaryEl.textContent = season == null ? 'No data yet.'
+      : `Season ${season} so far — ${fmt('Market', totals.market)} · ${fmt('ELWAY', totals.elway)} · ${fmt('Power Rankings', totals.power)}`;
+
+    const series = [
+      ['market', 'Market', colors.market],
+      ['elway', 'ELWAY', colors.elway],
+      ['power', 'Power Rankings', colors.power],
+    ];
+    const traces = series.map(([key, name, color]) => ({
+      name,
+      x: weeks,
+      y: weeks.map(w => pct(byWeek.get(w)[key])),
+      customdata: weeks.map(w => { const b = byWeek.get(w)[key]; return [b.hit, b.n]; }),
+      type: 'bar',
+      marker: { color },
+      hovertemplate: `${name}: %{y:.1f}% (%{customdata[0]}/%{customdata[1]})<extra></extra>`,
+    }));
+
+    const axisCommon = { gridcolor: colors.line, color: colors.dim, tickfont: { size: 11 } };
+    Plotly.react('season-hitrate-chart', traces, {
+      autosize: true,
+      barmode: 'group',
+      margin: { l: 48, r: 16, t: 8, b: 40 },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+      font: { color: colors.text, size: 12 },
+      xaxis: Object.assign({ title: { text: 'NFL week' }, dtick: 1 }, axisCommon),
+      yaxis: Object.assign({ title: { text: 'Hit rate %' }, range: [0, 100] }, axisCommon),
+      legend: { orientation: 'h', x: 0, y: 1.12, font: { color: colors.text, size: 12 } },
+      hoverlabel: { bgcolor: colors.panel, bordercolor: colors.line, font: { color: colors.text, size: 12 } },
+    }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] });
   },
 };

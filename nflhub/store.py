@@ -101,6 +101,12 @@ def games_for_week(week: int) -> list[dict[str, Any]]:
     return _get("game", {"week": f"eq.{week}", "order": "kickoff"})
 
 
+def all_games() -> list[dict[str, Any]]:
+    """Every game row (the live `game` table only ever holds the current season) -- used to
+    join against elway_odds_all() for final scores (see elway.score_history())."""
+    return _get("game", {"order": "kickoff"})
+
+
 def odds_for_week(week: int) -> dict[str, dict[str, Any]]:
     return {r["game_id"]: r for r in _get("odds", {"week": f"eq.{week}"})}
 
@@ -133,6 +139,13 @@ def upsert_elway_odds(rows: list[dict[str, Any]]) -> None:
 
 def elway_odds_for_week(week: int) -> dict[str, dict[str, Any]]:
     return {r["game_id"]: r for r in _get("elway_odds", {"week": f"eq.{week}"})}
+
+
+def elway_odds_all() -> list[dict[str, Any]]:
+    """Every ELWAY pick ever upserted, all weeks (unlike elway_odds_for_week, which is
+    scoped to one week) -- used to build ELWAY's own season-long hit-rate history (see
+    elway.score_history(), js/modeltrends.js)."""
+    return _get("elway_odds", {})
 
 
 # --- spread movement history ---------------------------------------------

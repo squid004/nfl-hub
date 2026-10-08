@@ -117,6 +117,16 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
             log.warning("elway Current Rankings pull failed: %s", exc)
             summary["elway_qb1"] = f"skipped ({exc})"
 
+    # 2d. ELWAY's own hit-rate history (Model Trends page) -- re-derived from whatever's
+    # already in elway_odds/game every run, independent of whether THIS run's sheet pull
+    # above succeeded, so one bad week doesn't blank out every prior week's record.
+    try:
+        store.kv_set("elway_score_history", json.dumps(elway.score_history(store)))
+        summary["elway_score_history"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        log.exception("elway score history failed")
+        summary["errors"].append(f"elway_score_history: {exc}")
+
     # 2d. spread-movement history — append a snapshot only when the line actually moved
     # since the last one stored, so this is a log of real moves, not re-poll noise. Lets
     # the page show "opened X, now Y" and flag a big one-directional move ("steam").

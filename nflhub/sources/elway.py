@@ -178,3 +178,38 @@ def fetch_qb1(sheet_id: str) -> dict[str, dict[str, Any]]:
     if not out:
         raise ElwayUnavailable("Current Rankings: parsed 0 rows — layout may have changed")
     return out
+
+
+def score_history(store) -> list[dict[str, Any]]:
+    """Every COMPLETED game with a stored ELWAY pick -- {season, week, home, away,
+    home_score, away_score, elway_favorite, winner}. `elway_favorite`/`winner` are team
+    codes, or None for a pick'em/tied game. Used by the Model Trends page (js/
+    modeltrends.js) to track ELWAY's own hit rate: Market and the Power Rankings model
+    already have a full historical record via team_ratings.py's nflverse-driven backtest
+    (compute_backtest_scatter), but ELWAY isn't an nflverse signal, so this is the one piece
+    that dataset doesn't have. elway_odds is keyed by ESPN's own numeric game_id (unlike
+    that nflverse-id-keyed backtest), so this joins against the live `game` table -- which,
+    like elway_odds, only ever holds the CURRENT season, not a multi-year archive. Starts
+    wherever this app began recording ELWAY picks (2026 wk2 currently) -- there's simply no
+    elway_odds row for an earlier game, not a bug to work around."""
+    elway_rows = store.elway_odds_all()
+    if not elway_rows:
+        return []
+    games = {g["game_id"]: g for g in store.all_games()}
+    out: list[dict[str, Any]] = []
+    for r in elway_rows:
+        g = games.get(r["game_id"])
+        if not g or g.get("state") != "post" or g.get("home_score") is None or g.get("away_score") is None:
+            continue
+        spread = r.get("spread_home")
+        if spread is None:
+            continue
+        home_score, away_score = g["home_score"], g["away_score"]
+        winner = g["home"] if home_score > away_score else g["away"] if away_score > home_score else None
+        fav = g["home"] if spread < 0 else g["away"] if spread > 0 else None
+        out.append({
+            "season": g["season"], "week": g["week"], "home": g["home"], "away": g["away"],
+            "home_score": home_score, "away_score": away_score,
+            "elway_favorite": fav, "winner": winner,
+        })
+    return out
