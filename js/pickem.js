@@ -693,6 +693,10 @@ const Pickem = {
             ${epaMatchupVizHtml(matchup, g.home, g.away)}
           </div>` : ''}
           ${matchup ? `<div class="game-card-matchup">
+            <div class="stat-label" title="Every term that moved delta for this matchup -- the 8-stat composite rating plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
+            ${powerModelBreakdownHtml(matchup, g.home, g.away)}
+          </div>` : ''}
+          ${matchup ? `<div class="game-card-matchup">
             <div class="stat-label" title="Own-offense-vs-opponent-defense point projection plus the live forecast for outdoor stadiums within the ~16-day window. Descriptive context only -- backtesting found neither beats the market total.">Projected Score + Forecast</div>
             ${forecastHtml(matchup, g.home, g.away)}
           </div>` : ''}
