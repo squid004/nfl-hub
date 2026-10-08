@@ -62,6 +62,7 @@ const ModelTrends = {
   _cellFilter: null,       // { season, week } set by clicking the heatmap below, or null
   _qbFilter: '',           // '' | 'fav' | 'dog' | 'either' | 'neither' -- QB health of the model's favorite/underdog
   _midgameQbFilter: '',    // '' | 'fav' | 'dog' | 'either' | 'neither' -- confirmed mid-game QB injury (research/edge_signal_test_v34)
+  _neutralFilter: '',      // '' | 'exclude' | 'only' -- neutral-site games (is_neutral_site(), no HFA term applied)
 
   // "Agreement" = market and model favor the SAME side (spread and delta share a sign) --
   // those games can't show the market beating the model or vice versa, since both picked
@@ -112,6 +113,7 @@ const ModelTrends = {
   },
   setQbFilter(v) { this._qbFilter = v; this._redraw(); },
   setMidgameQbFilter(v) { this._midgameQbFilter = v; this._redraw(); },
+  setNeutralFilter(v) { this._neutralFilter = v; this._redraw(); },
 
   // Set by clicking a cell in the season/week heatmap below the scatter (cross-filter);
   // cleared by the × on its chip or by Reset all filters.
@@ -130,6 +132,7 @@ const ModelTrends = {
     this._cellFilter = null;
     this._qbFilter = '';
     this._midgameQbFilter = '';
+    this._neutralFilter = '';
     this._syncControlsToState();
     this._redraw();
   },
@@ -154,6 +157,7 @@ const ModelTrends = {
     set('backtest-week-from', ''); set('backtest-week-to', '');
     set('backtest-qb-filter', '');
     set('backtest-midgame-qb-filter', '');
+    set('backtest-neutral-filter', '');
   },
 
   render(ctx) {
@@ -243,6 +247,13 @@ const ModelTrends = {
                   <option value="neither">Neither team's QB hurt mid-game</option>
                 </select>
               </label>
+              <label title="A neutral-site game (international series, or a venue like the old Buffalo Toronto Series) gets NO home-field term in delta -- see is_neutral_site() in team_ratings.py. Confirmed and fixed 2026-10-07.">Neutral site
+                <select id="backtest-neutral-filter">
+                  <option value="">Any venue</option>
+                  <option value="exclude">Hide neutral-site games</option>
+                  <option value="only">Only neutral-site games</option>
+                </select>
+              </label>
             </div>
             <div class="backtest-control-row">
               <span id="backtest-agree-stat" class="muted small"></span>
@@ -287,6 +298,7 @@ const ModelTrends = {
     on('backtest-yaxis-select', 'change', e => this.setYAxisMode(e.target.value));
     on('backtest-qb-filter', 'change', e => this.setQbFilter(e.target.value));
     on('backtest-midgame-qb-filter', 'change', e => this.setMidgameQbFilter(e.target.value));
+    on('backtest-neutral-filter', 'change', e => this.setNeutralFilter(e.target.value));
   },
 
   // Every active filter composes via AND. Order doesn't affect the result, only performance
@@ -326,6 +338,11 @@ const ModelTrends = {
         return true;
       });
     }
+    // Neutral-site games get no HFA term at all (is_neutral_site(), fixed 2026-10-07) --
+    // this isn't favorite/underdog-relative like the filters above, just whether the venue
+    // itself had a true home side.
+    if (this._neutralFilter === 'exclude') rows = rows.filter(r => !r.neutral);
+    else if (this._neutralFilter === 'only') rows = rows.filter(r => r.neutral);
     // "Agreement" = market and model favor the same side (spread and delta share a sign).
     if (this._hideAgreements) rows = rows.filter(r => r.spread * r.delta <= 0);
     if (this._cellFilter) rows = rows.filter(r => r.season === this._cellFilter.season && r.week === this._cellFilter.week);
