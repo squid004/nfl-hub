@@ -108,6 +108,7 @@ const App = {
       Parlays.render(ctx);
       Historical.render(ctx);
       ModelTrends.render(ctx);
+      Methodology.render(ctx);
       this.renderStatus(ctx);
     } catch (e) {
       document.getElementById('status').textContent = 'Error: ' + e.message;

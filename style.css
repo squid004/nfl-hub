@@ -207,3 +207,12 @@ summary { cursor:pointer; }
 #backtest-cell-chip .chip { display:inline-flex; align-items:center; }
 #backtest-cell-chip button { background:transparent; border:none; color:var(--dim); font-weight:700; cursor:pointer; line-height:1; }
 #backtest-cell-chip button:hover { color:var(--text); border:none; }
+
+/* Methodology tab: every table here is prose-like (long descriptions, not short numbers),
+   so wrap instead of the site-wide default nowrap, which would force these very wide. */
+#methodology table td, #methodology table th { white-space:normal; }
+#methodology h3 { margin:16px 0 6px; }
+#methodology h3:first-of-type { margin-top:0; }
+#methodology ul { margin:4px 0 10px; padding-left:20px; }
+#methodology li { margin-bottom:4px; }
+#methodology code { background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:.85em; }
