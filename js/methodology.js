@@ -102,13 +102,22 @@ const Methodology = {
           delta = delta_raw<br>
           &nbsp;&nbsp;+ QB_QUALITY_GAP_WEIGHT &times; (home_qb_gap &minus; away_qb_gap)<br>
           &nbsp;&nbsp;+ SKILL_EPA_OUT_WEIGHT &times; (home_skill_out &minus; away_skill_out)<br>
-          &nbsp;&nbsp;+ HFA_WEIGHT &times; home_field_logit[season]<br>
+          &nbsp;&nbsp;+ HFA_WEIGHT &times; home_field_logit[season] &nbsp;(0 if neutral site)<br>
           &nbsp;&nbsp;+ MOMENTUM_WEIGHT &times; (home_streak &minus; away_streak)
         </p>
         <p class="small"><code>delta_raw</code> is kept alongside <code>delta</code>
           everywhere for comparison. <code>delta_win_prob(delta)</code> converts the
           composite into a calibrated win probability via a curve fit against real
           backtested accuracy at each confidence level.</p>
+        <p class="small"><strong>Neutral-site exception:</strong> the HFA term (and the
+          score-distribution pipeline's home/away points bias) is forced to exactly 0 for
+          neutral-site games. nflverse's own <code>location</code> field is inconsistent --
+          JAX's 2026 wk5 London game is tagged "Home" despite having no real home-field
+          edge, and Buffalo's old Toronto Series games show the same mislabeling in some
+          seasons but not others -- so <code>is_neutral_site()</code> combines that field
+          with a small manual fallback list. Confirmed and fixed 2026-10-07, including
+          three already-backfilled weeks that had been silently getting undeserved HFA
+          credit.</p>
         <p class="small"><strong>Why QB/skill health don't move hit rate, mechanically:</strong>
           the term is small relative to everything else in delta (mean magnitude &asymp;0.10)
           and only nonzero for the ~1,200 graded games with a report-listed Out/Doubtful QB.
@@ -173,8 +182,9 @@ const Methodology = {
       ['2026-10-07', 'Rest/travel + divisional game tested', 'Null: rest-mismatch coefficient doesn&rsquo;t survive calibration check; divisional games show no real signal', 'bad', 'Not shipped'],
       ['2026-10-07', 'Score-distribution pipeline', '+0.16 nats/game-side log-likelihood from the historical-reweighting step (validated, not cosmetic)', 'good', 'Shipped (points/O-U)'],
       ['2026-10-07', 'Mid-game QB injury detection', 'Favorite&rsquo;s QB hurt mid-game &rarr; miss rate 2.34% vs 1.11% for an otherwise-identical hit (z=3.36, p=0.0008)', 'warn', 'Shipped as filter only'],
-      ['2026-10-07', 'Momentum (signed win/loss streak) added', 'Isolated +6 games (63.10%&rarr;63.22%); cumulative 62.88%&rarr;63.22% (+17 games, 829 flips). Calibration z=4.35, p&lt;0.0001', 'good', 'Shipped'],
+      ['2026-10-07', 'Momentum (signed win/loss streak) added', 'Isolated +6 games (63.10%&rarr;63.22%); cumulative 62.88%&rarr;63.22% (+17 games, 829 flips) BEFORE the neutral-site fix below. Calibration z=4.35, p&lt;0.0001', 'good', 'Shipped'],
       ['2026-10-07', 'Trap game tested', 'Sign consistent everywhere tried, but select/confirm split failed to replicate independently (select z=-3.08, confirm z=-1.77)', 'warn', 'Parked, unconfirmed'],
+      ['2026-10-07', 'Neutral-site HFA bug fixed', '71 neutral-site games (international series, old Toronto Series) were wrongly getting home-field credit. Cumulative lift from HFA+momentum+QB+skill revised down to +10 games (62.87%&rarr;63.07%) once corrected -- smaller, but honest. 3 already-backfilled weeks self-healed in place', 'good', 'Bug fix'],
     ];
     const body = rows.map(([date, change, effect, cls, status]) => `
       <tr>
@@ -194,12 +204,13 @@ const Methodology = {
           <tbody>${body}</tbody>
         </table>
         <p class="lean">Net effect across the whole timeline: the model's backtested SU hit
-          rate moved from <strong>62.88%</strong> (pure 8-stat composite) to
-          <strong>63.22%</strong> (current, QB/skill health + HFA + momentum all stacked)
-          across 4,976 graded decided games -- a <strong>+0.34 point / +17 game</strong> lift
-          from four additions, two of which were deliberately shipped for calibration rather
-          than accuracy. The model still does not beat the closing market spread at picking
-          straight-up winners; it was never designed to.</p>
+          rate moved from <strong>62.87%</strong> (pure 8-stat composite) to
+          <strong>63.07%</strong> (current, QB/skill health + HFA + momentum all stacked,
+          after the neutral-site HFA fix) across 4,976 graded decided games -- a
+          <strong>+0.20 point / +10 game</strong> lift from four additions, two of which were
+          deliberately shipped for calibration rather than accuracy. The model still does not
+          beat the closing market spread at picking straight-up winners; it was never
+          designed to.</p>
       </div>`;
   },
 
