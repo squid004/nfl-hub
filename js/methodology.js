@@ -92,7 +92,7 @@ const Methodology = {
         <table>
           <thead><tr><th>Correction</th><th>Weight</th><th>Captures</th><th>Moves hit rate?</th></tr></thead>
           <tbody>
-            <tr><td>QB health</td><td class="num">-0.5903</td><td>Trailing EPA/dropback gap, normal starter vs. whoever's actually playing</td><td><span class="chip bad">No</span> (calibration)</td></tr>
+            <tr><td>QB health</td><td class="num">-0.5903</td><td>Trailing EPA/dropback gap, normal starter vs. whoever's actually playing (live games: a backup-average estimate, not league average)</td><td><span class="chip bad">No</span> (calibration)</td></tr>
             <tr><td>Skill-position health</td><td class="num">-0.0362</td><td>Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB</td><td><span class="chip bad">No</span> (calibration)</td></tr>
             <tr><td>Home-field advantage</td><td class="num">+0.9169</td><td>Trailing-5-season home win rate, shrunk toward all-time average</td><td><span class="chip good">Yes</span></td></tr>
             <tr><td>Momentum</td><td class="num">+0.0262</td><td>Signed current win/loss streak, reset at season boundaries/ties</td><td><span class="chip good">Yes</span></td></tr>
@@ -119,6 +119,17 @@ const Methodology = {
           Out Monday, nflverse was still blank Wednesday). Timeliness fix for that one path
           only, same reasoning as using a separate live source for weather -- nflverse
           doesn't forecast that either.</p>
+        <p class="small"><strong>QB-health replacement estimate (backup average, not
+          league average):</strong> league-wide EPA/play (+0.035) is dominated by starters
+          (83% of all pass attempts) -- backup-only appearances actually average
+          <strong>-0.070</strong>, a ~10x-larger, opposite-sign gap. Using the league figure
+          made a below-average-but-real starter (Caleb Williams, career EPA &asymp; -0.003)
+          look like an upgrade over his own backup once hurt -- backwards. Didn't need a
+          refit of QB_QUALITY_GAP_WEIGHT (it was always fit against the real hindsight
+          backup performance, never this estimate) -- walk-forward checked anyway
+          (research/edge_signal_test_v37): hit rate flat on the affected games (same
+          "statistically flat" pattern every QB/skill check has shown), calibration gap
+          trending the right direction but not alone significant. Fixed 2026-10-08.</p>
         <p class="small"><strong>Neutral-site exception:</strong> the HFA term (and the
           score-distribution pipeline's home/away points bias) is forced to exactly 0 for
           neutral-site games. nflverse's own <code>location</code> field is inconsistent --
@@ -196,6 +207,7 @@ const Methodology = {
       ['2026-10-07', 'Trap game tested', 'Sign consistent everywhere tried, but select/confirm split failed to replicate independently (select z=-3.08, confirm z=-1.77)', 'warn', 'Parked, unconfirmed'],
       ['2026-10-07', 'Neutral-site HFA bug fixed', '71 neutral-site games (international series, old Toronto Series) were wrongly getting home-field credit. Cumulative lift from HFA+momentum+QB+skill revised down to +10 games (62.87%&rarr;63.07%) once corrected -- smaller, but honest. 3 already-backfilled weeks self-healed in place', 'good', 'Bug fix'],
       ['2026-10-08', 'Live QB Out/Doubtful gate switched to ESPN&rsquo;s feed', 'No backtested-effect number -- changes WHEN the existing QB-health term fires this week, not what it&rsquo;s fit against. Found live: Caleb Williams (CHI, wk5) was already Out on ESPN Monday, nflverse&rsquo;s report_status was still blank Wednesday', 'good', 'Shipped (timeliness only)'],
+      ['2026-10-08', 'QB-health replacement estimate: backup average, not league average', 'League EPA/play (+0.035) is mostly starters (83% of attempts) -- backups alone average -0.070. No refit needed (weight was always fit against real hindsight backup data). Hit rate flat on affected games (374&rarr;375 of 591, z=+0.21) but calibration gap widened the right way (z 0.91&rarr;1.36); net historical lift +10&rarr;+11 games (62.87%&rarr;63.09%)', 'good', 'Shipped (research/edge_signal_test_v37)'],
     ];
     const body = rows.map(([date, change, effect, cls, status]) => `
       <tr>
@@ -216,12 +228,12 @@ const Methodology = {
         </table>
         <p class="lean">Net effect across the whole timeline: the model's backtested SU hit
           rate moved from <strong>62.87%</strong> (pure 8-stat composite) to
-          <strong>63.07%</strong> (current, QB/skill health + HFA + momentum all stacked,
-          after the neutral-site HFA fix) across 4,976 graded decided games -- a
-          <strong>+0.20 point / +10 game</strong> lift from four additions, two of which were
-          deliberately shipped for calibration rather than accuracy. The model still does not
-          beat the closing market spread at picking straight-up winners; it was never
-          designed to.</p>
+          <strong>63.09%</strong> (current, QB/skill health + HFA + momentum all stacked,
+          after the neutral-site HFA fix and the backup-baseline fix) across 4,977 graded
+          decided games -- a <strong>+0.22 point / +11 game</strong> lift from five
+          additions, two of which were deliberately shipped for calibration rather than
+          accuracy. The model still does not beat the closing market spread at picking
+          straight-up winners; it was never designed to.</p>
       </div>`;
   },
 

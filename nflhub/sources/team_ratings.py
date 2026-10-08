@@ -403,12 +403,25 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
         trailing EPA/dropback -- 0 when the normal starter played, positive when whoever
         played was worse than usual. Feeds compute_backtest_scatter()'s adjusted delta.
       - `current_primary` {team: passer_id} / `current_trailing_epa` {passer_id: EPA/
-        dropback} / `league_avg_epa`: the LATEST state as of the most recent game each team/
-        passer has played -- "who's QB1 right now" and "how have they (and everyone else)
-        been throwing." Feeds the live, UPCOMING-game adjustment in refresh() (no actual
-        passer exists yet for a future game, so that path infers "league-average backup" if
-        the live injury report has the primary starter Out/Doubtful, else assumes the
-        healthy primary plays -- see refresh()'s own qb_gap_upcoming construction).
+        dropback} / `league_avg_epa` / `backup_avg_epa`: the LATEST state as of the most
+        recent game each team/passer has played -- "who's QB1 right now" and "how have they
+        (and everyone else) been throwing." Feeds the live, UPCOMING-game adjustment in
+        refresh() (no actual passer exists yet for a future game, so that path infers
+        "backup-average performance" if the live injury report has the primary starter Out/
+        Doubtful, else assumes the healthy primary plays -- see refresh()'s own qb_gap_
+        upcoming construction). `backup_avg_epa` is NOT the same number as `league_avg_epa`
+        -- checked live: league-wide average EPA/play is +0.035, but that's dominated by
+        starters (83% of all attempts); backup-only appearances average -0.070, a real
+        ~10x-larger-and-opposite-sign gap, not a rounding difference. Using the full-league
+        figure as a stand-in for "whoever replaces an injured starter" systematically
+        overrates the replacement (confirmed case: Caleb Williams' own career EPA, -0.003,
+        is below league average but well above backup average -- the OLD estimate made
+        losing him look like a wash or even a slight improvement for Chicago; the corrected
+        one shows the real, sizable penalty it should). Walk-forward checked against the
+        existing QB_QUALITY_GAP_WEIGHT (research/edge_signal_test_v37_qb_backup_baseline.py)
+        before shipping -- see that script's own docstring for why this didn't need a
+        refit (the weight was always fit against REAL hindsight backup performance, never
+        against this estimate; only the LIVE guess needed fixing).
       - `passer_names` {passer_id: display name}: nflverse has no id shared with ESPN's live
         injury feed, so matching `current_primary`'s id against that feed (refresh()'s own
         live gate, see _primary_qb_out_live()) has to go through the player's name instead.
@@ -426,7 +439,7 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
         df["season"] = season
         frames.append(df)
     if not frames:
-        return {}, {}, {}, 0.0
+        return {}, {}, {}, 0.0, {}, 0.0
     passer_df = pd.concat(frames, ignore_index=True)
 
     games_by_id = {g["game_id"]: g for g in played_games}
@@ -464,6 +477,8 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
     passer_hist: dict[str, list[float]] = defaultdict(list)
     trailing_epa: dict[tuple[str, str], float | None] = {}
     league_avg: list[float] = []
+    backup_epa_sum = 0.0
+    backup_attempts = 0
 
     for gid, team, season, week in game_order:
         if last_season_num.get(team) is not None and last_season_num[team] != season and season_attempts[(team, season - 1)]:
@@ -486,9 +501,16 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
                 per_play = epa_sum / attempts
                 hist.append(per_play)
                 league_avg.append(per_play)
+                # A "backup appearance" is whoever played NOT being that team's own
+                # season-to-date primary -- same definition matchup_callouts()/refresh()
+                # use to decide whether to apply a QB-health adjustment at all.
+                if primary_so_far[(team, gid)] is not None and ap != primary_so_far[(team, gid)]:
+                    backup_epa_sum += epa_sum
+                    backup_attempts += attempts
             this_season[ap] += attempts
 
     league_avg_epa = (sum(league_avg) / len(league_avg)) if league_avg else 0.0
+    backup_avg_epa = (backup_epa_sum / backup_attempts) if backup_attempts else league_avg_epa
 
     gap_by_team_week: dict[tuple[str, int, int], float] = {}
     for gid, team, season, week in game_order:
@@ -499,7 +521,10 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
         tp = trailing_epa.get((primary, gid))
         ta = trailing_epa.get((actual, gid))
         tp = tp if tp is not None else league_avg_epa
-        ta = ta if ta is not None else league_avg_epa
+        # `ta`'s fallback only fires when the passer who ACTUALLY played has zero prior
+        # tracked attempts (a true NFL debut) -- backup_avg_epa is the better estimate of
+        # "an unknown passer thrust into playing," same reasoning as the live gate below.
+        ta = ta if ta is not None else backup_avg_epa
         gap_by_team_week[(team, season, week)] = tp - ta
 
     current_primary: dict[str, str] = {}
@@ -514,7 +539,7 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
     current_trailing_epa = {p: ((sum(h) / len(h)) if h else league_avg_epa) for p, h in passer_hist.items()}
     passer_names: dict[str, str] = dict(zip(passer_df["passer_player_id"], passer_df["name"]))
 
-    return gap_by_team_week, current_primary, current_trailing_epa, league_avg_epa, passer_names
+    return gap_by_team_week, current_primary, current_trailing_epa, league_avg_epa, passer_names, backup_avg_epa
 
 
 def skill_epa_history(current_season: int) -> tuple[dict[str, list], float]:
@@ -2034,7 +2059,7 @@ def refresh_historical(store, force: bool = False) -> str:
     game_log: list[dict] = []
     compute_ratings(played, current_season, game_log=game_log)
     qb_out = _qb_out_doubtful_by_week(current_season)
-    qb_gap, _primary, _trailing, _league_avg, _names = qb_quality_gap_data(played, current_season)
+    qb_gap, _primary, _trailing, _league_avg, _names, _backup_avg = qb_quality_gap_data(played, current_season)
     skill_out = skill_epa_out_by_team_week(current_season)
     hfa_by_season = home_field_logit_by_season(played)
     midgame_qb_injury = midgame_qb_injury_by_week(current_season)
@@ -2137,7 +2162,7 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
             continue
 
     qb_out_asof = _qb_out_doubtful_by_week(current_season)
-    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa, _names = qb_quality_gap_data(played_cutoff, current_season)
+    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa, _names, _backup_avg = qb_quality_gap_data(played_cutoff, current_season)
     qb_gap_week: dict[tuple[str, int], float] = {}
     for (team, season, wk), is_out in qb_out_asof.items():
         if season != current_season or wk != week or not is_out:
@@ -2388,9 +2413,13 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
 
     # QB/skill health adjustment for the Power Model pick (see QB_QUALITY_GAP_WEIGHT's own
     # docstring) -- qb_gap_upcoming only has entries for THIS week's teams with a QB
-    # currently Out/Doubtful (no actual passer exists yet for a future game, so "league-
-    # average backup" is the best available estimate of who plays; a healthy primary
-    # starter gets gap=0, same as compute_backtest_scatter()'s historical rows).
+    # currently Out/Doubtful (no actual passer exists yet for a future game, so a
+    # backup-average estimate stands in for who plays; a healthy primary starter gets
+    # gap=0, same as compute_backtest_scatter()'s historical rows). Backup average, NOT
+    # league average -- league-wide EPA/play is dominated by starters (83% of all
+    # attempts), so it was quietly estimating "the replacement plays like a competent
+    # starter," which is never true (see qb_quality_gap_data()'s own docstring for the real
+    # numbers and the Caleb Williams case that surfaced this, 2026-10-08).
     #
     # The LIVE gate here uses ESPN's injury feed (`injuries`, same one the game-card's QB
     # chip reads), not nflverse's weekly report that every historical/backtested path below
@@ -2402,13 +2431,13 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
     # backtested number still comes from, nflverse exclusively (ESPN's feed has no
     # historical archive to validate against, same reason weather comes from a separate
     # live source instead of nflverse).
-    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa, passer_names = qb_quality_gap_data(played, current_season)
+    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa, passer_names, backup_avg_epa = qb_quality_gap_data(played, current_season)
     qb_gap_upcoming: dict[tuple[str, int], float] = {}
     for team, primary in current_primary.items():
         if not _primary_qb_out_live(team, primary, passer_names, injuries):
             continue
         tp = current_trailing_epa.get(primary, league_avg_epa)
-        qb_gap_upcoming[(team, current_week)] = tp - league_avg_epa
+        qb_gap_upcoming[(team, current_week)] = tp - backup_avg_epa
     skill_out_by_tw = skill_epa_out_by_team_week(current_season)
     skill_out_upcoming = {(team, week): v for (team, season, week), v in skill_out_by_tw.items() if season == current_season}
     hfa_logit_current = home_field_logit_by_season(played).get(current_season, 0.0)

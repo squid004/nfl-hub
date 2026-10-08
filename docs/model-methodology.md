@@ -65,7 +65,7 @@ graded dataset, none of them touch `POWER_WEIGHTS` or the 8-stat composite itsel
 
 | Correction | Weight | What it captures | Hit-rate mover? |
 |---|---|---|---|
-| QB health | `QB_QUALITY_GAP_WEIGHT = -0.5903` | Trailing EPA/dropback gap between a team's normal starter and whoever's actually playing | No (calibration only) |
+| QB health | `QB_QUALITY_GAP_WEIGHT = -0.5903` | Trailing EPA/dropback gap between a team's normal starter and whoever's actually playing (live/upcoming games: a **backup-average** estimate, not league average — see below) | No (calibration only) |
 | Skill-position health | `SKILL_EPA_OUT_WEIGHT = -0.0362` | Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB | No (calibration only) |
 | Home-field advantage | `HFA_WEIGHT = 0.9169` | Trailing-5-season home win rate, shrunk toward all-time average (`HFA_SHRINKAGE_K = 100`) | **Yes** |
 | Momentum | `MOMENTUM_WEIGHT = 0.0262` | Signed current win/loss streak, reset at season boundaries and ties | **Yes** |
@@ -188,14 +188,15 @@ graded decided game available at the time.
 | 2026-10-07 | Trap game tested (v36) | Sign consistent (hypothesis-correct) at every threshold tried, but a proper chronological select/confirm split failed to replicate independently (select z=-3.08, confirm z=-1.77) | Not shipped — parked as "plausible, underpowered" |
 | 2026-10-07 | Neutral-site HFA bug found and fixed | 71 REG-season games since 2007 (international series, old Buffalo Toronto Series) were wrongly getting home-field credit because nflverse's own `location` field mislabels some of them "Home." Cumulative lift from HFA+momentum+QB+skill revised down to 62.87%→63.07% (+10 games) once corrected. 3 already-backfilled weeks (1, 3, 4) self-healed in place via a new schema-version mechanism | **Bug fix** |
 | 2026-10-08 | Live QB Out/Doubtful gate switched to ESPN's feed for the current/upcoming week | No backtested-effect number — this changes WHEN the existing QB-health correction fires this week, not what it's fit against. Found via a live case: Caleb Williams (CHI, 2026 wk5) was already "Out" on ESPN Monday but nflverse's `report_status` was still blank Wednesday, so the live card's QB chip and the model's QB-health term disagreed | **Shipped** — timeliness fix for the live prediction only; every backtest/fit/historical path stays on nflverse exclusively |
+| 2026-10-08 | QB-health "replacement" estimate switched from league average to backup average (v37) | League-wide EPA/play (+0.035) is dominated by starters (83% of all attempts) — backup-only appearances actually average **−0.070**, a ~10x-larger, opposite-sign gap. The old estimate made a below-average-but-real starter (Caleb Williams, career EPA ≈ −0.003) look like an UPGRADE over his own backup once hurt. Walk-forward on the existing `QB_QUALITY_GAP_WEIGHT` (no refit needed — that weight was always fit against real hindsight backup performance, never this estimate): hit rate flat on the affected subset (374→375 of 591, 23 total flips, z=+0.21, same "statistically flat" pattern as every other QB/skill check) but the calibration gap (confidence reduced more on misses than hits) widened in the right direction (z 0.91→1.36, neither significant alone). Didn't regress anything; fixed a conceptually wrong estimator with real data behind the replacement | **Shipped** — research/edge_signal_test_v37_qb_backup_baseline.py |
 
 **Net effect across the whole timeline**: the model's backtested SU hit rate moved from
-**62.87%** (pure 8-stat composite, no corrections) to **63.07%** (current, with QB/skill
-health + HFA + momentum all stacked, after the neutral-site HFA fix below) across 4,976
-graded decided games — a **+0.20 percentage point / +10 game** lift from four additions,
-two of which (QB and skill health) were deliberately shipped for calibration rather than
-accuracy. The model still does not beat the closing market spread at picking straight-up
-winners; it was never designed to.
+**62.87%** (pure 8-stat composite, no corrections) to **63.09%** (current, with QB/skill
+health + HFA + momentum all stacked, after the neutral-site HFA fix and the backup-baseline
+fix above) across 4,977 graded decided games — a **+0.22 percentage point / +11 game** lift
+from five additions, two of which (QB and skill health) were deliberately shipped for
+calibration rather than accuracy. The model still does not beat the closing market spread
+at picking straight-up winners; it was never designed to.
 
 ---
 
