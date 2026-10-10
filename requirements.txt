@@ -7,3 +7,4 @@ tzdata>=2024.1
 pandas>=2.2
 numpy>=1.26
 pyarrow>=14.0
+scipy>=1.11
