@@ -535,29 +535,48 @@ const Pickem = {
   // first <details> open (not eagerly for all ~14-16 games every reload): Plotly can't size
   // itself correctly into a hidden (closed <details>) container, and there's no reason to
   // pay for charts nobody expands anyway.
-  _drawDistChart(divId, sd, home, away) {
+  // `final` (optional, {homeScore, awayScore}): once the game's over, highlights the bar
+  // matching each side's actual final score and writes a figure caption with the modeled
+  // joint likelihood of that exact combination -- home_pct/away_pct are independent by
+  // construction (see build_score_distributions()'s own docstring), so that's just each
+  // side's own percentage multiplied together, same independence assumption the model
+  // itself already makes to get a win probability out of two separate curves. Either side's
+  // actual score can be absent from its own pct array -- score_dist_to_whole_percentages()
+  // only keeps bins that round to >=1%, so a score the model considered a true long shot
+  // (sub-1%) simply isn't drawn; the caption calls that out explicitly instead of silently
+  // reading as "0% chance."
+  _drawDistChart(divId, sd, home, away, final) {
     const el = document.getElementById(divId);
     if (!el || el._distDrawn) return;
     el._distDrawn = true;
     const cs = getComputedStyle(document.documentElement);
     const cssVar = name => cs.getPropertyValue(name).trim();
     const colors = { text: cssVar('--text'), dim: cssVar('--dim'), line: cssVar('--line'),
-                      panel: cssVar('--panel2'), home: cssVar('--accent'), away: cssVar('--warn') };
+                      panel: cssVar('--panel2'), home: cssVar('--accent'), away: cssVar('--warn'), good: cssVar('--good') };
     // Away mirrored onto negative x, home on positive x -- separates the two curves instead
     // of overlapping them. Points can never actually be negative, so the sign here is purely
     // a left/right layout trick; tickvals/ticktext below relabel every tick back to its real
     // (always non-negative) point value so nothing reads as an actual negative score.
-    const trace = (pts, label, mode, color, sign) => ({
+    const trace = (pts, label, mode, color, sign, actualScore) => ({
       name: `${label} (mode ${mode})`,
       x: pts.map(d => sign * d.points), y: pts.map(d => d.pct),
-      customdata: pts.map(d => d.points), type: 'bar', opacity: 0.75,
-      marker: { color }, hovertemplate: `${label} %{customdata} pts: %{y}%<extra></extra>`,
+      customdata: pts.map(d => d.points), type: 'bar',
+      opacity: pts.map(d => actualScore != null && d.points === actualScore ? 1 : 0.55),
+      marker: {
+        color: pts.map(d => actualScore != null && d.points === actualScore ? colors.good : color),
+        line: { color: colors.text, width: pts.map(d => actualScore != null && d.points === actualScore ? 1.5 : 0) },
+      },
+      hovertemplate: `${label} %{customdata} pts: %{y}%<extra></extra>`,
     });
+    const homeScore = final ? final.homeScore : null, awayScore = final ? final.awayScore : null;
     const maxPts = Math.max(...sd.home_pct.map(d => d.points), ...sd.away_pct.map(d => d.points));
     const tickMax = Math.ceil((maxPts + 1) / 10) * 10;
     const tickvals = [], ticktext = [];
     for (let v = -tickMax; v <= tickMax; v += 10) { tickvals.push(v); ticktext.push(String(Math.abs(v))); }
-    Plotly.react(divId, [trace(sd.away_pct, away, sd.away_mode, colors.away, -1), trace(sd.home_pct, home, sd.home_mode, colors.home, 1)], {
+    Plotly.react(divId, [
+      trace(sd.away_pct, away, sd.away_mode, colors.away, -1, awayScore),
+      trace(sd.home_pct, home, sd.home_mode, colors.home, 1, homeScore),
+    ], {
       autosize: true, margin: { l: 44, r: 12, t: 8, b: 36 },
       paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
       font: { color: colors.text, size: 11 },
@@ -567,6 +586,25 @@ const Pickem = {
       legend: { orientation: 'h', x: 0, y: 1.15, font: { color: colors.text, size: 11 } },
       hoverlabel: { bgcolor: colors.panel, bordercolor: colors.line, font: { color: colors.text, size: 11 } },
     }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] });
+
+    const captionEl = document.getElementById(`${divId}-caption`);
+    if (!captionEl || !final) return;
+    const homeHit = sd.home_pct.find(d => d.points === homeScore);
+    const awayHit = sd.away_pct.find(d => d.points === awayScore);
+    if (homeHit && awayHit) {
+      const joint = homeHit.pct * awayHit.pct / 100;
+      captionEl.textContent = `Final ${away} ${awayScore} – ${home} ${homeScore}: modeled likelihood of this ` +
+        `exact combination ≈ ${joint < 0.1 ? '<0.1' : joint.toFixed(joint < 1 ? 2 : 1)}% ` +
+        `(${away} ${awayScore}: ${awayHit.pct}% × ${home} ${homeScore}: ${homeHit.pct}%).`;
+    } else {
+      const missing = [];
+      if (!awayHit) missing.push(`${away}'s ${awayScore}`);
+      if (!homeHit) missing.push(`${home}'s ${homeScore}`);
+      captionEl.textContent = `Final ${away} ${awayScore} – ${home} ${homeScore}: ` +
+        `${missing.join(' and ')} ${missing.length > 1 ? "weren't" : "wasn't"} on the modeled ` +
+        `distribution at all -- the model considered ${missing.length > 1 ? 'these' : 'this'} enough of a long shot ` +
+        `(under 1% individually) that ${missing.length > 1 ? "they didn't" : "it didn't"} even get drawn.`;
+    }
   },
 
   _renderAtsCards(ctx) {
@@ -642,7 +680,10 @@ const Pickem = {
         class="${mine === team ? 'primary' : ''}">${team}</button>`;
 
       const distChartId = `ats-dist-${g.game_id}`;
-      if (sd) chartsToWire.push({ id: distChartId, sd, home: g.home, away: g.away });
+      if (sd) chartsToWire.push({
+        id: distChartId, sd, home: g.home, away: g.away,
+        final: postGame ? { homeScore: g.home_score, awayScore: g.away_score } : null,
+      });
 
       return `<div class="game-card${pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
         <div class="game-card-head">
@@ -703,6 +744,7 @@ const Pickem = {
           ${sd ? `<div class="game-card-matchup">
             <div class="stat-label" title="Each side's full predicted score distribution -- raw model curve reshaped to match real historical NFL scoring frequency, calibrated so the implied win probability matches the Power Model pick.">Point Distribution</div>
             <div id="${distChartId}" class="dist-chart"></div>
+            <div id="${distChartId}-caption" class="muted small dist-caption"></div>
           </div>` : ''}
         </details>
       </div>`;
@@ -750,12 +792,12 @@ const Pickem = {
     // Lazy chart render: a Plotly chart drawn into a closed <details> can't size itself
     // correctly, and there's no reason to render ~15 charts nobody's opened yet. Draw (once)
     // the first time each card's own details element opens.
-    chartsToWire.forEach(({ id, sd, home, away }) => {
+    chartsToWire.forEach(({ id, sd, home, away, final }) => {
       const gid = id.replace('ats-dist-', '');
       const details = document.getElementById(`ats-details-${gid}`);
       if (!details) return;
       details.addEventListener('toggle', () => {
-        if (details.open) this._drawDistChart(id, sd, home, away);
+        if (details.open) this._drawDistChart(id, sd, home, away, final);
       });
     });
   },
