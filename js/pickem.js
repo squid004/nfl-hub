@@ -199,6 +199,29 @@ function stadiumLineHtml(matchup) {
   return `<div class="stadium-line muted small">${esc(matchup.stadium)}${esc(loc)}${neutralChip}</div>`;
 }
 
+// Replaces the old bare "LIVE" chip once the client-side ESPN poller (App._pollLiveScores)
+// has actually landed a clock reading -- g.live_clock is undefined until that first poll
+// completes (typically within a second or two of load, not the full 20s interval, see
+// _syncLivePolling's immediate first call), so this still falls back to a plain "LIVE" chip
+// for that brief window rather than showing nothing. Also doubles as the "Final" indicator,
+// which the card never showed explicitly before this -- same field, since ESPN's own
+// shortDetail reads "Final" once the game's over.
+function liveStateChip(g, live, postGame) {
+  if (live) return ` <span class="chip warn">${esc(g.live_clock ? `LIVE · ${g.live_clock}` : 'LIVE')}</span>`;
+  if (postGame) return ` <span class="chip muted">${esc(g.live_clock || 'Final')}</span>`;
+  return '';
+}
+
+// "Who has the ball and where" -- only renders once the poller has a down/distance reading
+// for this exact moment (nothing during a kickoff, injury stoppage, or the brief window
+// before the first poll lands). Red-zone drives get the same "bad" (attention) chip color
+// everything else urgent on this card already uses, not a new color convention.
+function liveSituationHtml(g, live) {
+  if (!live || !g.live_situation) return '';
+  const cls = g.live_red_zone ? 'bad' : 'muted';
+  return `<div class="small" style="margin:-2px 0 6px;"><span class="chip ${cls}">${esc(g.live_situation)}</span></div>`;
+}
+
 // Full forecast for the card's details layer -- everything fetch_forecast_weather() returns,
 // not just the 3 fields the points-prediction adjustment actually uses.
 function forecastSummary(wx) {
@@ -383,7 +406,7 @@ const Pickem = {
         result = g.home_score > g.away_score ? g.home
           : g.away_score > g.home_score ? g.away : 'TIE';
       }
-      const stateChip = live ? '<span class="chip">LIVE</span>' : '';
+      const stateChip = liveStateChip(g, live, postGame);
 
       const histCell = hist && hasLine ? History.lookup(hist, Math.abs(effSpread), effSpread <= 0) : null;
 
@@ -442,6 +465,7 @@ const Pickem = {
           ${lineMoveChip(move)}
         </div>
         ${stadiumLineHtml(matchup)}
+        ${liveSituationHtml(g, live)}
         ${hasLine ? `<div class="market-line">${esc(o.book ?? 'Market')}: ${favLabel}</div>` : ''}
         <div class="game-card-body">
           <div class="stat-block">
@@ -681,7 +705,7 @@ const Pickem = {
 
       const postGame = g.state === 'post';
       const live = g.state === 'in';
-      const stateChip = live ? '<span class="chip">LIVE</span>' : '';
+      const stateChip = liveStateChip(g, live, postGame);
 
       // ATS grading is "did this side COVER the market spread," not who won SU. PUSH grades
       // no side right or wrong, same spirit as SU's TIE handling on the Moneyline cards.
@@ -737,6 +761,7 @@ const Pickem = {
           ${lineMoveChip(move)}
         </div>
         ${stadiumLineHtml(matchup)}
+        ${liveSituationHtml(g, live)}
         <div class="game-card-body">
           <div class="stat-block">
             <div class="stat-label">Market</div>

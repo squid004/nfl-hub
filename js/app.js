@@ -9,6 +9,29 @@
 // are the only thing that needs to move faster than everything else on the page.
 const ESPN_SCOREBOARD_URL = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard';
 const LIVE_POLL_INTERVAL_MS = 20_000;
+const DOWN_ORDINAL = { 1: '1st', 2: '2nd', 3: '3rd', 4: '4th' };
+
+// ESPN's situation.yardLine is 0-100 measured from the POSSESSING team's own goal line (0)
+// to their opponent's (100) -- not pinned to either team's own "50," so converting it to the
+// usual broadcast "TEAM ##" format means picking whichever side of midfield it's actually
+// on: <=50 is still the possessing team's own territory, >50 is already past midfield into
+// the opponent's. Checked against two different live games before trusting this (DEN@LAC,
+// LAC with the ball at yardLine 17 in the 1st quarter -- exactly what you'd expect from a
+// drive pinned deep in LAC's own territory, not 17 yards from a LAC touchdown).
+function _fieldPositionText(yardLine, possAbbr, otherAbbr) {
+  if (yardLine == null || !possAbbr || !otherAbbr) return null;
+  return yardLine <= 50 ? `${possAbbr} ${yardLine}` : `${otherAbbr} ${100 - yardLine}`;
+}
+
+// {text, redZone} for the "who has the ball and where" line, or null when ESPN hasn't got a
+// down/distance/possession reading for this moment (kickoffs, injury stoppages, etc.).
+function _situationText(comp, possAbbr, otherAbbr) {
+  const sit = comp.situation;
+  if (!sit || sit.down == null || sit.distance == null || !possAbbr) return null;
+  const field = _fieldPositionText(sit.yardLine, possAbbr, otherAbbr);
+  const dd = `${DOWN_ORDINAL[sit.down] || sit.down + 'th'} & ${sit.distance}`;
+  return { text: `${possAbbr} ball · ${dd}${field ? ' at ' + field : ''}`, redZone: !!sit.isRedZone };
+}
 
 const App = {
   _ctx: null,
@@ -187,16 +210,29 @@ const App = {
         const state = comp.status?.type?.state || 'pre';
         const home = (comp.competitors || []).find(c => c.homeAway === 'home');
         const away = (comp.competitors || []).find(c => c.homeAway === 'away');
+        const homeAbbr = home?.team?.abbreviation, awayAbbr = away?.team?.abbreviation;
+        const possId = comp.situation?.possession;
+        const possAbbr = possId === home?.team?.id ? homeAbbr : possId === away?.team?.id ? awayAbbr : null;
+        const otherAbbr = possAbbr === homeAbbr ? awayAbbr : homeAbbr;
         live.set(String(ev.id), {
           state, home_score: Number(home?.score || 0), away_score: Number(away?.score || 0),
+          // "10:00 - OT" / "9:21 - 1st" while live, "Final" once over -- only kept for those
+          // two states, not 'pre' (shortDetail there is just the scheduled kickoff time,
+          // already shown elsewhere on the card).
+          clock: (state === 'in' || state === 'post') ? (comp.status?.type?.shortDetail || null) : null,
+          situation: state === 'in' ? _situationText(comp, possAbbr, otherAbbr) : null,
         });
       }
       let changed = false;
       for (const g of this._ctx.games) {
         const upd = live.get(g.game_id);
         if (!upd) continue;
-        if (g.state !== upd.state || g.home_score !== upd.home_score || g.away_score !== upd.away_score) {
+        const sitText = upd.situation ? upd.situation.text : null;
+        const sitRedZone = upd.situation ? upd.situation.redZone : false;
+        if (g.state !== upd.state || g.home_score !== upd.home_score || g.away_score !== upd.away_score
+            || g.live_clock !== upd.clock || g.live_situation !== sitText || g.live_red_zone !== sitRedZone) {
           g.state = upd.state; g.home_score = upd.home_score; g.away_score = upd.away_score;
+          g.live_clock = upd.clock; g.live_situation = sitText; g.live_red_zone = sitRedZone;
           changed = true;
         }
       }
