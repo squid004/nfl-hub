@@ -416,6 +416,7 @@ const Pickem = {
       const histHit = (postGame || live) && histCell && favTeam && result !== 'TIE' ? favTeam === result : null;
       const pmHit = (postGame || live) && pm && pm.favorite && result !== 'TIE' ? pm.favorite === result : null;
       const pickHit = (postGame || live) && mine && result !== 'TIE' ? mine === result : null;
+      const tied = result === 'TIE';
       const resultClass = v => v === true ? 'result-good' : v === false ? 'result-bad' : '';
       // Once started, the line/implied-% stop mattering -- show the real score instead,
       // current/final leader bolded green.
@@ -452,7 +453,7 @@ const Pickem = {
              ${edgeLabel}${edgeRec.recommendation === 'FADE' ? ' ' + edgeRec.underdog_team : ''}</span>`
         : '<span class="muted">—</span>';
 
-      return `<div class="game-card${pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
+      return `<div class="game-card${tied ? ' result-tie' : pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
           <span class="matchup">${teamSpan(g.away)}${recordLabel(g.away)}${qbChip(g.away, injuries, depthChart)} @ ${teamSpan(g.home)}${recordLabel(g.home)}${qbChip(g.home, injuries, depthChart)}</span>
