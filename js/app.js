@@ -85,6 +85,20 @@ const App = {
               power_rankings: snap.power_rankings, team_records: snap.team_records }
           : null;
         parlaySnapshot = snap ? { season, week: viewWeek, teams: snap.parlay_teams } : null;
+      } else if (teamRatings) {
+        // Within the CURRENT (still-live) week, a game that's already finished drops out of
+        // the live matchups blob entirely -- team_ratings.py's matchup_callouts() only ever
+        // computes "upcoming" (no-result-yet) games, by design (recomputing a finished
+        // game's own prediction today would use post-game ratings, a hindsight leak). The
+        // SAME game's pre-game prediction already exists, correctly frozen, in this week's
+        // own power_rankings_by_week snapshot the moment its first kickoff passes (self-
+        // healing, same mechanism that backfills past weeks) -- fall back to that for
+        // whichever keys the live blob is missing, so Details doesn't just go blank the
+        // moment a game ends mid-week. Live still wins for every key it actually has.
+        const liveWeekSnap = weeklyPowerRankings?.[String(season)]?.[String(liveWeek)];
+        if (liveWeekSnap && liveWeekSnap.matchups) {
+          teamRatings = { ...teamRatings, matchups: { ...liveWeekSnap.matchups, ...teamRatings.matchups } };
+        }
       }
 
       const ctx = { week: viewWeek, liveWeek, isPastWeek: isPast, season, games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks,

@@ -536,15 +536,18 @@ const Pickem = {
   // itself correctly into a hidden (closed <details>) container, and there's no reason to
   // pay for charts nobody expands anyway.
   // `final` (optional, {homeScore, awayScore}): once the game's over, highlights the bar
-  // matching each side's actual final score and writes a figure caption with the modeled
-  // joint likelihood of that exact combination -- home_pct/away_pct are independent by
-  // construction (see build_score_distributions()'s own docstring), so that's just each
+  // matching each side's actual final score and writes a figure caption with (a) the
+  // modeled joint likelihood of that exact combination -- home_pct/away_pct are independent
+  // by construction (see build_score_distributions()'s own docstring), so that's just each
   // side's own percentage multiplied together, same independence assumption the model
-  // itself already makes to get a win probability out of two separate curves. Either side's
-  // actual score can be absent from its own pct array -- score_dist_to_whole_percentages()
-  // only keeps bins that round to >=1%, so a score the model considered a true long shot
-  // (sub-1%) simply isn't drawn; the caption calls that out explicitly instead of silently
-  // reading as "0% chance."
+  // itself already makes to get a win probability out of two separate curves -- and (b)
+  // where that likelihood RANKS against every other outcome the model considered (the top
+  // N% most likely), a more useful "how accurate was this" read than the raw percentage
+  // alone, since raw joint probabilities over a ~30x30 grid are small numbers even for the
+  // single most likely outcome. Either side's actual score can be absent from its own pct
+  // array entirely -- score_dist_to_whole_percentages() only keeps bins that round to >=1%,
+  // so a score the model considered a true long shot simply isn't drawn; the caption calls
+  // that out explicitly instead of silently reading as "0% chance."
   _drawDistChart(divId, sd, home, away, final) {
     const el = document.getElementById(divId);
     if (!el || el._distDrawn) return;
@@ -591,19 +594,41 @@ const Pickem = {
     if (!captionEl || !final) return;
     const homeHit = sd.home_pct.find(d => d.points === homeScore);
     const awayHit = sd.away_pct.find(d => d.points === awayScore);
+    // Full joint grid available from what's actually drawn (the outer product of the two
+    // displayed marginals) -- used to rank the actual result against every OTHER outcome
+    // the model considered, not just state its own raw probability in isolation. totalMass
+    // is always exactly 100 (each side's own pct list already sums to exactly 100 via
+    // Hamilton apportionment, see score_dist_to_whole_percentages()) -- kept as a variable
+    // rather than a hardcoded 100 only so this stays correct if that guarantee ever changes.
+    const jointGrid = [];
+    let totalMass = 0;
+    sd.home_pct.forEach(h => sd.away_pct.forEach(a => {
+      const p = h.pct * a.pct / 100;
+      jointGrid.push(p);
+      totalMass += p;
+    }));
     if (homeHit && awayHit) {
       const joint = homeHit.pct * awayHit.pct / 100;
+      const hdrPct = totalMass ? 100 * jointGrid.filter(p => p >= joint).reduce((s, p) => s + p, 0) / totalMass : null;
       captionEl.textContent = `Final ${away} ${awayScore} – ${home} ${homeScore}: modeled likelihood of this ` +
         `exact combination ≈ ${joint < 0.1 ? '<0.1' : joint.toFixed(joint < 1 ? 2 : 1)}% ` +
-        `(${away} ${awayScore}: ${awayHit.pct}% × ${home} ${homeScore}: ${homeHit.pct}%).`;
+        `(${away} ${awayScore}: ${awayHit.pct}% × ${home} ${homeScore}: ${homeHit.pct}%)` +
+        (hdrPct != null ? ` -- ranked among the model's own top ${hdrPct < 0.1 ? '<0.1' : hdrPct.toFixed(1)}% most likely outcomes ` +
+          `(lower = this is close to what the model expected; higher = a real surprise).` : '.');
     } else {
+      // Each side's own pct list already sums to exactly 100 (Hamilton apportionment, see
+      // score_dist_to_whole_percentages()'s own docstring) -- a point value with NO entry
+      // rounded to a true zero, not just "small," so there's no real tail-mass number left
+      // to quote here. The honest, still-quantitative version of "how much of a long shot"
+      // is relative to what WAS drawn: this fell below every bar the model actually showed.
       const missing = [];
       if (!awayHit) missing.push(`${away}'s ${awayScore}`);
       if (!homeHit) missing.push(`${home}'s ${homeScore}`);
       captionEl.textContent = `Final ${away} ${awayScore} – ${home} ${homeScore}: ` +
         `${missing.join(' and ')} ${missing.length > 1 ? "weren't" : "wasn't"} on the modeled ` +
-        `distribution at all -- the model considered ${missing.length > 1 ? 'these' : 'this'} enough of a long shot ` +
-        `(under 1% individually) that ${missing.length > 1 ? "they didn't" : "it didn't"} even get drawn.`;
+        `distribution at all -- rounds to a true 0%, rarer than every single outcome the ` +
+        `model actually drew for ${missing.length > 1 ? 'either side' : missing[0].split("'")[0]}, ` +
+        `not just "too small to see."`;
     }
   },
 
