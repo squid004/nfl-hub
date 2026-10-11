@@ -367,25 +367,35 @@ const Pickem = {
       const mine = (picks[g.game_id] || {}).pick;
       const mineIsDog = mine && dogTeam && mine === dogTeam;
 
+      // `live` tracks a game currently in progress the SAME way `postGame` tracks a final
+      // one -- home_score/away_score are the real live score straight from ESPN regardless
+      // of state, so the exact same win/loss math applies, just against a score that can
+      // still change. Grading while live is deliberately "as of right now," not a
+      // prediction of the final outcome -- a 4th-quarter lead can still flip, same as any
+      // live scoreboard. The score-distribution likelihood caption (epaMatchupVizHtml's
+      // sibling, see _drawDistChart's `final` param) stays postGame-only on purpose: "how
+      // likely was this exact combination" only means something once the combination is
+      // actually final, not mid-game.
+      const postGame = g.state === 'post';
+      const live = g.state === 'in';
       let result = null;
-      if (g.state === 'post') {
+      if (postGame || live) {
         result = g.home_score > g.away_score ? g.home
           : g.away_score > g.home_score ? g.away : 'TIE';
       }
-      const stateChip = g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
+      const stateChip = live ? '<span class="chip">LIVE</span>' : '';
 
       const histCell = hist && hasLine ? History.lookup(hist, Math.abs(effSpread), effSpread <= 0) : null;
 
-      // Grading, once the game is final (null = no verdict -- not final yet, or nothing to
-      // compare). A tie grades neither side right nor wrong.
-      const postGame = g.state === 'post';
-      const elwayHit = postGame && elwayFav && result !== 'TIE' ? elwayFav.team === result : null;
-      const histHit = postGame && histCell && favTeam && result !== 'TIE' ? favTeam === result : null;
-      const pmHit = postGame && pm && pm.favorite && result !== 'TIE' ? pm.favorite === result : null;
-      const pickHit = postGame && mine && result !== 'TIE' ? mine === result : null;
+      // Grading, once the game is final OR live (null = no verdict -- not started yet, or
+      // nothing to compare). A tie/currently-tied grades neither side right nor wrong.
+      const elwayHit = (postGame || live) && elwayFav && result !== 'TIE' ? elwayFav.team === result : null;
+      const histHit = (postGame || live) && histCell && favTeam && result !== 'TIE' ? favTeam === result : null;
+      const pmHit = (postGame || live) && pm && pm.favorite && result !== 'TIE' ? pm.favorite === result : null;
+      const pickHit = (postGame || live) && mine && result !== 'TIE' ? mine === result : null;
       const resultClass = v => v === true ? 'result-good' : v === false ? 'result-bad' : '';
-      // Once final, the line/implied-% stop mattering -- show the actual final score instead,
-      // winner bolded green.
+      // Once started, the line/implied-% stop mattering -- show the real score instead,
+      // current/final leader bolded green.
       const scorePart = (team, score) => result === team
         ? `<span class="result-good">${team} ${score}</span>` : `${team} ${score}`;
 
@@ -436,7 +446,7 @@ const Pickem = {
         <div class="game-card-body">
           <div class="stat-block">
             <div class="stat-label">Market</div>
-            ${postGame
+            ${(postGame || live)
               ? `<div>${scorePart(g.away, g.away_score)} - ${scorePart(g.home, g.home_score)}</div>`
               : `<div>${favTeam} ${pct(favTeam === g.home ? o.implied_home : o.implied_away)}</div>
                  ${move ? `<div class="muted small">opened ${signed(move.open)}</div>` : ''}`}
@@ -669,26 +679,30 @@ const Pickem = {
       const mine = (picks[g.game_id] || {}).pick;
       const mineIsDog = mine && dogTeam && mine === dogTeam;
 
-      const stateChip = g.state === 'in' ? '<span class="chip">LIVE</span>' : '';
+      const postGame = g.state === 'post';
+      const live = g.state === 'in';
+      const stateChip = live ? '<span class="chip">LIVE</span>' : '';
 
       // ATS grading is "did this side COVER the market spread," not who won SU. PUSH grades
       // no side right or wrong, same spirit as SU's TIE handling on the Moneyline cards.
+      // Live uses the exact same margin-vs-spread math against the CURRENT score -- "as of
+      // right now," not a prediction of the final cover, same as the Moneyline card's own
+      // live grading.
       let result = null;
-      if (g.state === 'post' && hasLine) {
+      if ((postGame || live) && hasLine) {
         const favMargin = (effSpread <= 0 ? 1 : -1) * (g.home_score - g.away_score);
         const edge = favMargin - Math.abs(effSpread);
         result = Math.abs(edge) < 1e-9 ? 'PUSH' : (edge > 0 ? favTeam : dogTeam);
       }
-      const postGame = g.state === 'post';
 
       const elwaySf = el ? spreadFavLabel(el.spread_home, g.home, g.away) : null;
       const prSf = sd ? spreadFavLabel(sd.spread, g.home, g.away) : null;
       const histCell = hist && hasLine ? History.lookup(hist, Math.abs(effSpread), effSpread <= 0) : null;
 
-      const elwayHit = postGame && elwaySf && result !== 'PUSH' ? elwaySf.team === result : null;
-      const histHit = postGame && histCell && favTeam && result !== 'PUSH' ? favTeam === result : null;
-      const prHit = postGame && prSf && result !== 'PUSH' ? prSf.team === result : null;
-      const pickHit = postGame && mine && result !== 'PUSH' ? mine === result : null;
+      const elwayHit = (postGame || live) && elwaySf && result !== 'PUSH' ? elwaySf.team === result : null;
+      const histHit = (postGame || live) && histCell && favTeam && result !== 'PUSH' ? favTeam === result : null;
+      const prHit = (postGame || live) && prSf && result !== 'PUSH' ? prSf.team === result : null;
+      const pickHit = (postGame || live) && mine && result !== 'PUSH' ? mine === result : null;
       const resultClass = v => v === true ? 'result-good' : v === false ? 'result-bad' : '';
 
       const ouLabel = postGame && o.total != null
@@ -726,7 +740,7 @@ const Pickem = {
         <div class="game-card-body">
           <div class="stat-block">
             <div class="stat-label">Market</div>
-            ${postGame
+            ${(postGame || live)
               ? `<div>${scorePart(g.away, g.away_score)} - ${scorePart(g.home, g.home_score)}</div>
                  <div class="muted">${ouLabel}</div>`
               : `<div>${favLabel}</div>

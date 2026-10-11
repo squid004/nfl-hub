@@ -1,8 +1,19 @@
 'use strict';
 
+// ESPN's public scoreboard API, fetched directly from the browser (not through Supabase/
+// the refresh cron) ONLY while a game is live -- confirmed CORS-open (Access-Control-Allow-
+// Origin: *) before building this, same endpoint nflhub.sources.nfl_schedule.fetch_
+// scoreboard() already uses server-side. The 10-minute refresh cron is both too slow for
+// "feels live" and, per its own comment, not even reliably on-time under GitHub's own
+// scheduling load -- this sidesteps that entirely for just the score/state fields, which
+// are the only thing that needs to move faster than everything else on the page.
+const ESPN_SCOREBOARD_URL = 'https://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard';
+const LIVE_POLL_INTERVAL_MS = 20_000;
+
 const App = {
   _ctx: null,
   _timer: null,
+  _liveTimer: null,
   // null = viewing the live/current week; a number = browsing a past week's Moneyline
   // Pick'em, ATS, Power Rankings, and Parlays. Historical Power Rankings is never affected
   // (it already covers every season, independent of any single week). Deadlines (header
@@ -124,6 +135,7 @@ const App = {
       ModelTrends.render(ctx);
       Methodology.render(ctx);
       this.renderStatus(ctx);
+      this._syncLivePolling();
     } catch (e) {
       document.getElementById('status').textContent = 'Error: ' + e.message;
     }
@@ -137,6 +149,65 @@ const App = {
       parts.push('refresh queued — running within ~10 min');
     }
     document.getElementById('status').textContent = parts.join(' · ');
+  },
+
+  // Starts/stops the fast ESPN poll based on whether anything in the CURRENTLY RENDERED
+  // week is live right now -- called after every normal reload (both the 90s timer and a
+  // manual one), so it turns itself on the moment a game kicks off and back off once the
+  // whole slate's final, without needing its own separate polling loop to watch for that.
+  _syncLivePolling() {
+    const hasLiveGame = (this._ctx?.games || []).some(g => g.state === 'in');
+    if (hasLiveGame && !this._liveTimer) {
+      this._liveTimer = setInterval(() => this._pollLiveScores(), LIVE_POLL_INTERVAL_MS);
+      this._pollLiveScores();  // don't make the first live update wait a full interval
+    } else if (!hasLiveGame && this._liveTimer) {
+      clearInterval(this._liveTimer);
+      this._liveTimer = null;
+    }
+  },
+
+  // Fetches ESPN's scoreboard directly (bypassing Supabase/the refresh cron entirely) and
+  // patches state/home_score/away_score straight onto the SAME game objects `ctx.games`
+  // already holds -- mutated in place, not replaced, so this stays in sync with whatever
+  // Pickem.render() reads without rebuilding `ctx` itself. Re-renders only the two card
+  // grids (not the full reload() pipeline -- Odds/Power/Historical/etc. don't need to
+  // refresh every 20s just because a score did), and re-checks afterward whether every
+  // game in the slate has gone final, so the fast timer turns itself back off on its own.
+  async _pollLiveScores() {
+    if (!this._ctx || !this._ctx.games.length) return;
+    try {
+      const url = `${ESPN_SCOREBOARD_URL}?seasontype=2&week=${this._ctx.week}&dates=${this._ctx.season}`;
+      const resp = await fetch(url);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const live = new Map();
+      for (const ev of data.events || []) {
+        const comp = (ev.competitions || [])[0];
+        if (!comp) continue;
+        const state = comp.status?.type?.state || 'pre';
+        const home = (comp.competitors || []).find(c => c.homeAway === 'home');
+        const away = (comp.competitors || []).find(c => c.homeAway === 'away');
+        live.set(String(ev.id), {
+          state, home_score: Number(home?.score || 0), away_score: Number(away?.score || 0),
+        });
+      }
+      let changed = false;
+      for (const g of this._ctx.games) {
+        const upd = live.get(g.game_id);
+        if (!upd) continue;
+        if (g.state !== upd.state || g.home_score !== upd.home_score || g.away_score !== upd.away_score) {
+          g.state = upd.state; g.home_score = upd.home_score; g.away_score = upd.away_score;
+          changed = true;
+        }
+      }
+      if (changed) {
+        Pickem.render(this._ctx, 'ml');
+        Pickem.render(this._ctx, 'ats');
+      }
+    } catch (e) {
+      // Best-effort, client-side, every 20s -- a dropped fetch just tries again next tick.
+    }
+    this._syncLivePolling();
   },
 
   async requestRefresh() {
