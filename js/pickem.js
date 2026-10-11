@@ -728,6 +728,11 @@ const Pickem = {
       const histHit = (postGame || live) && histCell && favTeam && result !== 'PUSH' ? favTeam === result : null;
       const prHit = (postGame || live) && prSf && result !== 'PUSH' ? prSf.team === result : null;
       const pickHit = (postGame || live) && mine && result !== 'PUSH' ? mine === result : null;
+      // A push IS a real resolution (nobody covered), not "not graded yet" -- without this
+      // the card looked identical either way. Reuses ATS's own margin-vs-spread result, NOT
+      // the raw score (that's the Moneyline card's "tied" concept, a different question --
+      // see the earlier decision not to conflate the two).
+      const pushed = result === 'PUSH';
       const resultClass = v => v === true ? 'result-good' : v === false ? 'result-bad' : '';
 
       const ouLabel = postGame && o.total != null
@@ -749,7 +754,7 @@ const Pickem = {
         final: postGame ? { homeScore: g.home_score, awayScore: g.away_score } : null,
       });
 
-      return `<div class="game-card${pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
+      return `<div class="game-card${pushed ? ' result-tie' : pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
           <span class="matchup">${g.away}${recordLabel(g.away)}${qbChip(g.away, injuries, depthChart)} @ ${g.home}${recordLabel(g.home)}${qbChip(g.home, injuries, depthChart)}</span>
