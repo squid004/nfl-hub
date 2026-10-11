@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NFL Hub</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=2026-10-11">
 </head>
 <body>
 <header>
@@ -55,19 +55,26 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/4.1.2/plotly.min.js"></script>
-<script src="js/util.js"></script>
-<script src="js/db.js"></script>
-<script src="js/deadlines.js"></script>
-<script src="js/history.js"></script>
-<script src="js/edge.js"></script>
-<script src="js/pickem.js"></script>
-<script src="js/odds.js"></script>
-<script src="js/power.js"></script>
-<script src="js/parlays.js"></script>
-<script src="js/historical.js"></script>
-<script src="js/modeltrends.js"></script>
-<script src="js/methodology.js"></script>
-<script src="js/tabs.js"></script>
-<script src="js/app.js"></script>
+<!-- Cache-busting: GitHub Pages serves every local file with Cache-Control: max-age=600
+     (confirmed via response headers, 2026-10-11) -- without a version query string, a
+     browser that already has an old copy can keep using it for up to 10 minutes after a
+     push, sometimes longer depending on its own revalidation heuristics. Bump this ONE
+     date string (search/replace across this file) whenever any js/*.js or style.css
+     actually changes, so every browser is forced to fetch the new version immediately
+     instead of waiting out its own cache. -->
+<script src="js/util.js?v=2026-10-11"></script>
+<script src="js/db.js?v=2026-10-11"></script>
+<script src="js/deadlines.js?v=2026-10-11"></script>
+<script src="js/history.js?v=2026-10-11"></script>
+<script src="js/edge.js?v=2026-10-11"></script>
+<script src="js/pickem.js?v=2026-10-11"></script>
+<script src="js/odds.js?v=2026-10-11"></script>
+<script src="js/power.js?v=2026-10-11"></script>
+<script src="js/parlays.js?v=2026-10-11"></script>
+<script src="js/historical.js?v=2026-10-11"></script>
+<script src="js/modeltrends.js?v=2026-10-11"></script>
+<script src="js/methodology.js?v=2026-10-11"></script>
+<script src="js/tabs.js?v=2026-10-11"></script>
+<script src="js/app.js?v=2026-10-11"></script>
 </body>
 </html>
