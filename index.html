@@ -5,6 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NFL Hub</title>
 <link rel="stylesheet" href="style.css?v=2026-10-11">
+
+<!-- PWA: "Add to Home Screen" install support -- manifest.json + sw.js (registered at the
+     bottom of this file). theme-color/background_color match --bg so the OS status bar and
+     the standalone splash screen are dark instead of defaulting to white. -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f1216">
+<link rel="icon" type="image/png" href="icons/favicon-32.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="NFL Hub">
 </head>
 <body>
 <header>
@@ -76,5 +87,13 @@
 <script src="js/methodology.js?v=2026-10-11"></script>
 <script src="js/tabs.js?v=2026-10-11"></script>
 <script src="js/app.js?v=2026-10-11"></script>
+<script>
+  // Registered relative to this page (not a hardcoded /nfl-hub/ path) so it resolves
+  // correctly under GitHub Pages' project-page subpath without being coupled to the repo
+  // name. sw.js living at the repo root gives it scope over the whole site by default.
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+</script>
 </body>
 </html>
