@@ -9,7 +9,7 @@
 // and rejected or put on hold -- update BOTH this file and docs/model-methodology.md in the
 // same change. This page is the user-facing mirror of that doc, not a one-time snapshot.
 // Bump LAST_UPDATED below whenever either is touched.
-const METHODOLOGY_LAST_UPDATED = '2026-10-08';
+const METHODOLOGY_LAST_UPDATED = '2026-10-11';
 
 const Methodology = {
   _built: false,
@@ -208,6 +208,7 @@ const Methodology = {
       ['2026-10-07', 'Neutral-site HFA bug fixed', '71 neutral-site games (international series, old Toronto Series) were wrongly getting home-field credit. Cumulative lift from HFA+momentum+QB+skill revised down to +10 games (62.87%&rarr;63.07%) once corrected -- smaller, but honest. 3 already-backfilled weeks self-healed in place', 'good', 'Bug fix'],
       ['2026-10-08', 'Live QB Out/Doubtful gate switched to ESPN&rsquo;s feed', 'No backtested-effect number -- changes WHEN the existing QB-health term fires this week, not what it&rsquo;s fit against. Found live: Caleb Williams (CHI, wk5) was already Out on ESPN Monday, nflverse&rsquo;s report_status was still blank Wednesday', 'good', 'Shipped (timeliness only)'],
       ['2026-10-08', 'QB-health replacement estimate: backup average, not league average', 'League EPA/play (+0.035) is mostly starters (83% of attempts) -- backups alone average -0.070. No refit needed (weight was always fit against real hindsight backup data). Hit rate flat on affected games (374&rarr;375 of 591, z=+0.21) but calibration gap widened the right way (z 0.91&rarr;1.36); net historical lift +10&rarr;+11 games (62.87%&rarr;63.09%)', 'good', 'Shipped (research/edge_signal_test_v37)'],
+      ['2026-10-11', 'Specific identified backup&rsquo;s own EPA, instead of pooled backup-average', 'ESPN depth-chart name resolution worked correctly against a real case (CHI &rarr; Bagent, 152 attempts). On the 287 games with enough sample to test (66.6% coverage), using it scored worse (176/281) than the pool average (178/281) -- 12-flip paired check confirms noise either way (z=-0.58)', 'bad', 'Not shipped (research/edge_signal_test_v38)'],
     ];
     const body = rows.map(([date, change, effect, cls, status]) => `
       <tr>
@@ -254,6 +255,7 @@ const Methodology = {
           '<strong>Linebacker unit health</strong> -- downgraded from an earlier "plausible, underpowered" read to confirmed-null under a stricter select/confirm test (select p=0.055, confirm p=0.899).',
           '<strong>QB-injury blind spot as a training-contamination problem</strong> -- tested whether backup-QB games were biasing the joint weight fit. Refitting on clean-only games barely moved the weights; scoring held-out backup-QB games with old vs. new weights was flat. The blind spot isn&rsquo;t fixable by reweighting the existing 8 stats.',
           '<strong>Single-pass opponent adjustment and full SRS/Ridge simultaneous solve</strong> -- both worse than the plain EWMA rating, likely because NFL scheduling already balances out and the market already prices in schedule strength.',
+          '<strong>Specific identified backup&rsquo;s own trailing EPA, instead of pooled backup-average</strong> -- name resolution via ESPN&rsquo;s QB depth chart worked correctly (verified live), but on the 287 historical games with enough sample to test it, using the real backup&rsquo;s own EPA scored worse (176/281) than the pooled average (178/281) -- a 12-flip paired check confirms that&rsquo;s noise, not a real effect (z=-0.58). More specific isn&rsquo;t automatically more accurate at a 50-150 attempt sample size.',
         ])}
 
         ${section('Plausible but not confirmed -- parked, worth revisiting', 'warn', [

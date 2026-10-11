@@ -189,6 +189,7 @@ graded decided game available at the time.
 | 2026-10-07 | Neutral-site HFA bug found and fixed | 71 REG-season games since 2007 (international series, old Buffalo Toronto Series) were wrongly getting home-field credit because nflverse's own `location` field mislabels some of them "Home." Cumulative lift from HFA+momentum+QB+skill revised down to 62.87%→63.07% (+10 games) once corrected. 3 already-backfilled weeks (1, 3, 4) self-healed in place via a new schema-version mechanism | **Bug fix** |
 | 2026-10-08 | Live QB Out/Doubtful gate switched to ESPN's feed for the current/upcoming week | No backtested-effect number — this changes WHEN the existing QB-health correction fires this week, not what it's fit against. Found via a live case: Caleb Williams (CHI, 2026 wk5) was already "Out" on ESPN Monday but nflverse's `report_status` was still blank Wednesday, so the live card's QB chip and the model's QB-health term disagreed | **Shipped** — timeliness fix for the live prediction only; every backtest/fit/historical path stays on nflverse exclusively |
 | 2026-10-08 | QB-health "replacement" estimate switched from league average to backup average (v37) | League-wide EPA/play (+0.035) is dominated by starters (83% of all attempts) — backup-only appearances actually average **−0.070**, a ~10x-larger, opposite-sign gap. The old estimate made a below-average-but-real starter (Caleb Williams, career EPA ≈ −0.003) look like an UPGRADE over his own backup once hurt. Walk-forward on the existing `QB_QUALITY_GAP_WEIGHT` (no refit needed — that weight was always fit against real hindsight backup performance, never this estimate): hit rate flat on the affected subset (374→375 of 591, 23 total flips, z=+0.21, same "statistically flat" pattern as every other QB/skill check) but the calibration gap (confidence reduced more on misses than hits) widened in the right direction (z 0.91→1.36, neither significant alone). Didn't regress anything; fixed a conceptually wrong estimator with real data behind the replacement | **Shipped** — research/edge_signal_test_v37_qb_backup_baseline.py |
+| 2026-10-11 | Specific identified backup's own trailing EPA, instead of pooled backup-average (v38) | Name resolution via ESPN's QB depth chart worked correctly against a real case (CHI → Bagent). On the 287 historical games where a real backup would've had ≥50 attempts (66.6% coverage), using their own EPA scored *worse* (176/281) than the pool average (178/281); 12-flip paired check confirms noise, not a real effect (z=-0.58) | Not shipped — reverted after backtesting; see §3.1 |
 
 **Net effect across the whole timeline**: the model's backtested SU hit rate moved from
 **62.87%** (pure 8-stat composite, no corrections) to **63.09%** (current, with QB/skill
@@ -228,6 +229,19 @@ revisiting.
 - **Single-pass opponent adjustment and full SRS/Ridge simultaneous solve** (v5/v6,
   2026-09-30) — both *worse* than the plain EWMA rating, likely because NFL scheduling
   already balances out and the market already prices in schedule strength.
+- **Specific identified backup's own trailing EPA, instead of the pooled backup-average**
+  (v38, 2026-10-11) — the obvious next step after v38's own predecessor (v37, backup-average
+  fix): resolve WHICH backup via ESPN's QB depth chart and use their own number when they
+  have a real track record (tried ≥50 attempts). Name resolution itself worked correctly
+  against a real live case (CHI → Tyson Bagent, 152 attempts, correctly skipping Caleb
+  Williams still listed first). The backtest killed it anyway: on the 287 historical games
+  where a real backup would have had enough sample (66.6% of affected games), using their
+  own EPA scored *worse* (176/281, 62.63%) than the pooled average (178/281, 63.35%), and
+  the 12-flip paired check confirms that's noise either direction (z=-0.58), not a real
+  effect. A specific player's own EPA over 50-150 attempts is noisier than the SAME average
+  pooled over 46,000 backup attempts — more specific isn't automatically more accurate at
+  this sample size. Shrinking the specific number toward the pool average by sample size,
+  instead of using it outright, might recover something — not attempted.
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
