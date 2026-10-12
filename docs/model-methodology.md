@@ -33,6 +33,12 @@ Every prediction starts from the same 8 team-level stats, computed per team per 
   the underlying play-by-play goes back to 1999; see `docs/nflverse-data-catalog.md`).
 - **Display scale**: the 4 EPA stats are shown 0–100, anchored to the best/worst value *ever
   recorded* across the full dataset, so a weak season's best team doesn't read as inflated.
+- **EPA distribution tiers** (Power Rankings tab, display only — not folded into the
+  composite): every team on each 0–100 EPA stat falls into one of five groups — Elite/Weak
+  when a real gap (not just rank) cuts a group off from the rest, however small; otherwise
+  Above/Below average if meaningfully off the mean, else just Average. This catches a
+  cluster of similarly-bad teams that's nonetheless well below average as a real group,
+  instead of it disappearing into an undifferentiated middle.
 
 ### 1.2 The composite Power Score
 
@@ -56,6 +62,11 @@ for the closing market spread alone — this does not beat the market at picking
 Shown as descriptive context (Power Rankings tab, college-poll-style display), not a
 betting edge.
 
+**Historical Power Rankings tab** uses the same formula but each team's simple full-season
+average, not the live tab's EWMA rolling rating — every team-season is already fully known,
+so there's no "as of this week" to track. Z-scored against every team-season at once so
+different eras compare directly.
+
 ### 1.3 `delta`: the per-matchup prediction
 
 For one matchup, each stat's home-minus-away difference is standardized (z-scored against
@@ -65,8 +76,8 @@ graded dataset, none of them touch `POWER_WEIGHTS` or the 8-stat composite itsel
 
 | Correction | Weight | What it captures | Hit-rate mover? |
 |---|---|---|---|
-| QB health (EPA) | `QB_QUALITY_GAP_WEIGHT = -0.8818` | Trailing EPA/dropback gap between a team's **current primary** (most starts in the trailing 5 games, ties broken toward the more recent start) and whoever's actually playing, **decayed** by `QB_GAP_DECAY_RATE = 0.4` for each additional straight game the same non-primary passer has started — see below | No (calibration only) |
-| QB health (fantasy) | `QB_FANTASY_GAP_WEIGHT = -0.0429` | Same gap/decay structure as above, but sourced from FantasyPros' own weekly QB projections instead of trailing EPA — a forward-looking, weekly-refreshed measure, additive on top of the EPA gap, not a replacement — see below | No (calibration only) |
+| QB health (EPA) | `QB_QUALITY_GAP_WEIGHT = -0.8818` | Trailing EPA/dropback gap between a team's **current primary** (most starts in the trailing 5 games, ties broken toward the more recent start) and whoever's actually playing, **decayed** by `QB_GAP_DECAY_RATE = 0.4` for each additional straight game the same non-primary passer has started. Active only as the **fallback** when FantasyPros has no data for that week — never summed with the fantasy gap below — see below | No (calibration only) |
+| QB health (fantasy) | `QB_FANTASY_GAP_WEIGHT = -0.0429` | Same gap/decay structure as above, but sourced from FantasyPros' own weekly QB projections instead of trailing EPA. **Switches in** per game-week whenever that data is available, replacing the EPA gap entirely for that week rather than adding to it — see below | No (calibration only) |
 | Skill-position health | `SKILL_EPA_OUT_WEIGHT = -0.0363` | Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB | No (calibration only) |
 | Home-field advantage | `HFA_WEIGHT = 0.9169` | Trailing-5-season home win rate, shrunk toward all-time average (`HFA_SHRINKAGE_K = 100`) | **Yes** |
 | Momentum | `MOMENTUM_WEIGHT = 0.0262` | Signed current win/loss streak, reset at season boundaries and ties | **Yes** |
@@ -417,8 +428,8 @@ FIRST_SEASON = 2007                FIRST_INJURY_SEASON = 2009
 EWMA_ALPHA = 0.2                   SEASON_PRIOR_GAMES = 5
 WP_LO, WP_HI = 0.05, 0.95          HFA_SHRINKAGE_K = 100
 
-QB_QUALITY_GAP_WEIGHT  = -0.8818   (calibration only)
-QB_FANTASY_GAP_WEIGHT  = -0.0429   (calibration only, additive on top of the EPA gap)
+QB_QUALITY_GAP_WEIGHT  = -0.8818   (calibration only, fallback when FantasyPros has no data that week)
+QB_FANTASY_GAP_WEIGHT  = -0.0429   (calibration only, switches in per week INSTEAD of the EPA gap, never summed with it)
 SKILL_EPA_OUT_WEIGHT   = -0.0363   (calibration only)
 PRIMARY_WINDOW         = 5 games   (trailing-window plurality, ties -> more recent start)
 QB_GAP_DECAY_RATE      = 0.4       (shrinks the gap each straight game a backup keeps starting)

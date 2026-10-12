@@ -57,18 +57,9 @@ const Historical = {
       el.innerHTML = `
         <div class="panel">
           <h2>Historical Power Rankings</h2>
-          <p class="muted small">Every team-season from every fully completed regular season on
-            record (${firstSeason}-${lastSeason}, ${all.length} team-seasons), ranked by the same
-            composite Power Score formula as the live Power Rankings tab -- but each team's own
-            full-season average rather than an EWMA-decayed rolling rating, and z-scored against
-            every team-season ever at once (not just that year's 32 teams), so a 2023 team and a
-            2007 team land on the exact same scale. SOS is each team's opponents' own season-long
-            Power Scores averaged together -- safe to compute directly here since full-season
-            scores are already fully known, unlike the live tab's point-in-time rating. Team codes
-            reflect the team that season (e.g. "STL" through 2015, "LAR" from 2016), not today's
-            rebrand. Showing the top ${HIST_DISPLAY_CAP} of ${all.length} by the active sort —
-            click a column to re-sort the WHOLE dataset, e.g. sort Pass Defense ascending to
-            surface the worst pass defenses of the era, not just this week's.</p>
+          <p class="muted small">${firstSeason}-${lastSeason}, ${all.length} team-seasons.
+            Showing the top ${HIST_DISPLAY_CAP} by the active sort — click a column to
+            re-sort the whole dataset.</p>
           <div id="historical-table-wrap"></div>
         </div>`;
     }

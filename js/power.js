@@ -222,14 +222,6 @@ const Power = {
     el.innerHTML = `
       <div class="panel">
         <h2>Power Rankings</h2>
-        <p class="muted small">${meta ? esc(meta.method) : 'Composite of 8 stats, garbage time excluded.'}
-          Power Score, SOS, and the 4 EPA columns are shown on a 0-100 scale anchored to the
-          best/worst ever recorded across the full 2007-present dataset (not just this season's
-          32 teams), so higher is always better and a weak season's best team won't look
-          inflated. Points and turnover columns show the actual per-game average for the window
-          evaluated. The 4 EPA columns are colored by the same Elite/Above/Average/Below/Weak
-          groups as the distribution panel below -- hover a row to highlight that team's dot
-          on each strip. Click a column header to sort.</p>
         ${meta ? `<details class="power-methodology">
           <summary class="muted small">Weights used (click to expand)</summary>
           <ul class="power-weights">${weightsList}</ul>
@@ -435,18 +427,6 @@ const Power = {
     return `
       <div class="panel">
         <h2>EPA distribution &amp; tiers</h2>
-        <p class="muted small">Every team's 0-100 EPA score (same scale as the table above),
-          positioned on a line so clustering is visible at a glance, not just rank. Every team
-          falls into one of five groups: <strong class="result-good">Elite</strong>/
-          <strong class="result-bad">Weak</strong> when a real gap (not just rank) cuts a group
-          off from everyone else, however small; otherwise
-          <strong class="mild-good">Above</strong>/<strong class="mild-bad">Below average</strong>
-          if it's meaningfully off the mean, or just <strong class="muted">Average</strong> if
-          it's within a few points of it -- so a cluster of similarly-bad teams that's
-          nonetheless well below average still shows up as a real group instead of
-          disappearing into an undifferentiated middle. Each group's own cutoff value is
-          listed below it instead of its team list -- hover a team in the table above to find
-          it here. The thin vertical line is the league average.</p>
         ${metrics}
       </div>`;
   },

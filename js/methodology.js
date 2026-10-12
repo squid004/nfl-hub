@@ -72,6 +72,13 @@ const Methodology = {
           <li><strong>Display scale</strong>: the 4 EPA stats show 0-100, anchored to the
             best/worst value EVER recorded across the whole dataset, so a weak season's best
             team doesn't read as inflated.</li>
+          <li><strong>EPA distribution tiers</strong> (Power Rankings tab): every team on
+            each 0-100 EPA stat falls into one of five groups -- Elite/Weak when a real gap
+            (not just rank) cuts a group off from the rest, however small; otherwise Above/
+            Below average if meaningfully off the mean, else just Average. Catches a cluster
+            of similarly-bad teams that's nonetheless well below average as a real group,
+            instead of it disappearing into an undifferentiated middle. Display only, not
+            folded into the composite itself.</li>
         </ul>
 
         <h3>2. The composite Power Score</h3>
@@ -84,6 +91,10 @@ const Methodology = {
         <p class="lean">Walk-forward AUC 0.6746 vs. 0.7224 for the closing market spread
           alone -- <strong>this does not beat the market</strong> at picking winners. Shown as
           descriptive context (Power Rankings tab), not a betting edge.</p>
+        <p class="small"><strong>Historical Power Rankings tab</strong> uses the same formula
+          but each team's simple full-season average, not the live tab's EWMA rolling rating
+          -- every team-season is already fully known, so there's no "as of this week" to
+          track. Z-scored against every team-season at once so different eras compare directly.</p>
 
         <h3>3. delta: the per-matchup prediction</h3>
         <p class="small">Four corrections are added on top of the raw composite
@@ -92,8 +103,8 @@ const Methodology = {
         <table>
           <thead><tr><th>Correction</th><th>Weight</th><th>Captures</th><th>Moves hit rate?</th></tr></thead>
           <tbody>
-            <tr><td>QB health (EPA)</td><td class="num">-0.8818</td><td>Trailing EPA/dropback gap, current primary (most starts in trailing 5 games) vs. whoever's actually playing, decayed 0.4/game for each straight start by the same backup (live games: a backup-average estimate, not league average)</td><td><span class="chip bad">No</span> (calibration)</td></tr>
-            <tr><td>QB health (fantasy)</td><td class="num">-0.0429</td><td>Same gap/decay structure, sourced from FantasyPros' own weekly QB projections instead of EPA -- additive on top of the EPA gap, not a replacement</td><td><span class="chip bad">No</span> (calibration)</td></tr>
+            <tr><td>QB health (EPA)</td><td class="num">-0.8818</td><td>Trailing EPA/dropback gap, current primary (most starts in trailing 5 games) vs. whoever's actually playing, decayed 0.4/game for each straight start by the same backup (live games: a backup-average estimate, not league average). Active only as the FALLBACK when FantasyPros has no data for that week -- never summed with the fantasy gap below</td><td><span class="chip bad">No</span> (calibration)</td></tr>
+            <tr><td>QB health (fantasy)</td><td class="num">-0.0429</td><td>Same gap/decay structure, sourced from FantasyPros' own weekly QB projections instead of EPA. SWITCHES in per game-week whenever that data is available, replacing the EPA gap entirely for that week rather than adding to it</td><td><span class="chip bad">No</span> (calibration)</td></tr>
             <tr><td>Skill-position health</td><td class="num">-0.0363</td><td>Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB</td><td><span class="chip bad">No</span> (calibration)</td></tr>
             <tr><td>Home-field advantage</td><td class="num">+0.9169</td><td>Trailing-5-season home win rate, shrunk toward all-time average</td><td><span class="chip good">Yes</span></td></tr>
             <tr><td>Momentum</td><td class="num">+0.0262</td><td>Signed current win/loss streak, reset at season boundaries/ties</td><td><span class="chip good">Yes</span></td></tr>
@@ -346,8 +357,8 @@ const Methodology = {
             <tr><td>FIRST_SEASON</td><td class="num">2007</td><td>FIRST_INJURY_SEASON</td><td class="num">2009</td></tr>
             <tr><td>EWMA_ALPHA</td><td class="num">0.2</td><td>SEASON_PRIOR_GAMES</td><td class="num">5</td></tr>
             <tr><td>WP_LO / WP_HI</td><td class="num">0.05 / 0.95</td><td>HFA_SHRINKAGE_K</td><td class="num">100</td></tr>
-            <tr><td>QB_QUALITY_GAP_WEIGHT</td><td class="num">-0.8818</td><td class="muted small">calibration only</td><td></td></tr>
-            <tr><td>QB_FANTASY_GAP_WEIGHT</td><td class="num">-0.0429</td><td class="muted small">calibration only, additive on top of the EPA gap</td><td></td></tr>
+            <tr><td>QB_QUALITY_GAP_WEIGHT</td><td class="num">-0.8818</td><td class="muted small">calibration only, fallback when FantasyPros has no data that week</td><td></td></tr>
+            <tr><td>QB_FANTASY_GAP_WEIGHT</td><td class="num">-0.0429</td><td class="muted small">calibration only, switches in per week INSTEAD of the EPA gap, never summed with it</td><td></td></tr>
             <tr><td>SKILL_EPA_OUT_WEIGHT</td><td class="num">-0.0363</td><td class="muted small">calibration only</td><td></td></tr>
             <tr><td>HFA_WEIGHT</td><td class="num">+0.9169</td><td class="muted small">moves hit rate</td><td></td></tr>
             <tr><td>MOMENTUM_WEIGHT</td><td class="num">+0.0262</td><td class="muted small">moves hit rate</td><td></td></tr>
