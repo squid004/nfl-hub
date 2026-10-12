@@ -77,9 +77,6 @@ class NtfyCfg:
     topic: str
     priority: str
     token: str
-    alert_email: str  # verified once in the ntfy web app's Account section (public ntfy.sh
-    # requires this before it'll forward); only pipeline-health alerts pass this to
-    # notify.push(), not routine deadline reminders -- see that function's own docstring.
 
 
 @dataclass
@@ -162,7 +159,6 @@ def get_config() -> Config:
             topic=os.environ.get("NTFY_TOPIC", ""),
             priority=os.environ.get("NTFY_PRIORITY", "default"),
             token=os.environ.get("NTFY_TOKEN", ""),
-            alert_email=os.environ.get("ALERT_EMAIL", ""),
         ),
         reminders=RemindersCfg(
             offsets_hours=_floats("REMINDER_OFFSETS", [24, 3, 0.75]),

@@ -145,6 +145,20 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return {}; }
   },
 
+  // { checked_at, errors: [...], ok } for the LATEST refresh run, plus a rolling log of just
+  // the runs that had errors ({ checked_at, errors }[], newest last, capped server-side at
+  // PIPELINE_HEALTH_LOG_MAX) -- written every refresh_all() run by nflhub/refresh.py. No
+  // push/email; this is the page a user checks instead of being notified.
+  async pipelineHealth() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'pipeline_health').maybeSingle();
+    let current = null;
+    if (data) { try { current = JSON.parse(data.value); } catch { current = null; } }
+    const { data: logData } = await this._c().from('kv').select('value').eq('key', 'pipeline_health_log').maybeSingle();
+    let log = [];
+    if (logData) { try { log = JSON.parse(logData.value); } catch { log = []; } }
+    return { current, log };
+  },
+
   // { teams: {TEAM: {rush_off_epa, pass_off_epa, rush_def_epa_allowed, pass_def_epa_allowed}},
   //   matchups: {"AWAY@HOME": {home, away, home_ratings, away_ratings, callouts: [...]}} },
   // written by nflhub.refresh (garbage-time-excluded EPA ratings; see nflhub/sources/team_ratings.py).

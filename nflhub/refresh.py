@@ -7,7 +7,7 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Any
 
-from . import notify, optimizer, store
+from . import optimizer, store
 from .config import Config, get_config
 from .sources import (
     actionnetwork,
@@ -27,6 +27,8 @@ from .sources import (
 from .sources.edge_teams import UnknownTeamError, normalize_team
 
 log = logging.getLogger(__name__)
+
+PIPELINE_HEALTH_LOG_MAX = 50  # keep the last N failed runs, oldest dropped
 
 
 def _rostered_names(week: int) -> set[str]:
@@ -308,32 +310,22 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("bookkeeping failed: %s", exc)
 
-    # 6. pipeline health: one record of this run's per-source errors for a future health
-    # view to read directly, plus a push/email alert -- but only once per distinct error
-    # set per day, not every 10-minute cron tick, or a single lingering issue would spam.
-    # Clearing (no errors this run) never alerts; if the SAME problem reappears on a LATER
-    # day the date half of the signature differs, so it alerts again rather than staying
-    # silent forever once something's gone wrong once.
+    # 6. pipeline health: one record of this run's per-source errors, appended to a rolling
+    # log, for the Pipeline Health tab to read directly -- no push/email, just a page to check.
     try:
+        now_iso = datetime.now(timezone.utc).isoformat()
         store.kv_set("pipeline_health", json.dumps({
-            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "checked_at": now_iso,
             "errors": summary["errors"],
             "ok": not summary["errors"],
         }))
         if summary["errors"]:
-            today = date.today().isoformat()
-            error_sig = "|".join(sorted(summary["errors"]))
-            last_sig, _, last_date = (store.kv_get("last_alert_signature") or "").partition("@@")
-            if not (last_sig == error_sig and last_date == today):
-                notify.push(
-                    cfg, "NFL Hub pipeline issue",
-                    "\n".join(summary["errors"][:10]),
-                    tags="warning", priority="high",
-                    email=cfg.ntfy.alert_email or None,
-                )
-                store.kv_set("last_alert_signature", f"{error_sig}@@{today}")
-    except Exception as exc:  # noqa: BLE001 -- never let the alerting step itself break refresh
-        log.warning("pipeline-health alert failed: %s", exc)
+            log_raw = store.kv_get("pipeline_health_log")
+            log_rows = json.loads(log_raw) if log_raw else []
+            log_rows.append({"checked_at": now_iso, "errors": summary["errors"]})
+            store.kv_set("pipeline_health_log", json.dumps(log_rows[-PIPELINE_HEALTH_LOG_MAX:]))
+    except Exception as exc:  # noqa: BLE001 -- never let health bookkeeping break refresh
+        log.warning("pipeline-health bookkeeping failed: %s", exc)
 
     return summary
 
