@@ -204,8 +204,7 @@ const History = {
       });
     }
 
-    let totN = 0, totPrimary = 0, totPicked = 0, totYourDog = 0;
-    const binStats = [];
+    let totN = 0, totPrimary = 0;
     const flaggedIds = new Set();
     const rankByGame = {}; // gameId -> { rank, n, taken, lab } — every game in its bucket, not just flagged
     const bins = d.buckets.map(lab => {
@@ -219,15 +218,11 @@ const History = {
         if (x.taken) flaggedIds.add(x.gameId);
         rankByGame[x.gameId] = { rank: x.rank, n, taken: x.taken, lab };
       });
-      const pickedN = gs.filter(x => x.picked).length;
-      const yourDog = gs.filter(x => x.picked && x.picked === x.dog).length;
       totN += n; totPrimary += primary;
-      totPicked += pickedN; totYourDog += yourDog;
-      binStats.push({ lab, n, take, pickedN, yourDog });
       return { lab, gs, n, primary, take };
     });
 
-    return { bins, binStats, totN, totPrimary, totPicked, totYourDog, flaggedIds, rankByGame };
+    return { bins, totN, totPrimary, flaggedIds, rankByGame };
   },
 
   // "budget": this week's games grouped by spread bin, with how many dog picks to make.
@@ -238,7 +233,7 @@ const History = {
     const budget = this.computeBudget(ctx, mode);
     if (!budget) { host.innerHTML = ''; return; }
     const F = M.field;
-    const { bins, binStats, totN, totPrimary, totPicked, totYourDog } = budget;
+    const { bins, totN, totPrimary } = budget;
 
     const rows = bins.map(({ lab, gs, n, primary, take }) => {
       // Sorted by rankV already (most live first), so rank order = list order.
@@ -261,32 +256,6 @@ const History = {
 
     const totRate = totN ? Math.round(totPrimary / totN * 100) : 0;
 
-    let cmp = '';
-    if (totPicked > 0) {
-      const budget = Math.round(totPrimary);
-      const crows = binStats.filter(b => b.n).map(b => {
-        const dlt = b.yourDog - b.take;
-        const tag = dlt === 0 ? '<span class="chip good">on budget</span>'
-          : dlt > 0 ? `<span class="chip warn">+${dlt}</span>`
-          : `<span class="chip">${dlt}</span>`;
-        return `<tr><td>${b.lab}</td><td class="num">${b.pickedN}/${b.n}</td>
-          <td class="num">${b.yourDog}</td><td class="num">${b.take}</td><td>${tag}</td></tr>`;
-      }).join('');
-      const dlt = totYourDog - budget;
-      const w = M.dogWord;
-      const verdict = dlt === 0 ? 'matches the budget'
-        : dlt > 0 ? `${dlt} more ${w}${dlt > 1 ? 's' : ''} than the budget — aggressive`
-        : `${-dlt} fewer ${w}${-dlt > 1 ? 's' : ''} than the budget — chalk-heavy`;
-      cmp = `
-        <h3 style="margin-top:16px;">Your picks vs. the budget</h3>
-        <p class="muted">${totPicked} of ${totN} games picked &middot;
-          ${totYourDog} ${w} pick${totYourDog === 1 ? '' : 's'} &middot; budget ~${budget}
-          &rarr; <strong>${verdict}</strong>.</p>
-        <table><thead><tr><th>Spread bin</th><th class="num">Picked</th>
-          <th class="num">Your ${w}s</th><th class="num">Budget</th><th>vs budget</th></tr></thead>
-          <tbody>${crows}</tbody></table>`;
-    }
-
     const locked = (ctx.bSnap || []).find(r => r.mode === mode && r.bin === 'TOTAL');
     const lockLine = locked
       ? `<p class="muted">Locked for the record: <strong>take ${locked.suggested}</strong>
@@ -296,11 +265,6 @@ const History = {
     host.innerHTML = `
       <div class="panel">
         <h2>${M.budgetTitle} by spread bin &mdash; Week ${ctx.week}</h2>
-        <p class="muted">This week's games grouped by the favorite's spread for display —
-          <strong>${M.budgetVerb}</strong> sums each game's own ${M.dogWord} rate from a
-          smooth curve fit to spread size (not a shared bucket average), with a small
-          correction at key numbers 3/7 where NFL final margins cluster. The ✓ marks the
-          games it ranks most live within their bin, in order. Dogs tagged H (home) / A (away).</p>
         ${lockLine}
         <table><thead><tr><th>Spread bin</th><th class="num">Games</th>
           <th class="num">${M.budgetCol}</th><th class="num">${M.budgetVerb}</th><th>${M.fadeLabel}</th></tr></thead>
@@ -308,7 +272,6 @@ const History = {
             <tr class="tot"><td>Total</td><td class="num">${totN}</td>
               <td class="num">${totRate}%</td><td class="num"><strong>${Math.round(totPrimary)}</strong></td><td></td></tr>
           </tbody></table>
-        ${cmp}
         ${mode === 'ml' ? chalkReminderHtml(ctx) : ''}
       </div>`;
   },

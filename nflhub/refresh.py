@@ -7,7 +7,7 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Any
 
-from . import optimizer, store
+from . import optimizer, store, util
 from .config import Config, get_config
 from .sources import (
     actionnetwork,
@@ -249,39 +249,57 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         log.exception("historical power rankings refresh failed")
         summary["errors"].append(f"historical_power: {exc}")
 
-    # 4c. freeze this week's "take N" suggestion until first kickoff (year-end analysis)
+    # 4c. freeze each game's "take N" contribution once ITS OWN calendar day's earliest
+    # kickoff passes (year-end analysis) -- a Thursday night game locks only the Thursday
+    # game(s); Sunday/Monday games keep moving on live odds/ELWAY right up until THEIR OWN
+    # day's first kickoff. Grouped by local calendar date (cfg.timezone) so this works the
+    # same for any day of the week without hardcoding which weekdays NFL games fall on.
     try:
         dist_raw = store.kv_get("hist_distribution")
         if dist_raw and games:
             dist = json.loads(dist_raw)
-            first = None
+            now = datetime.now(timezone.utc)
+            local_kickoff_by_game: dict[str, datetime] = {}
+            earliest_by_date: dict[Any, datetime] = {}
             for g in games:
                 k = g.get("kickoff")
                 if not k:
                     continue
                 try:
-                    dt = datetime.fromisoformat(k)
+                    local_dt = util.to_local(k, cfg.timezone)
                 except ValueError:
                     continue
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                first = dt if first is None or dt < first else first
-            locked = first is not None and first <= datetime.now(timezone.utc)
-            if not locked or not store.has_budget_snapshot(week):
-                # Prefer the cross-book average spread (Action Network, several real
-                # books) over the single DK-via-ESPN line for bucket assignment — more
-                # robust to one book's stale/outlier number, especially near a bucket
-                # boundary. Falls back to the existing spread for any game Action
-                # Network didn't cover (already final, alias mismatch, etc).
-                budget_odds: dict[str, Any] = {}
-                for gid, o in wk_odds.items():
-                    avg_spread = best_price.get(gid, {}).get("avg_spread_home")
-                    budget_odds[gid] = {**o, "spread": avg_spread if avg_spread is not None else o.get("spread")}
-                for mode, rows in history.week_budget(dist, games, budget_odds, elway_rows).items():
-                    store.upsert_budget_snapshot(week, mode, rows)
-                summary["budget_snapshot"] = "written"
-            else:
-                summary["budget_snapshot"] = "locked"
+                if local_dt is None:
+                    continue
+                local_kickoff_by_game[g["game_id"]] = local_dt
+                day = local_dt.date()
+                if day not in earliest_by_date or local_dt < earliest_by_date[day]:
+                    earliest_by_date[day] = local_dt
+            locked_ids = {
+                gid for gid, dt in local_kickoff_by_game.items()
+                if earliest_by_date[dt.date()] <= now
+            }
+
+            prev_frozen = store.budget_snapshot_games(week)
+            frozen_for_history = {
+                mode: {gid: g for gid, g in prev_frozen.get(mode, {}).items() if gid in locked_ids}
+                for mode in ("ml", "ats")
+            }
+
+            # Prefer the cross-book average spread (Action Network, several real
+            # books) over the single DK-via-ESPN line for bucket assignment — more
+            # robust to one book's stale/outlier number, especially near a bucket
+            # boundary. Falls back to the existing spread for any game Action
+            # Network didn't cover (already final, alias mismatch, etc). Only matters
+            # for still-unlocked games -- a locked game is carried forward from
+            # frozen_for_history above and never touches live odds again.
+            budget_odds: dict[str, Any] = {}
+            for gid, o in wk_odds.items():
+                avg_spread = best_price.get(gid, {}).get("avg_spread_home")
+                budget_odds[gid] = {**o, "spread": avg_spread if avg_spread is not None else o.get("spread")}
+            for mode, rows in history.week_budget(dist, games, budget_odds, elway_rows, frozen_for_history).items():
+                store.upsert_budget_snapshot(week, mode, rows)
+            summary["budget_snapshot"] = f"written ({len(locked_ids)} game(s) locked)"
     except Exception as exc:  # noqa: BLE001 - best-effort analytics; don't fail the run
         log.warning("budget snapshot skipped: %s", exc)
         summary["budget_snapshot"] = f"skipped ({exc})"

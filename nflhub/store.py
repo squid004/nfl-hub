@@ -215,8 +215,19 @@ def get_pickem_picks(week: int) -> dict[str, dict[str, Any]]:
 
 # --- weekly budget snapshot (end-of-season analysis) ----------------------
 
-def has_budget_snapshot(week: int) -> bool:
-    return bool(_get("budget_snapshot", {"week": f"eq.{week}", "limit": 1}))
+def budget_snapshot_games(week: int) -> dict[str, dict[str, dict]]:
+    """mode -> {game_id: that game's last-stored per-game dict}, from whatever's already
+    saved for this week. Used to carry a LOCKED game's row forward unchanged across
+    refreshes (nflhub.refresh's step 4c decides which game_ids count as locked; this just
+    hands back their frozen values) while every other game keeps recomputing fresh."""
+    rows = _get("budget_snapshot", {"week": f"eq.{week}"})
+    out: dict[str, dict[str, dict]] = {}
+    for r in rows:
+        mode_map = out.setdefault(r["mode"], {})
+        for g in r.get("games") or []:
+            if g.get("game_id"):
+                mode_map[g["game_id"]] = g
+    return out
 
 
 def upsert_budget_snapshot(week: int, mode: str, rows: list[dict[str, Any]]) -> None:

@@ -342,6 +342,7 @@ def _predict_signed(dist: dict, home_fav_side: bool, signed_margin: float, field
 def week_budget(
     dist: dict, games: list[dict], odds_map: dict[str, dict],
     elway_map: dict[str, dict] | None = None,
+    frozen_games: dict[str, dict[str, dict]] | None = None,
 ) -> dict[str, list[dict]]:
     """Per spread-bin "take N dogs" suggestion for this week, for both modes.
 
@@ -365,13 +366,32 @@ def week_budget(
     zero all landed on the identical clamped value, silently re-tied and broken by list
     order (exactly the arbitrary-order problem this ranking exists to avoid). ELWAY only
     shifts the ranking, never the "how many" count.
+
+    `frozen_games` (mode -> {game_id: that game's last-stored per-game dict}): a game whose
+    own calendar day has already started is passed in here by the caller (nflhub.refresh's
+    step 4c decides locking per game, by calendar day, not per week) instead of appearing
+    in `odds_map`/`elway_map` -- its bin/fav/dog/v/rank_v are reused exactly as stored
+    instead of being recomputed from today's live odds, so a Thursday night game can't
+    drift after it locks while Sunday/Monday games -- not yet started -- keep moving on
+    live data right up until THEIR OWN day's first kickoff. A bin's "how many to take"
+    total still recomputes every run from whatever mix of frozen and live games it holds.
     """
     elway_map = elway_map or {}
+    frozen_games = frozen_games or {}
     out: dict[str, list[dict]] = {}
     for mode, field in (("ml", "su"), ("ats", "ats")):
+        frozen_for_mode = frozen_games.get(mode, {})
         by_bin: dict[str, list[dict]] = {lab: [] for lab in BUCKET_LABELS}
         for g in games:
-            o = odds_map.get(g["game_id"])
+            gid = g["game_id"]
+            frozen = frozen_for_mode.get(gid)
+            if frozen is not None:
+                lab = frozen.get("bin")
+                if lab in by_bin:
+                    by_bin[lab].append(dict(frozen))
+                continue
+
+            o = odds_map.get(gid)
             if not o or o.get("spread") is None:
                 continue
             sp = float(o["spread"])
@@ -384,7 +404,7 @@ def week_budget(
             # team (positive = favored by that many points; can go negative, meaning
             # that team is now the modeled underdog).
             eff_margin = abs(sp)
-            el = elway_map.get(g["game_id"])
+            el = elway_map.get(gid)
             if el and el.get("spread_home") is not None:
                 elway_fav_margin = -el["spread_home"] if home_fav else el["spread_home"]
                 eff_margin = (1 - ELWAY_BLEND_WEIGHT) * abs(sp) + ELWAY_BLEND_WEIGHT * elway_fav_margin
@@ -402,27 +422,26 @@ def week_budget(
                 continue
             hist_cell = _lookup(dist, disp_spread, home_fav) or {}
             by_bin[lab].append({
-                "game_id": g["game_id"],
+                "game_id": gid,
+                "bin": lab,
                 "fav": g["home"] if home_fav else g["away"],
                 "dog": g["away"] if home_fav else g["home"],
                 "dog_home": not home_fav,
                 "hist_su": hist_cell.get("su"),
                 "hist_ats": hist_cell.get("ats"),
-                "_v": v,
-                "_rank_v": rank_v,
+                "v": v,
+                "rank_v": rank_v,
             })
         rows: list[dict] = []
         tot_n = 0
         tot_exp = 0.0
         for lab in BUCKET_LABELS:
-            gs = sorted(by_bin[lab], key=lambda x: x["_rank_v"])  # most live dog (lowest fav prob) first
+            gs = sorted(by_bin[lab], key=lambda x: x["rank_v"])  # most live dog (lowest fav prob) first
             n = len(gs)
-            exp = sum(1 - x["_v"] for x in gs)
+            exp = sum(1 - x["v"] for x in gs)
             take = round(exp)
             for i, x in enumerate(gs):
                 x["flagged"] = i < take
-                x.pop("_v")
-                x.pop("_rank_v")
             tot_n += n
             tot_exp += exp
             rows.append({
