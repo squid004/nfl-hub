@@ -13,7 +13,15 @@ log = logging.getLogger(__name__)
 
 
 def push(cfg: Config, title: str, message: str, *, tags: str = "", priority: str | None = None,
-         click: str | None = None) -> bool:
+         click: str | None = None, email: str | None = None) -> bool:
+    """`email` (optional): ntfy.sh's own X-Email header forwards this push to an email
+    address too, on top of the regular app/browser notification -- verified live against
+    ntfy's docs (https://docs.ntfy.sh/publish/#e-mail-notifications). On the public ntfy.sh
+    server this requires the recipient email to be verified once in the ntfy web app's
+    Account section first (anti-abuse measure); a self-hosted server needs its own SMTP
+    config instead. Passed explicitly per-call rather than defaulting from config so routine
+    reminders don't ALSO email every time -- only call sites that want email (pipeline-health
+    alerts) pass it."""
     if not cfg.ntfy.topic or cfg.ntfy.topic.startswith("CHANGE-ME"):
         log.error("ntfy topic not configured; set NTFY_TOPIC")
         return False
@@ -26,6 +34,8 @@ def push(cfg: Config, title: str, message: str, *, tags: str = "", priority: str
         headers["Tags"] = tags
     if click:
         headers["Click"] = click
+    if email:
+        headers["Email"] = email
     if cfg.ntfy.token:
         headers["Authorization"] = f"Bearer {cfg.ntfy.token}"
     try:

@@ -186,6 +186,18 @@ def main():
     print(f"CONFIRM set: AUC({best})={auc_confirm_best:.4f} vs AUC(epa_gap, shipped baseline)={auc_confirm_epa:.4f}  "
           f"(delta {auc_confirm_best-auc_confirm_epa:+.4f})")
 
+    # The question that actually matters for "keep epa_gap or not": does 'both' beat
+    # 'fantasy_gap' ALONE on the same held-out confirm set -- not just vs epa_gap alone.
+    print(f"\n=== CONFIRM set, all three (the real question: keep epa_gap, or go fantasy_gap-only?) ===")
+    for name in FEATURE_SETS:
+        rows = [preds[name][g] for g in confirm_ids if g in preds[name]]
+        y_c = np.array([r[0] for r in rows])
+        p_c = np.array([r[1] for r in rows])
+        acc_c = float(np.mean((p_c > 0.5).astype(int) == y_c))
+        from sklearn.metrics import log_loss
+        ll_c = log_loss(y_c, p_c)
+        print(f"  {name:12s} n={len(rows):4d}  acc={100*acc_c:6.2f}%  AUC={roc_auc_score(y_c,p_c):.4f}  logloss={ll_c:.4f}")
+
     # Random split, repeated, same purpose as v46: check whether the chronological result is
     # an artifact of how THAT particular split happened to fall.
     print(f"\n=== RANDOM split: 30 repeats, ~50/50 ({len(affected_ids)} affected games total) ===")
@@ -210,24 +222,32 @@ def main():
           f"fraction positive={100*np.mean(deltas>0):.1f}%  (n={len(deltas)})")
 
     # Bootstrap on the chronological confirm set specifically.
+    def bootstrap_pair(name_a, name_b, ids, n_boot=2000, seed=0):
+        common = sorted(set(preds[name_a]) & set(preds[name_b]) & ids)
+        y = np.array([preds[name_a][g][0] for g in common])
+        p_a = np.array([preds[name_a][g][1] for g in common])
+        p_b = np.array([preds[name_b][g][1] for g in common])
+        rng = np.random.default_rng(seed)
+        m = len(common)
+        diffs = []
+        for _ in range(n_boot):
+            idx = rng.integers(0, m, m)
+            yi = y[idx]
+            if len(set(yi)) < 2:
+                continue
+            diffs.append(roc_auc_score(yi, p_b[idx]) - roc_auc_score(yi, p_a[idx]))
+        diffs = np.array(diffs)
+        print(f"{m} paired games, {len(diffs)} valid resamples")
+        print(f"AUC({name_b}) - AUC({name_a}): mean={diffs.mean():+.4f}, 95% CI=({np.percentile(diffs,2.5):+.4f}, {np.percentile(diffs,97.5):+.4f})")
+        print(f"fraction of resamples favoring {name_b}: {100*np.mean(diffs>0):.1f}%")
+
     print(f"\n=== paired bootstrap, {best} vs epa_gap, chronological confirm set (2000 resamples) ===")
-    common = sorted(set(preds[best]) & set(preds["epa_gap"]) & confirm_ids)
-    y = np.array([preds["epa_gap"][g][0] for g in common])
-    p_epa = np.array([preds["epa_gap"][g][1] for g in common])
-    p_best = np.array([preds[best][g][1] for g in common])
-    rng = np.random.default_rng(0)
-    m = len(common)
-    diffs = []
-    for _ in range(2000):
-        idx = rng.integers(0, m, m)
-        yi = y[idx]
-        if len(set(yi)) < 2:
-            continue
-        diffs.append(roc_auc_score(yi, p_best[idx]) - roc_auc_score(yi, p_epa[idx]))
-    diffs = np.array(diffs)
-    print(f"{m} paired games, {len(diffs)} valid resamples")
-    print(f"AUC({best}) - AUC(epa_gap): mean={diffs.mean():+.4f}, 95% CI=({np.percentile(diffs,2.5):+.4f}, {np.percentile(diffs,97.5):+.4f})")
-    print(f"fraction of resamples favoring {best}: {100*np.mean(diffs>0):.1f}%")
+    bootstrap_pair("epa_gap", best, confirm_ids)
+
+    # The actual question this turn is asking: does keeping epa_gap alongside fantasy_gap
+    # buy anything over fantasy_gap ALONE, on this same held-out confirm set?
+    print(f"\n=== paired bootstrap, both vs fantasy_gap ALONE, chronological confirm set (2000 resamples) ===")
+    bootstrap_pair("fantasy_gap", "both", confirm_ids)
 
 
 if __name__ == "__main__":

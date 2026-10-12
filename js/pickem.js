@@ -353,8 +353,18 @@ function powerModelBreakdownHtml(matchup, home, away) {
     if (awayVal) parts.push(`${away} ${phrase(awayVal)}`);
     return parts.length ? parts.join('; ') : 'Not applied';
   };
-  const qbDetail = gapPhrase(pm.home_qb_gap, pm.away_qb_gap,
-    v => `starting a backup (trailing EPA/dropback gap ${v.toFixed(3)})`);
+  // QB health is EITHER the FantasyPros gap OR the trailing-EPA gap, never both at once
+  // (see QB_FANTASY_GAP_WEIGHT's own comment in team_ratings.py) -- describe whichever one
+  // pm.qb_health_source says actually drove pm.qb_term, not just the EPA numbers, or the
+  // label and the number would describe two different things whenever fantasy's the active
+  // source. A source of "epa" here (rather than "fantasy") is itself a signal FantasyPros
+  // was unavailable that week -- same thing a pipeline-health view would flag.
+  const usingFantasy = pm.qb_health_source === 'fantasy';
+  const qbDetail = usingFantasy
+    ? gapPhrase(pm.home_fantasy_gap, pm.away_fantasy_gap,
+        v => `starting a backup (FantasyPros weekly-projection gap ${v.toFixed(2)})`)
+    : gapPhrase(pm.home_qb_gap, pm.away_qb_gap,
+        v => `starting a backup (trailing EPA/dropback gap ${v.toFixed(3)} -- FantasyPros not used for this game)`);
   const skillDetail = gapPhrase(pm.home_skill_out, pm.away_skill_out,
     v => `missing skill-position EPA (${v.toFixed(3)} summed)`);
   const streakDetail = pm.home_streak || pm.away_streak

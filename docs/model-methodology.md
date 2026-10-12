@@ -157,21 +157,37 @@ keeps OUT of `delta` by design — not new information.
 A narrower, WITHIN-team version escaped that trap: compare a team's own healthy-QB baseline
 (trailing average of the primary's own weekly fantasy-point projections) against the actual
 passer's current-week projection — same gap/decay structure as the EPA version, QB_GAP_
-DECAY_RATE=0.4, additive on top of it rather than replacing it. Checked directly: this gap's
-correlation with -spread_line is only 0.187 (the EPA gap's own is 0.201) — a within-team
-comparison isn't restating who's favored the way a team-total inherently does. Validated
-with the same chronological + random select/confirm discipline as the decay rate above
-(research/edge_signal_test_v49/v50): selecting on 2017-2023 and confirming on the held-out
-2024-2025 games replicated (AUC +0.0097), and a 30-repeat random split never once selected
-the EPA gap alone as best (always the fantasy-inclusive version, 76.7% of repeats favorable
-on the specific AUC comparison). Refit jointly (`_v51`): `QB_QUALITY_GAP_WEIGHT` moved again
-(-1.0556 → -0.8818, still z=-3.46) now that `QB_FANTASY_GAP_WEIGHT` (-0.0429, z=-3.24, much
-smaller in magnitude since fantasy points have a far larger raw scale than EPA/dropback) is
-absorbing some of the same explanatory power. Requires its own FantasyPros API access in
-refresh() (`nflhub.sources.fantasypros.qb_projections_by_season`) — a second, independent
-consumer of the same key already used by the fantasy-pool lineup optimizer, with its own
-per-season cache (committed to the repo, same convention as every other completed-season
-cache here) since this CI runner's disk doesn't persist between runs.
+DECAY_RATE=0.4. Checked directly: this gap's correlation with -spread_line is only 0.187
+(the EPA gap's own is 0.201) — a within-team comparison isn't restating who's favored the
+way a team-total inherently does. Validated with the same chronological + random
+select/confirm discipline as the decay rate above (research/edge_signal_test_v49/v50):
+selecting on 2017-2023 and confirming on the held-out 2024-2025 games replicated (AUC
++0.0097), and a 30-repeat random split never once selected the EPA gap alone as best
+(always the fantasy-inclusive version, 76.7% of repeats favorable on the specific AUC
+comparison).
+
+That first pass tested fantasy-gap-ADDED-to-EPA-gap against EPA-gap-alone, and fantasy won.
+But a direct bootstrap of EPA+fantasy (both, summed) against fantasy-gap ALONE — the
+comparison that actually matters once fantasy is already in the model — came back far
+weaker: mean AUC edge only +0.0059, favorable in just 69.5% of resamples (research/
+edge_signal_test_v50). Summing both barely outperforms fantasy alone, and FantasyPros is a
+paid third-party API that can lapse, change terms, or go down mid-season; EPA/dropback has
+zero dependency on it. So the shipped design does not sum the two gaps — it SWITCHES
+between them per game-week. `QB_FANTASY_GAP_WEIGHT` (-0.0429, z=-3.24, much smaller in
+magnitude than the EPA weight since fantasy points have a far larger raw scale than
+EPA/dropback) applies whenever `fantasypros.qb_projections_by_season()` actually returned
+data for that season/week; `QB_QUALITY_GAP_WEIGHT` (-0.8818, z=-3.46, refit jointly in
+`_v51` alongside the fantasy weight) is the automatic fallback the instant that data is
+missing — a lapsed/revoked API key, a FantasyPros outage, or a week not yet published.
+`team_ratings.qb_fantasy_gap_data()` returns a `fantasy_available` flag per (season, week)
+specifically to drive this switch; `matchup_callouts()` and `compute_backtest_scatter()`
+both pick EPA-vs-fantasy per week from that flag, never adding them, and the live refresh
+path logs a warning and records which source was active (`qb_health_source`, surfaced in
+the power-model breakdown UI) so a fallback week is visible, not silent. Requires its own
+FantasyPros API access in refresh() (`nflhub.sources.fantasypros.qb_projections_by_season`)
+— a second, independent consumer of the same key already used by the fantasy-pool lineup
+optimizer, with its own per-season cache (committed to the repo, same convention as every
+other completed-season cache here) since this CI runner's disk doesn't persist between runs.
 
 ### 1.4 Points prediction and weather
 

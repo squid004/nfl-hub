@@ -673,7 +673,7 @@ def qb_fantasy_gap_data(played_games: list[dict], current_season: int, current_w
         df["season"] = season
         frames.append(df)
     if not frames:
-        return {}, {}, 0.0, 0.0
+        return {}, {}, 0.0, 0.0, {}
     passer_df = pd.concat(frames, ignore_index=True)
 
     games_by_id = {g["game_id"]: g for g in played_games}
@@ -726,6 +726,20 @@ def qb_fantasy_gap_data(played_games: list[dict], current_season: int, current_w
     proj_by_season: dict[int, dict] = {}
     for season in range(max(FIRST_INJURY_SEASON, FANTASY_GAP_FIRST_SEASON), current_season + 1):
         proj_by_season[season] = fantasypros.qb_projections_by_season(season, current_season, current_week)
+
+    # Which (season, week)s actually got real data back -- derived from proj_by_season's own
+    # keys rather than a dedicated return value from fantasypros.py (keeps that module's
+    # signature untouched). A week genuinely missing from a season we'd expect full coverage
+    # for (every past week of a complete season, or any week up to and including the current
+    # one this season) means the fetch failed/was empty that week -- used both to decide
+    # fantasy-vs-EPA per game (see qb_health_gap() below) and to surface a live-fetch failure
+    # for alerting (refresh()'s own caller checks this week specifically).
+    fantasy_available: dict[tuple[int, int], bool] = {}
+    for season, proj in proj_by_season.items():
+        weeks_with_data = {wk for (wk, _fpid) in proj}
+        last_expected_week = 18 if season < current_season else current_week
+        for wk in range(1, last_expected_week + 1):
+            fantasy_available[(season, wk)] = wk in weeks_with_data
 
     def proj_for(passer_id, season, week):
         fpid = id_crosswalk.get(passer_id)
@@ -784,7 +798,7 @@ def qb_fantasy_gap_data(played_games: list[dict], current_season: int, current_w
 
     current_trailing_fantasy_proj = {p: ((sum(h) / len(h)) if h else league_avg_proj) for p, h in passer_hist.items()}
     backup_avg_proj = (backup_proj_sum / backup_proj_count) if backup_proj_count else league_avg_proj
-    return fantasy_gap_by_team_week, current_trailing_fantasy_proj, league_avg_proj, backup_avg_proj
+    return fantasy_gap_by_team_week, current_trailing_fantasy_proj, league_avg_proj, backup_avg_proj, fantasy_available
 
 
 def skill_epa_history(current_season: int) -> tuple[dict[str, list], float]:
@@ -1515,6 +1529,7 @@ def matchup_callouts(
     diff_mu: dict[str, float] | None = None, diff_sd: dict[str, float] | None = None,
     qb_gap_upcoming: dict[tuple[str, int], float] | None = None,
     fantasy_gap_upcoming: dict[tuple[str, int], float] | None = None,
+    fantasy_healthy: bool = False,
     skill_out_upcoming: dict[tuple[str, int], float] | None = None,
     hfa_logit: float = 0.0,
     points_bias: dict[str, float] | None = None, sd_home: float | None = None, sd_away: float | None = None,
@@ -1645,10 +1660,26 @@ def matchup_callouts(
             fantasy_diff = home_fantasy_gap - away_fantasy_gap
             skill_diff = home_skill_out - away_skill_out
             streak_diff = home_streak - away_streak
+            # QB-health is EITHER the fantasy gap OR the EPA gap, never both at once --
+            # fantasy_healthy (from fantasypros.qb_projections_by_season's own per-week
+            # coverage, see qb_fantasy_gap_data()'s docstring) is a single whole-week flag,
+            # not per-team: the live fetch is one API call covering every team, so a real
+            # outage/lapsed key affects everyone the same week, not one team at a time.
+            # EPA stays as the fallback specifically BECAUSE it has zero dependency on this
+            # third-party API (pure nflverse) -- see QB_FANTASY_GAP_WEIGHT's own comment for
+            # why summing both tested only marginally and uncertainly better than fantasy
+            # alone (bootstrap 69.5% favorable, nowhere near the ~85%+ bar trusted elsewhere
+            # in this project), so this costs little accuracy for real resilience.
+            if fantasy_healthy:
+                qb_health_term = QB_FANTASY_GAP_WEIGHT * fantasy_diff
+                qb_health_source = "fantasy"
+            else:
+                qb_health_term = QB_QUALITY_GAP_WEIGHT * qb_diff
+                qb_health_source = "epa"
             # Neutral-site games (international series, etc. -- see is_neutral_site()) get
             # NO home-field term at all -- there's no real "home" side to credit.
             effective_hfa_logit = 0.0 if g.get("neutral") else hfa_logit
-            delta = (delta_raw + QB_QUALITY_GAP_WEIGHT * qb_diff + QB_FANTASY_GAP_WEIGHT * fantasy_diff
+            delta = (delta_raw + qb_health_term
                      + SKILL_EPA_OUT_WEIGHT * skill_diff
                      + HFA_WEIGHT * effective_hfa_logit + MOMENTUM_WEIGHT * streak_diff)
             fav = home if delta > 0 else away if delta < 0 else None
@@ -1657,12 +1688,15 @@ def matchup_callouts(
             # 2026-10-07 per user direction). Weighted terms are in delta-equivalent units,
             # signed home-minus-away like delta itself; raw values let the UI phrase its own
             # sentence (e.g. "PHI on a 3-game win streak") without re-deriving anything.
+            # home_qb_gap/home_fantasy_gap are both still shown (display-only when not the
+            # active source) so the Details table can explain what the OTHER source would
+            # have said, same transparency as everywhere else on this card.
             power_model = {"favorite": fav, "prob": round(delta_win_prob(delta), 4),
                             "delta": round(delta, 4), "delta_raw": round(delta_raw, 4),
                             "neutral_site": bool(g.get("neutral")),
                             "hfa_term": round(HFA_WEIGHT * effective_hfa_logit, 4),
-                            "qb_term": round(QB_QUALITY_GAP_WEIGHT * qb_diff, 4),
-                            "fantasy_term": round(QB_FANTASY_GAP_WEIGHT * fantasy_diff, 4),
+                            "qb_term": round(qb_health_term, 4),
+                            "qb_health_source": qb_health_source,
                             "skill_term": round(SKILL_EPA_OUT_WEIGHT * skill_diff, 4),
                             "momentum_term": round(MOMENTUM_WEIGHT * streak_diff, 4),
                             "home_qb_gap": round(home_qb_gap, 4), "away_qb_gap": round(away_qb_gap, 4),
@@ -2131,6 +2165,7 @@ def compute_backtest_scatter(
     game_log: list[dict], qb_out: dict[tuple[str, int, int], bool] | None = None,
     qb_gap: dict[tuple[str, int, int], float] | None = None,
     fantasy_gap: dict[tuple[str, int, int], float] | None = None,
+    fantasy_available: dict[tuple[int, int], bool] | None = None,
     skill_out: dict[tuple[str, int, int], float] | None = None,
     hfa_by_season: dict[int, float] | None = None,
     midgame_qb_injury: dict[tuple[str, int, int], bool] | None = None,
@@ -2147,11 +2182,14 @@ def compute_backtest_scatter(
     `qb_out` (from _qb_out_doubtful_by_week, optional): tags each row with whether the home/
     away team had a QB Out/Doubtful that week, so the frontend can filter on it.
 
-    `qb_gap`/`skill_out`/`hfa_by_season` (from qb_quality_gap_data()/skill_epa_out_by_team_
-    week()/home_field_logit_by_season(), optional): QB_QUALITY_GAP_WEIGHT/SKILL_EPA_OUT_
-    WEIGHT/HFA_WEIGHT applied to these ADD to the pure 8-stat composite below, producing the
-    `delta` this function actually returns -- `delta_raw` keeps the unadjusted composite for
-    comparison. See each weight's own docstring for why it's a real, data-driven correction.
+    `qb_gap`/`fantasy_gap`/`fantasy_available`/`skill_out`/`hfa_by_season` (from
+    qb_quality_gap_data()/qb_fantasy_gap_data()/skill_epa_out_by_team_week()/home_field_
+    logit_by_season(), optional): QB_QUALITY_GAP_WEIGHT or QB_FANTASY_GAP_WEIGHT (whichever
+    `fantasy_available` says applied that season/week -- EITHER one, never both, see
+    matchup_callouts()'s own comment for why) plus SKILL_EPA_OUT_WEIGHT/HFA_WEIGHT ADD to
+    the pure 8-stat composite below, producing the `delta` this function actually returns --
+    `delta_raw` keeps the unadjusted composite for comparison. See each weight's own
+    docstring for why it's a real, data-driven correction.
 
     `midgame_qb_injury` (from midgame_qb_injury_by_week, optional): tags each row with
     whether the home/away team's starter went down mid-game (confirmed, see that function's
@@ -2167,6 +2205,7 @@ def compute_backtest_scatter(
     qb_out = qb_out or {}
     qb_gap = qb_gap or {}
     fantasy_gap = fantasy_gap or {}
+    fantasy_available = fantasy_available or {}
     skill_out = skill_out or {}
     hfa_by_season = hfa_by_season or {}
     midgame_qb_injury = midgame_qb_injury or {}
@@ -2177,12 +2216,19 @@ def compute_backtest_scatter(
     out = []
     for r in game_log:
         delta_raw = sum(POWER_WEIGHTS[m] * ((r["diffs"][m] - mu[m]) / sd[m]) for m in RATING_METRICS)
-        qb_gap_diff = qb_gap.get((r["home"], r["season"], r["week"]), 0.0) - qb_gap.get((r["away"], r["season"], r["week"]), 0.0)
-        fantasy_gap_diff = fantasy_gap.get((r["home"], r["season"], r["week"]), 0.0) - fantasy_gap.get((r["away"], r["season"], r["week"]), 0.0)
+        # EITHER the fantasy gap OR the EPA gap, never both -- see matchup_callouts()'s own
+        # comment for why (fantasy_healthy's live-path meaning here is "was real FantasyPros
+        # data actually available for this historical season/week," same derivation).
+        if fantasy_available.get((r["season"], r["week"]), False):
+            fantasy_gap_diff = fantasy_gap.get((r["home"], r["season"], r["week"]), 0.0) - fantasy_gap.get((r["away"], r["season"], r["week"]), 0.0)
+            qb_health = QB_FANTASY_GAP_WEIGHT * fantasy_gap_diff
+        else:
+            qb_gap_diff = qb_gap.get((r["home"], r["season"], r["week"]), 0.0) - qb_gap.get((r["away"], r["season"], r["week"]), 0.0)
+            qb_health = QB_QUALITY_GAP_WEIGHT * qb_gap_diff
         skill_diff = skill_out.get((r["home"], r["season"], r["week"]), 0.0) - skill_out.get((r["away"], r["season"], r["week"]), 0.0)
         hfa = 0.0 if r.get("neutral") else HFA_WEIGHT * hfa_by_season.get(r["season"], 0.0)
         streak_diff = streak.get((r["home"], r["season"], r["week"]), 0) - streak.get((r["away"], r["season"], r["week"]), 0)
-        delta = (delta_raw + QB_QUALITY_GAP_WEIGHT * qb_gap_diff + QB_FANTASY_GAP_WEIGHT * fantasy_gap_diff
+        delta = (delta_raw + qb_health
                  + SKILL_EPA_OUT_WEIGHT * skill_diff + hfa + MOMENTUM_WEIGHT * streak_diff)
         if r["home_score"] == r["away_score"]:
             outcome = "tie"
@@ -2315,12 +2361,12 @@ def refresh_historical(store, force: bool = False) -> str:
     compute_ratings(played, current_season, game_log=game_log)
     qb_out = _qb_out_doubtful_by_week(current_season)
     qb_gap, _primary, _trailing, _league_avg, _names, _backup_avg, _streak_n = qb_quality_gap_data(played, current_season)
-    fantasy_gap, _trailing_fp, _league_avg_fp, _backup_avg_fp = qb_fantasy_gap_data(played, current_season, current_week)
+    fantasy_gap, _trailing_fp, _league_avg_fp, _backup_avg_fp, fantasy_available = qb_fantasy_gap_data(played, current_season, current_week)
     skill_out = skill_epa_out_by_team_week(current_season)
     hfa_by_season = home_field_logit_by_season(played)
     midgame_qb_injury = midgame_qb_injury_by_week(current_season)
     streak = team_streak_by_week(played)
-    scatter = compute_backtest_scatter(game_log, qb_out, qb_gap, fantasy_gap, skill_out, hfa_by_season, midgame_qb_injury, streak)
+    scatter = compute_backtest_scatter(game_log, qb_out, qb_gap, fantasy_gap, fantasy_available, skill_out, hfa_by_season, midgame_qb_injury, streak)
     calibration = compute_calibration_stats(scatter)
 
     store.kv_set("historical_power_rankings", json.dumps({
@@ -2419,7 +2465,8 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
 
     qb_out_asof = _qb_out_doubtful_by_week(current_season)
     _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa, _names, _backup_avg, _streak_n = qb_quality_gap_data(played_cutoff, current_season)
-    _fg_hist, current_trailing_fp, league_avg_fp, _backup_avg_fp = qb_fantasy_gap_data(played_cutoff, current_season, week)
+    _fg_hist, current_trailing_fp, league_avg_fp, _backup_avg_fp, fantasy_available = qb_fantasy_gap_data(played_cutoff, current_season, week)
+    fantasy_healthy_week = fantasy_available.get((current_season, week), False)
     qb_gap_week: dict[tuple[str, int], float] = {}
     fantasy_gap_week: dict[tuple[str, int], float] = {}
     for (team, season, wk), is_out in qb_out_asof.items():
@@ -2451,7 +2498,7 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
     hist_score_freq = historical_score_frequency(played_cutoff)
 
     return matchup_callouts(ratings, week_games, historical_bounds, diff_mu, diff_sd,
-                             qb_gap_week, fantasy_gap_week, skill_out_week, hfa_logit,
+                             qb_gap_week, fantasy_gap_week, fantasy_healthy_week, skill_out_week, hfa_logit,
                              points_bias_asof, sd_home, sd_away, hist_score_freq)
 
 
@@ -2704,11 +2751,15 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
         qb_gap_upcoming[(team, current_week)] = (tp - backup_avg_epa) * decay_factor
 
     # Same live gate/decay as the EPA gap above, sourced from FantasyPros instead -- see
-    # qb_fantasy_gap_data()'s own docstring for why this is additive on top of (not a
-    # replacement for) the EPA gap. current_primary/current_streak_n are identical for both
-    # (the window5 primary/actual-passer sequence doesn't depend on which quality metric is
-    # used), so they're reused directly rather than recomputed.
-    _fantasy_gap_hist, current_trailing_fp, league_avg_fp, backup_avg_fp = qb_fantasy_gap_data(played, current_season, current_week)
+    # qb_fantasy_gap_data()'s own docstring for why this is EITHER/OR with the EPA gap, never
+    # both at once (matchup_callouts() does the actual switching via fantasy_healthy_week
+    # below). current_primary/current_streak_n are identical for both (the window5 primary/
+    # actual-passer sequence doesn't depend on which quality metric is used), so they're
+    # reused directly rather than recomputed.
+    _fantasy_gap_hist, current_trailing_fp, league_avg_fp, backup_avg_fp, fantasy_available = qb_fantasy_gap_data(played, current_season, current_week)
+    fantasy_healthy_week = fantasy_available.get((current_season, current_week), False)
+    if not fantasy_healthy_week:
+        log.warning("FantasyPros QB projections unavailable for %s wk%s -- falling back to the EPA-based QB-health gap this week", current_season, current_week)
     fantasy_gap_upcoming: dict[tuple[str, int], float] = {}
     for team, primary in current_primary.items():
         if not _primary_qb_out_live(team, primary, passer_names, injuries):
@@ -2741,7 +2792,7 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
     hist_score_freq = historical_score_frequency(played)
 
     matchups = matchup_callouts(ratings, upcoming, historical_bounds, diff_mu, diff_sd,
-                                 qb_gap_upcoming, fantasy_gap_upcoming, skill_out_upcoming, hfa_logit_current,
+                                 qb_gap_upcoming, fantasy_gap_upcoming, fantasy_healthy_week, skill_out_upcoming, hfa_logit_current,
                                  points_bias_live, sd_home, sd_away, hist_score_freq,
                                  streak_upcoming)
     matchups = _freeze_score_distributions(store, matchups, date.today().isoformat())
@@ -2768,6 +2819,19 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
                       "beat the market at predicting winners; shown as descriptive context only.",
             "weights": {m: round(POWER_WEIGHTS[m] * ORIENTATION[m], 4) for m in RATING_METRICS},
         },
+    }))
+
+    # Dedicated health record for the QB-health fantasy gap specifically -- this mechanism
+    # soft-fails on purpose (a transient FantasyPros hiccup shouldn't crash the whole
+    # refresh), which means a real outage would otherwise be invisible: it silently falls
+    # back to the EPA gap (see matchup_callouts()'s own comment) with nothing in logs or
+    # `summary["errors"]` to say so. refresh.py's own wrapper around this function reads this
+    # key back and surfaces it into summary["errors"]/an alert when unhealthy; same key a
+    # future pipeline-health view would read directly.
+    store.kv_set("qb_fantasy_health", json.dumps({
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "season": current_season, "week": current_week,
+        "healthy": fantasy_healthy_week,
     }))
     store.kv_set("team_ratings_date", today)
     return f"built ({len(ratings)} teams, {len(matchups)} upcoming matchups, through {current_season} wk {current_week})"

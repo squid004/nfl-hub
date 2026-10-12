@@ -7,7 +7,7 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Any
 
-from . import optimizer, store
+from . import notify, optimizer, store
 from .config import Config, get_config
 from .sources import (
     actionnetwork,
@@ -222,6 +222,19 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     # does not beat the closing market spread, so it's not used to auto-generate picks)
     try:
         summary["team_ratings"] = team_ratings.refresh(store, injuries=injuries)
+        # qb_fantasy_health is written by team_ratings.refresh() itself every time it
+        # actually runs (not when "cached" -- see that function's own once-per-day skip) --
+        # surfaced here into summary["errors"] because the fetch underneath soft-fails on
+        # purpose (falls back to the EPA gap rather than crashing the refresh), which would
+        # otherwise make a real FantasyPros outage invisible.
+        health_raw = store.kv_get("qb_fantasy_health")
+        if health_raw:
+            health = json.loads(health_raw)
+            if not health.get("healthy", True):
+                summary["errors"].append(
+                    f"qb_fantasy_gap: FantasyPros unavailable for {health.get('season')} "
+                    f"wk{health.get('week')} -- fell back to the EPA-based QB-health gap"
+                )
     except Exception as exc:  # noqa: BLE001
         log.exception("team_ratings refresh failed")
         summary["errors"].append(f"team_ratings: {exc}")
@@ -294,6 +307,33 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         store.kv_set("last_refresh", datetime.now(timezone.utc).isoformat())
     except Exception as exc:  # noqa: BLE001
         log.warning("bookkeeping failed: %s", exc)
+
+    # 6. pipeline health: one record of this run's per-source errors for a future health
+    # view to read directly, plus a push/email alert -- but only once per distinct error
+    # set per day, not every 10-minute cron tick, or a single lingering issue would spam.
+    # Clearing (no errors this run) never alerts; if the SAME problem reappears on a LATER
+    # day the date half of the signature differs, so it alerts again rather than staying
+    # silent forever once something's gone wrong once.
+    try:
+        store.kv_set("pipeline_health", json.dumps({
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "errors": summary["errors"],
+            "ok": not summary["errors"],
+        }))
+        if summary["errors"]:
+            today = date.today().isoformat()
+            error_sig = "|".join(sorted(summary["errors"]))
+            last_sig, _, last_date = (store.kv_get("last_alert_signature") or "").partition("@@")
+            if not (last_sig == error_sig and last_date == today):
+                notify.push(
+                    cfg, "NFL Hub pipeline issue",
+                    "\n".join(summary["errors"][:10]),
+                    tags="warning", priority="high",
+                    email=cfg.ntfy.alert_email or None,
+                )
+                store.kv_set("last_alert_signature", f"{error_sig}@@{today}")
+    except Exception as exc:  # noqa: BLE001 -- never let the alerting step itself break refresh
+        log.warning("pipeline-health alert failed: %s", exc)
 
     return summary
 

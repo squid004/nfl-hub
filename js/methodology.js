@@ -169,8 +169,20 @@ const Methodology = {
           favored. Validated the same way as the decay rate above (research/edge_signal_
           test_v49/v50): chronological select/confirm (select 2017-2023, confirm 2024-2025)
           replicated (AUC +0.0097), and a 30-repeat random split never once picked the EPA gap
-          alone as best. Refit jointly (_v51): QB_QUALITY_GAP_WEIGHT -1.0556&rarr;-0.8818
-          (still z=-3.46), new QB_FANTASY_GAP_WEIGHT -0.0429 (z=-3.24).</p>
+          alone as best (that pass compared fantasy-added-to-EPA against EPA alone).
+          The comparison that actually matters once fantasy is in the model -- EPA+fantasy
+          summed vs. fantasy alone -- came back far weaker: a direct bootstrap gave only
+          +0.0059 mean AUC, favorable in 69.5% of resamples. Summing barely beats fantasy
+          alone, and FantasyPros is a paid third-party API that can lapse or go down;
+          EPA/dropback has zero dependency on it. So the shipped mechanism does not sum the
+          two gaps -- it SWITCHES between them per game-week. QB_FANTASY_GAP_WEIGHT (-0.0429,
+          z=-3.24) applies whenever FantasyPros actually returned data for that season/week;
+          QB_QUALITY_GAP_WEIGHT (refit jointly in _v51, -1.0556&rarr;-0.8818, still z=-3.46)
+          is the automatic fallback the instant that data is missing -- lapsed key, API
+          outage, or an unpublished week. <code>qb_fantasy_gap_data()</code> returns a
+          <code>fantasy_available</code> flag per week to drive the switch; the power-model
+          breakdown shows which source (<code>qb_health_source</code>) was actually active,
+          so a fallback week is visible rather than silent.</p>
         <p class="small"><strong>Neutral-site exception:</strong> the HFA term (and the
           score-distribution pipeline's home/away points bias) is forced to exactly 0 for
           neutral-site games. nflverse's own <code>location</code> field is inconsistent --
@@ -257,6 +269,7 @@ const Methodology = {
       ['2026-10-11', 'Decay rate swept as its own free parameter and validated with chronological + random select/confirm splits; refit QB_QUALITY_GAP_WEIGHT', 'Smooth inverted-U peaking near rate 0.4 in both AUC and logloss. Chronological split (select 2014-2020, confirm 2021-2025, never touched during selection): rate 0.4 replicated, AUC +0.0018. A 30-repeat random 50/50 split agreed in direction but was noisier (70% of repeats favorable). Refit -0.5202&rarr;-1.0556 (MORE significant, z=-4.23, was z=-3.25)', 'good', 'Shipped (research/edge_signal_test_v45-v47)'],
       ['2026-10-12', 'Team-total fantasy-projection signal tested (summed QB/RB/WR/TE points vs. market spread)', 'Looked like a huge win (AUC 0.6623&rarr;0.7148) until checked against the market directly -- correlation with -spread_line 0.956, and delta+spread_line alone reproduces almost the identical AUC (0.7278). Just a noisy proxy for the market the model already knows beats it, not new information', 'bad', 'Not shipped (research/edge_signal_test_v48)'],
       ['2026-10-12', 'QB-health fantasy gap (within-team, FantasyPros vs. trailing EPA) added alongside the EPA gap; refit both weights', 'Escaped the team-total version&rsquo;s market-proxy trap (corr with -spread_line only 0.187 vs the EPA gap&rsquo;s own 0.201). Chronological select/confirm (select 2017-2023, confirm 2024-2025): AUC +0.0097, replicated. 30-repeat random split never once picked the EPA gap alone as best (76.7% of repeats favorable). Refit QB_QUALITY_GAP_WEIGHT -1.0556&rarr;-0.8818 (z=-3.46), new QB_FANTASY_GAP_WEIGHT -0.0429 (z=-3.24)', 'good', 'Shipped (research/edge_signal_test_v48-v51)'],
+      ['2026-10-12', 'QB-health mechanism changed from additive (EPA+fantasy summed) to a per-week switch/fallback', 'Direct bootstrap of EPA+fantasy (both) vs. fantasy alone -- the comparison that actually matters once fantasy is in the model -- came back weak: +0.0059 mean AUC, only 69.5% of resamples favorable. Not worth the dependency: FantasyPros is a paid third-party API that can lapse or outage mid-season. Switched to EITHER/OR per game-week (never summed), gated on a fantasy_available flag, with the EPA gap as fallback specifically because it has zero third-party dependency', 'good', 'Shipped'],
     ];
     const body = rows.map(([date, change, effect, cls, status]) => `
       <tr>
