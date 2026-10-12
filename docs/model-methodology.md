@@ -65,8 +65,9 @@ graded dataset, none of them touch `POWER_WEIGHTS` or the 8-stat composite itsel
 
 | Correction | Weight | What it captures | Hit-rate mover? |
 |---|---|---|---|
-| QB health | `QB_QUALITY_GAP_WEIGHT = -1.0556` | Trailing EPA/dropback gap between a team's **current primary** (most starts in the trailing 5 games, ties broken toward the more recent start) and whoever's actually playing, **decayed** by `QB_GAP_DECAY_RATE = 0.4` for each additional straight game the same non-primary passer has started — see below | No (calibration only) |
-| Skill-position health | `SKILL_EPA_OUT_WEIGHT = -0.0364` | Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB | No (calibration only) |
+| QB health (EPA) | `QB_QUALITY_GAP_WEIGHT = -0.8818` | Trailing EPA/dropback gap between a team's **current primary** (most starts in the trailing 5 games, ties broken toward the more recent start) and whoever's actually playing, **decayed** by `QB_GAP_DECAY_RATE = 0.4` for each additional straight game the same non-primary passer has started — see below | No (calibration only) |
+| QB health (fantasy) | `QB_FANTASY_GAP_WEIGHT = -0.0429` | Same gap/decay structure as above, but sourced from FantasyPros' own weekly QB projections instead of trailing EPA — a forward-looking, weekly-refreshed measure, additive on top of the EPA gap, not a replacement — see below | No (calibration only) |
+| Skill-position health | `SKILL_EPA_OUT_WEIGHT = -0.0363` | Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB | No (calibration only) |
 | Home-field advantage | `HFA_WEIGHT = 0.9169` | Trailing-5-season home win rate, shrunk toward all-time average (`HFA_SHRINKAGE_K = 100`) | **Yes** |
 | Momentum | `MOMENTUM_WEIGHT = 0.0262` | Signed current win/loss streak, reset at season boundaries and ties | **Yes** |
 
@@ -141,6 +142,36 @@ rate itself was then swept as its own free parameter rather than assumed equal t
 set it never touched during selection (AUC +0.0018) — a 30-repeat random-split version of the
 same test agreed in direction but was noisier (70% of repeats favorable). Shipped as a real
 but not airtight finding, not a slam dunk.
+
+**A second, independent QB-health gap is added on top, sourced from FantasyPros' own weekly
+projections instead of trailing EPA.** Prompted by a broader question: could fantasy-football
+projections feed the power model at all? First tried as a TEAM-TOTAL signal (summed
+QB/RB/WR/TE projected points for offense, a team's own DST projected points-allowed for
+defense) — confirmed null (research/edge_signal_test_v48): isolated to games with real
+fantasy data, it looked like a big win (AUC 0.6623→0.7148) until checked against the market
+spread directly — correlation **0.956**, and `delta + spread_line` alone reproduces almost
+the exact same AUC (0.7278). The "signal" was FantasyPros' own projections leaking a noisy
+copy of the Vegas line, which this project already knows beats the model and deliberately
+keeps OUT of `delta` by design — not new information.
+
+A narrower, WITHIN-team version escaped that trap: compare a team's own healthy-QB baseline
+(trailing average of the primary's own weekly fantasy-point projections) against the actual
+passer's current-week projection — same gap/decay structure as the EPA version, QB_GAP_
+DECAY_RATE=0.4, additive on top of it rather than replacing it. Checked directly: this gap's
+correlation with -spread_line is only 0.187 (the EPA gap's own is 0.201) — a within-team
+comparison isn't restating who's favored the way a team-total inherently does. Validated
+with the same chronological + random select/confirm discipline as the decay rate above
+(research/edge_signal_test_v49/v50): selecting on 2017-2023 and confirming on the held-out
+2024-2025 games replicated (AUC +0.0097), and a 30-repeat random split never once selected
+the EPA gap alone as best (always the fantasy-inclusive version, 76.7% of repeats favorable
+on the specific AUC comparison). Refit jointly (`_v51`): `QB_QUALITY_GAP_WEIGHT` moved again
+(-1.0556 → -0.8818, still z=-3.46) now that `QB_FANTASY_GAP_WEIGHT` (-0.0429, z=-3.24, much
+smaller in magnitude since fantasy points have a far larger raw scale than EPA/dropback) is
+absorbing some of the same explanatory power. Requires its own FantasyPros API access in
+refresh() (`nflhub.sources.fantasypros.qb_projections_by_season`) — a second, independent
+consumer of the same key already used by the fantasy-pool lineup optimizer, with its own
+per-season cache (committed to the repo, same convention as every other completed-season
+cache here) since this CI runner's disk doesn't persist between runs.
 
 ### 1.4 Points prediction and weather
 
@@ -226,6 +257,8 @@ graded decided game available at the time.
 | 2026-10-11 | Decaying the QB-health correction by how long a backup has started, with a symmetric reinsertion boost on the primary's return, bundled together (v40/v41) | Hypothesis: the team-level rolling rating (same EWMA half-life) independently catches up to a backup's true quality after ~4-5 starts, so a flat, never-decaying correction double-counts what the rolling rating already reflects; symmetric logic on return. Bundled, AUC ties production at best (0.6739) and underperforms everywhere else (0.6707-0.6720) | Not shipped as a bundle — decomposed below |
 | 2026-10-11 | Decomposing decay from reinsertion (v44): decay alone beats static, reinsertion alone is what was dragging the bundle down | Isolated to the games where an absence is actually active: decay-only AUC 0.6836 vs static 0.6816 (+0.0020), logloss 0.6439 vs 0.6460 (-0.0021) — both metrics agreeing for the first time in this investigation. Reinsertion-only underperformed static in every view tested | Decay alone validated further below; reinsertion confirmed null, see §3.1 |
 | 2026-10-11 | Decay rate swept as its own free parameter (not assumed = EWMA_ALPHA) and validated with chronological + random select/confirm splits (v45/v46/v47); refit `QB_QUALITY_GAP_WEIGHT` | Sweep showed a smooth inverted-U peaking near rate 0.4 in both AUC and logloss. Chronological split (select on 2014-2020, confirm on 2021-2025, never touched during selection): rate 0.4 replicated, AUC +0.0018. A 30-repeat random 50/50 split agreed in direction but was noisier (70% of repeats favorable, vs chronological's clean replication) — real effect, not airtight. Refit `QB_QUALITY_GAP_WEIGHT` -0.5202→-1.0556 (MORE significant, z=-4.23, was z=-3.25) | **Shipped** — research/edge_signal_test_v44 through _v47 |
+| 2026-10-12 | Team-total fantasy-projection signal tested (summed QB/RB/WR/TE points vs. market spread) | Looked like a huge win (AUC 0.6623→0.7148) until checked against the market directly — correlation with -spread_line 0.956, and `delta + spread_line` alone reproduces almost the identical AUC (0.7278). Not new information, just a noisy proxy for the market the model already knows beats it | Not shipped — confirmed null; see §3.1 |
+| 2026-10-12 | QB-health fantasy gap (within-team, FantasyPros projections vs. trailing EPA) added alongside the EPA gap; refit both weights | Escaped the market-proxy trap the team-total version fell into (corr with -spread_line only 0.187, vs the EPA gap's own 0.201). Chronological select/confirm (select 2017-2023, confirm 2024-2025): AUC +0.0097, replicated. 30-repeat random split never once picked the EPA gap alone as best (always fantasy-inclusive, 76.7% of repeats favorable). Refit `QB_QUALITY_GAP_WEIGHT` -1.0556→-0.8818 (still z=-3.46), new `QB_FANTASY_GAP_WEIGHT` -0.0429 (z=-3.24) | **Shipped** — research/edge_signal_test_v48 through _v51 |
 
 **Net effect across the whole timeline**: the model's backtested SU hit rate moved from
 **62.87%** (pure 8-stat composite, no corrections) to **63.09%** (current, with QB/skill
@@ -307,6 +340,20 @@ revisiting.
   problem, not decay: reinsertion-only underperformed static in every view tested (full
   population AND isolated to active-absence games), while decay-only beat static in both.
   Confirmed null on its own, independent of decay's fate.
+- **Team-total fantasy-projection signal** (v48, 2026-10-12) — summed QB/RB/WR/TE projected
+  points for offense, a team's own DST projected points-allowed for defense, tested as a
+  team-vs-team differential on top of `delta`. Looked like a large win in isolation (AUC
+  0.6623→0.7148 on games with real fantasy data, consistent across every one of 5 seasons
+  tested) until checked against the market spread directly: correlation with -spread_line is
+  **0.956**, and `delta + spread_line` alone reproduces almost the exact same AUC (0.7278) --
+  once the real market line is already in the model, every fantasy-derived candidate (margin,
+  offense-only, defense-only) adds nothing (AUC deltas -0.0001 to -0.0013, pure noise). Not a
+  new signal -- FantasyPros' own weekly point-allowed projections are themselves built partly
+  from the game's own spread/total, so this was re-discovering "the market beats the model"
+  through a noisy back door, something already known and deliberately kept OUT of `delta` by
+  design. The lesson generalizes: any TEAM-TOTAL signal should be checked against the market
+  directly before trusting an improvement over delta-alone as real. (A narrower, WITHIN-team
+  version of the same data -- the QB-health fantasy gap -- escaped this trap; see §1.3.)
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
@@ -354,8 +401,9 @@ FIRST_SEASON = 2007                FIRST_INJURY_SEASON = 2009
 EWMA_ALPHA = 0.2                   SEASON_PRIOR_GAMES = 5
 WP_LO, WP_HI = 0.05, 0.95          HFA_SHRINKAGE_K = 100
 
-QB_QUALITY_GAP_WEIGHT  = -1.0556   (calibration only)
-SKILL_EPA_OUT_WEIGHT   = -0.0364   (calibration only)
+QB_QUALITY_GAP_WEIGHT  = -0.8818   (calibration only)
+QB_FANTASY_GAP_WEIGHT  = -0.0429   (calibration only, additive on top of the EPA gap)
+SKILL_EPA_OUT_WEIGHT   = -0.0363   (calibration only)
 PRIMARY_WINDOW         = 5 games   (trailing-window plurality, ties -> more recent start)
 QB_GAP_DECAY_RATE      = 0.4       (shrinks the gap each straight game a backup keeps starting)
 HFA_WEIGHT             = +0.9169   (moves hit rate)

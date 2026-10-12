@@ -168,3 +168,99 @@ def enrich(payload: dict, proj: dict[str, dict], ecr: dict[str, dict]) -> int:
                 p["fp_ecr"] = er.get("ecr")
                 p["fp_tier"] = er.get("tier")
     return matched
+
+
+# --- QB-health fantasy-gap support (team_ratings.qb_fantasy_gap_data) --------------------
+#
+# Everything below is a SECOND, independent consumer of the same FantasyPros API, for a
+# completely different purpose: team_ratings.py's QB-health correction (validated additive
+# in research/edge_signal_test_v49/v50_fantasypros_qb_gap*.py), not the fantasy-pool lineup
+# optimizer above. Deliberately uses its OWN auth (a direct os.environ read) instead of the
+# Config-based _session()/_get() above -- team_ratings.refresh(store, injuries=...) has no
+# Config object in its call chain (team_ratings.py is architecturally independent of
+# nflhub.config throughout, reading every other external source the same direct way), and
+# retrofitting that would be a much larger, riskier change than two small auth paths
+# coexisting in one file for two different callers.
+import os
+
+import pandas as pd
+
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "team_ratings")
+_API_KEY_ENV = os.environ.get("FANTASYPROS_API_KEY", "")
+_ID_CROSSWALK_URL = "https://raw.githubusercontent.com/dynastyprocess/data/master/files/db_playerids.csv"
+FIRST_SEASON = 2017  # FantasyPros weekly projection history this correction trusts -- see
+# research/edge_signal_test_v48's own data-integrity check (Puka Nacua's week-1 2023
+# projection, 4.67 points/84th among WRs before his real breakout -- genuinely pre-game, not
+# hindsight-informed) for why this is trusted at all; not tested/used before 2017.
+
+
+def id_crosswalk() -> dict[str, int]:
+    """gsis_id -> FantasyPros fpid. Cached permanently once fetched (a player's id mapping
+    doesn't change); community-maintained (dynastyprocess), the same source nfl_data_py.
+    import_ids() wraps -- fetched directly here instead of adding nfl_data_py as a
+    dependency nfl-hub otherwise has no use for."""
+    path = os.path.join(_DATA_DIR, "fantasypros_id_crosswalk.parquet")
+    if os.path.exists(path):
+        df = pd.read_parquet(path)
+    else:
+        df = pd.read_csv(_ID_CROSSWALK_URL, usecols=["gsis_id", "fantasypros_id"])
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        df.to_parquet(path)
+    df = df.dropna(subset=["gsis_id", "fantasypros_id"])
+    return dict(zip(df["gsis_id"], df["fantasypros_id"].astype(int)))
+
+
+def _fetch_qb_week(season: int, week: int) -> list[dict]:
+    if not _API_KEY_ENV:
+        return []
+    try:
+        resp = requests.get(
+            "https://api.fantasypros.com/public/v2/json" + f"/nfl/{season}/projections",
+            params={"position": "QB", "week": week, "scoring": "HALF"},
+            headers={"x-api-key": _API_KEY_ENV, "Accept": "application/json"},
+            timeout=TIMEOUT,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:  # noqa: BLE001 -- best-effort, same soft-fail convention as team_ratings.py
+        log.warning("FantasyPros QB projections fetch failed for %s wk%s", season, week, exc_info=True)
+        return []
+    rows = []
+    for p in data.get("players") or []:
+        stats = p.get("stats") or {}
+        pts = stats.get("points_half")
+        if p.get("fpid") is not None and pts is not None:
+            rows.append({"season": season, "week": week, "fpid": int(p["fpid"]), "points": float(pts)})
+    return rows
+
+
+def qb_projections_by_season(season: int, current_season: int, current_week: int) -> dict[tuple[int, int], float]:
+    """{(week, fpid): projected half-PPR points} for every QB, every week of `season`. Same
+    per-SEASON caching convention as team_ratings._passer_game_stats (one parquet per
+    completed season, covering every week at once, committed to the repo since this CI
+    runner's disk doesn't persist between runs) -- not per-week, to avoid 150+ tiny files.
+    The CURRENT season always re-fetches whatever weeks aren't cached yet and appends them
+    (the current week's projection can still change as injury news breaks through the week,
+    same timeliness reasoning as the live QB Out/Doubtful gate elsewhere in that module).
+    Soft-fails to {} per missing week (no adjustment, same as "no change this week") rather
+    than raising -- this correction is additive on top of an already-complete model, not
+    something refresh() should ever hard-fail over."""
+    path = os.path.join(_DATA_DIR, f"fantasypros_qb_proj_{season}.parquet")
+    cached = pd.read_parquet(path) if os.path.exists(path) else pd.DataFrame(columns=["season", "week", "fpid", "points"])
+    is_complete_season = season < current_season
+    if is_complete_season and not cached.empty:
+        return {(int(r.week), int(r.fpid)): r.points for r in cached.itertuples(index=False)}
+
+    weeks_needed = range(1, 19) if is_complete_season else range(1, (current_week if season == current_season else 18) + 1)
+    have_weeks = set(cached["week"].unique()) if not cached.empty else set()
+    new_rows = []
+    for week in weeks_needed:
+        if week in have_weeks:
+            continue
+        new_rows.extend(_fetch_qb_week(season, week))
+    if new_rows:
+        cached = pd.concat([cached, pd.DataFrame(new_rows)], ignore_index=True)
+    if is_complete_season and not cached.empty:
+        os.makedirs(_DATA_DIR, exist_ok=True)
+        cached.to_parquet(path)
+    return {(int(r.week), int(r.fpid)): r.points for r in cached.itertuples(index=False)} if not cached.empty else {}
