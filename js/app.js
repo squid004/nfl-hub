@@ -47,6 +47,7 @@ const App = {
   async init() {
     DB.init();
     Tabs.init();
+    KeepDetailsOpen.init();
     document.body.addEventListener('click', e => {
       const b = e.target.closest('button[data-act]');
       if (!b) return;

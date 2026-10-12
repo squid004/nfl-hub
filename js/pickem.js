@@ -548,7 +548,7 @@ const Pickem = {
           ${btn(g.away)} ${btn(g.home)}
           <span class="game-card-mine">${mine ? `Your pick: <strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">No pick yet</span>'}</span>
         </div>
-        <details class="game-card-details">
+        <details class="game-card-details" id="ml-details-${g.game_id}">
           <summary>Details</summary>
           <div class="game-card-matchup">
             <div class="stat-label" title="Each side's own offense (0-100 EPA scale) against the OTHER side's defense -- the 8-stat foundation every prediction on this card is built from, before any of the adjustments below.">EPA matchup</div>

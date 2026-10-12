@@ -385,9 +385,11 @@ const Power = {
   // just rank order) so clustering vs. real gaps is visible as literal physical distance, not
   // just color or order. See classifyTeams() above for the five groups every team lands in.
   _distributionPanel(rows, classifications) {
+    // Each metric returns its strip plus its tier thresholds separately; the thresholds are
+    // gathered into one collapsed section under all the plots instead of under each strip.
     const metricHtml = ([key, label]) => {
       const c = classifications[key];
-      if (!c) return '';
+      if (!c) return null;
       const groupOf = c.groupOf;
 
       const ticks = rows.filter(r => r[key] != null).map(r => {
@@ -413,21 +415,30 @@ const Power = {
         return `<li><strong class="${g.textCls}">${g.label}</strong>: ${cond}</li>`;
       }).join('');
 
-      return `<div class="dist-metric">
-        <div class="dist-label">${esc(label)}</div>
-        <div class="dist-strip">
-          <div class="dist-mean-line" style="left:${c.avg}%" title="League average: ${c.avg.toFixed(1)}/100"></div>
-          ${ticks}
-        </div>
-        <ul class="dist-tiers">${lines}</ul>
-      </div>`;
+      return {
+        strip: `<div class="dist-metric">
+          <div class="dist-label">${esc(label)}</div>
+          <div class="dist-strip">
+            <div class="dist-mean-line" style="left:${c.avg}%" title="League average: ${c.avg.toFixed(1)}/100"></div>
+            ${ticks}
+          </div>
+        </div>`,
+        tiers: `<div class="dist-metric">
+          <div class="dist-label">${esc(label)}</div>
+          <ul class="dist-tiers">${lines}</ul>
+        </div>`,
+      };
     };
-    const metrics = DIST_METRICS.map(metricHtml).filter(Boolean).join('');
-    if (!metrics) return '';
+    const parts = DIST_METRICS.map(metricHtml).filter(Boolean);
+    if (!parts.length) return '';
     return `
       <div class="panel">
         <h2>EPA distribution &amp; tiers</h2>
-        ${metrics}
+        ${parts.map(p => p.strip).join('')}
+        <details class="power-methodology">
+          <summary class="muted small">Show tiers (click to expand)</summary>
+          ${parts.map(p => p.tiers).join('')}
+        </details>
       </div>`;
   },
 };

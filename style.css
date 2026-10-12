@@ -254,3 +254,11 @@ summary { cursor:pointer; }
 #methodology ul { margin:4px 0 10px; padding-left:20px; }
 #methodology li { margin-bottom:4px; }
 #methodology code { background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:.85em; }
+
+/* Touch devices: shorter tall charts so they don't fill a whole phone screen, and let a finger
+   that starts on a chart scroll the page (see makePlotlyTouchFriendly() in js/util.js). */
+@media (pointer: coarse) {
+  #backtest-chart { height:360px; }
+  #backtest-weekyear { height:340px; }
+  .js-plotly-plot .draglayer .drag { touch-action:pan-x pan-y !important; }
+}
