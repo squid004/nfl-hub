@@ -12,6 +12,7 @@ const HIST_COLS = [
   ['rank', 'Rank'],
   ['season', 'Season'],
   ['team', 'Team'],
+  ['win_pct', 'Record', 'That season\'s regular-season record. Sorts by win percentage (ties count as half a win).'],
   ['score', 'Power Score'],
   ['rush_off_epa', 'Rush Offense'],
   ['pass_off_epa', 'Pass Offense'],
@@ -64,7 +65,16 @@ const Historical = {
         </div>`;
     }
 
-    const rows = all.map(r => ({ team: r.team, season: r.season, rank: r.rank, score: r.score_display, sos: r.sos_display, ...r.ratings_display }));
+    const rows = all.map(r => {
+      const rec = r.record;
+      const games = rec ? rec.wins + rec.losses + rec.ties : 0;
+      return {
+        team: r.team, season: r.season, rank: r.rank, score: r.score_display, sos: r.sos_display,
+        win_pct: games ? (rec.wins + 0.5 * rec.ties) / games : null,
+        record_text: rec ? `${rec.wins}-${rec.losses}${rec.ties ? '-' + rec.ties : ''}` : null,
+        ...r.ratings_display,
+      };
+    });
 
     // Sorting always runs over the FULL pooled dataset, not just the visible window -- only
     // the display is capped to the top HIST_DISPLAY_CAP of whatever order that produces, so
@@ -84,7 +94,7 @@ const Historical = {
     }).join('');
 
     const body = shown.map(r => `<tr>${HIST_COLS.map(([key]) =>
-      `<td class="num">${fmtHistVal(key, r[key])}</td>`).join('')}</tr>`).join('');
+      `<td class="num">${key === 'win_pct' ? (r.record_text ?? '—') : fmtHistVal(key, r[key])}</td>`).join('')}</tr>`).join('');
 
     document.getElementById('historical-table-wrap').innerHTML =
       `<table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;

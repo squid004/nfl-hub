@@ -1794,17 +1794,18 @@ def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict
     }
 
 
-def season_records(played_games: list[dict], season: int) -> dict[str, dict[str, int]]:
-    """Each team's win-loss-tie record for ONE season, straight off final scores -- same
-    normalize_team() mapping `ratings`'s own keys use, so the frontend can look a team up
-    directly without a second translation step. Ties count for neither side (NFL regular-
-    season ties are rare but real, e.g. overtime)."""
+def season_records(played_games: list[dict], season: int, team_code=normalize_team) -> dict[str, dict[str, int]]:
+    """Each team's win-loss-tie record for ONE season, straight off final scores. Keys use
+    `team_code` -- normalize_team() by default so the live dashboard's team lookups match;
+    the historical dataset passes _historical_team_code so its franchise-era codes (STL/SD/
+    OAK) line up with the historical rankings' own keys. Ties count for neither side (NFL
+    regular-season ties are rare but real, e.g. overtime)."""
     records: dict[str, dict[str, int]] = {}
     for g in played_games:
         if int(g["season"]) != season:
             continue
         try:
-            home, away = normalize_team(g["home_team"]), normalize_team(g["away_team"])
+            home, away = team_code(g["home_team"]), team_code(g["away_team"])
         except UnknownTeamError:
             continue
         home_pts, away_pts = float(g["home_score"]), float(g["away_score"])
@@ -2352,6 +2353,9 @@ def refresh_historical(store, force: bool = False) -> str:
     season_avgs, opponents = compute_historical_season_averages(played, current_season)
     rankings = historical_power_rankings(season_avgs, opponents)
     seasons_covered = sorted({s for _, s in season_avgs})
+    records_by_season = {s: season_records(played, s, _historical_team_code) for s in seasons_covered}
+    for row in rankings:
+        row["record"] = records_by_season[row["season"]][row["team"]]
 
     # Per-game backtest log for the scatter plot below the table -- same compute_ratings()
     # the live tab uses, just asked to also record its own pre-game snapshot of every game
