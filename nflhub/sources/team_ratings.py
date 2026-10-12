@@ -203,18 +203,18 @@ def delta_win_prob(delta: float) -> float:
 # flip more picks, it's so `delta` (and therefore delta_win_prob's displayed confidence)
 # honestly reflects known health context instead of silently ignoring it. Computed once
 # offline, not refit daily.
-# Refit 2026-10-11 (research/edge_signal_test_v42_qb_window5_static_refit.py, same joint-fit
-# recipe as v26 above, 4431 games) after qb_quality_gap_data() changed its primary-starter
-# definition from season-cumulative attempts to a trailing-5-game window -- see that
-# function's docstring and PRIMARY_WINDOW's own comment for why (research/edge_signal_
-# test_v40_qb_recency_decay.py). A separate decay/reinsertion idea (the gap shrinking the
-# longer a backup starts, with a symmetric boost when the primary returns) was tested
-# alongside the window change and rejected -- see qb_quality_gap_data()'s docstring --
-# so only the window change is reflected in this refit. SKILL_EPA_OUT_WEIGHT barely moved
-# (-0.0362 -> -0.0360); QB_QUALITY_GAP_WEIGHT moved from -0.5903 to -0.5202, still
-# significant (z=-3.25, was -3.63).
-QB_QUALITY_GAP_WEIGHT = -0.5202
-SKILL_EPA_OUT_WEIGHT = -0.0360
+# Refit 2026-10-11, twice: v42 (window5 primary, static gap, QB_QUALITY_GAP_WEIGHT -0.5903 ->
+# -0.5202) and then v47 (research/edge_signal_test_v47_qb_decay_rate04_refit.py, same
+# joint-fit recipe as v26 above, 4431 games) after qb_quality_gap_data() ALSO started
+# decaying the gap by QB_GAP_DECAY_RATE -- see that constant's own comment and
+# qb_quality_gap_data()'s docstring for the decay/reinsertion decomposition that led here (a
+# bundled decay+reinsertion mechanism tested null; decomposing it found decay alone real,
+# reinsertion alone the part dragging the bundle down). SKILL_EPA_OUT_WEIGHT barely moved
+# again (-0.0360 -> -0.0364); QB_QUALITY_GAP_WEIGHT moved from -0.5202 to -1.0556 (the raw
+# gap's own std shrank from 0.1346 to 0.0921 once decayed, so the weight needed to grow to
+# carry the same contribution) -- MORE significant than before (z=-4.23, was -3.25).
+QB_QUALITY_GAP_WEIGHT = -1.0556
+SKILL_EPA_OUT_WEIGHT = -0.0364
 
 # Home-field advantage: every OTHER signal in this model is venue-blind (a team's own rating
 # reflects its average performance regardless of where it played), so `delta` had NO
@@ -415,6 +415,18 @@ PRIMARY_WINDOW = 5  # trailing starts considered for "who's the real current pri
 # cumulative definition; 5-6 games ties/slightly beats it on walk-forward AUC while reacting
 # within 2-3 games to a genuine change instead of however long a cumulative crossover takes.
 
+QB_GAP_DECAY_RATE = 0.4  # shrinks the QB-health gap by (1-rate)**(n-1) for the n-th straight
+# game the SAME non-primary passer has started -- a flat, never-decaying gap double-counts
+# whatever the team's own rolling rating has already caught up to on its own by then. Swept
+# as its own free parameter (NOT assumed equal to EWMA_ALPHA, a different rolling rating this
+# was originally borrowed from) in research/edge_signal_test_v45_qb_decay_rate_sweep.py and
+# validated with a chronological select/confirm split in _v46_qb_decay_rate_select_confirm.py
+# -- rate 0.4 selected using only 2014-2020, replicated on the 2021-2025 confirm set never
+# touched during selection (AUC +0.0018). A 30-repeat random-split version agreed in
+# direction but was noisier (70% of repeats favorable) -- real effect, not airtight. See
+# qb_quality_gap_data()'s own docstring for why this is decay WITHOUT a reinsertion boost on
+# the primary's return (that half was tested and separately confirmed to hurt, v44).
+
 
 def qb_quality_gap_data(played_games: list[dict], current_season: int):
     """One chronological walk over every passer's pass attempts/EPA (FIRST_INJURY_SEASON
@@ -448,13 +460,22 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
     lookahead, no season-boundary reset (a team's last few starts of the previous season are
     still the best prior entering week 1). Replaced a season-CUMULATIVE-attempts definition
     2026-10-11 after it mislabeled a live matchup (see PRIMARY_WINDOW's own comment).
-    DECAY/REINSERTION, rejected: also tried making the gap shrink the longer a backup has
-    already started (the team's own rolling rating is independently catching up at the same
-    EWMA_ALPHA rate) and crediting a symmetric boost back when the primary returns, instead of
-    this flat formula. Correctly implemented (research/edge_signal_test_v40_qb_recency_
-    decay.py, after fixing a bug in an earlier version that only credited the reinsertion
-    boost for one week instead of decaying it over several), it ties production's own AUC at
-    best and underperforms it everywhere else in the sweep -- confirmed null, not shipped."""
+    DECAY (shipped) + REINSERTION (rejected): also tried making the gap shrink the longer a
+    backup has already started, on the theory that the team's own rolling rating is
+    independently catching up to his real level the whole time, so a flat correction
+    double-counts it; paired with a symmetric boost back when the primary returns. Bundled
+    together (research/edge_signal_test_v40), decay+reinsertion ties production's own AUC at
+    best and underperforms it everywhere else -- but DECOMPOSING the two (v44) found the
+    bundle was hiding a real effect: decay ALONE (no reinsertion) beats static, isolated to
+    the games where an absence is actually active (AUC +0.0020, logloss -0.0021, both metrics
+    agreeing for the first time in this whole investigation); reinsertion alone made things
+    worse every time, confirming IT (not decay) was dragging the bundled result down.
+    QB_GAP_DECAY_RATE below was then swept as its own free parameter rather than assumed equal
+    to EWMA_ALPHA (v45) and validated with a chronological select/confirm split (v46: rate 0.4
+    selected on 2014-2020, replicated on the held-out 2021-2025 confirm set, AUC +0.0018) --
+    a 30-repeat random-split version agreed in direction but was noisier (70% of repeats
+    favorable), so this is shipped as a real-but-not-airtight finding, not a slam dunk.
+    No reinsertion: the correction still snaps to exactly 0 the instant the primary returns."""
     frames = []
     for season in range(FIRST_INJURY_SEASON, current_season + 1):
         try:
@@ -466,7 +487,7 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
         df["season"] = season
         frames.append(df)
     if not frames:
-        return {}, {}, {}, 0.0, {}, 0.0
+        return {}, {}, {}, 0.0, {}, 0.0, {}
     passer_df = pd.concat(frames, ignore_index=True)
 
     games_by_id = {g["game_id"]: g for g in played_games}
@@ -542,7 +563,14 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
     league_avg_epa = (sum(league_avg) / len(league_avg)) if league_avg else 0.0
     backup_avg_epa = (backup_epa_sum / backup_attempts) if backup_attempts else league_avg_epa
 
+    # Decays by how many straight games the CURRENT non-primary passer has already started --
+    # see QB_GAP_DECAY_RATE's own comment. streak_n is per-team state carried across this
+    # chronological walk; current_streak_n below exposes each team's END state (as of its
+    # most recently PLAYED game) so refresh()'s live/upcoming path can extend the same decay
+    # one more week instead of re-deriving it. No reinsertion -- resets straight to 0 the
+    # instant the primary returns (confirmed to hurt if credited back gradually, v44).
     gap_by_team_week: dict[tuple[str, int, int], float] = {}
+    streak_n: dict[str, int] = defaultdict(int)
     for gid, team, season, week in game_order:
         primary = primary_so_far.get((team, gid))
         actual = actual_passer.get((gid, team))
@@ -555,13 +583,22 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
         # tracked attempts (a true NFL debut) -- backup_avg_epa is the better estimate of
         # "an unknown passer thrust into playing," same reasoning as the live gate below.
         ta = ta if ta is not None else backup_avg_epa
-        gap_by_team_week[(team, season, week)] = tp - ta
+        raw_gap = tp - ta
+
+        if actual != primary:
+            streak_n[team] += 1
+            decay_factor = (1 - QB_GAP_DECAY_RATE) ** (streak_n[team] - 1)
+            gap_by_team_week[(team, season, week)] = raw_gap * decay_factor
+        else:
+            streak_n[team] = 0
+            gap_by_team_week[(team, season, week)] = 0.0
 
     current_primary: dict[str, str] = {team: window_pick(hist) for team, hist in window_hist.items() if hist}
     current_trailing_epa = {p: ((sum(h) / len(h)) if h else league_avg_epa) for p, h in passer_hist.items()}
     passer_names: dict[str, str] = dict(zip(passer_df["passer_player_id"], passer_df["name"]))
+    current_streak_n: dict[str, int] = dict(streak_n)
 
-    return gap_by_team_week, current_primary, current_trailing_epa, league_avg_epa, passer_names, backup_avg_epa
+    return gap_by_team_week, current_primary, current_trailing_epa, league_avg_epa, passer_names, backup_avg_epa, current_streak_n
 
 
 def skill_epa_history(current_season: int) -> tuple[dict[str, list], float]:
@@ -2081,7 +2118,7 @@ def refresh_historical(store, force: bool = False) -> str:
     game_log: list[dict] = []
     compute_ratings(played, current_season, game_log=game_log)
     qb_out = _qb_out_doubtful_by_week(current_season)
-    qb_gap, _primary, _trailing, _league_avg, _names, _backup_avg = qb_quality_gap_data(played, current_season)
+    qb_gap, _primary, _trailing, _league_avg, _names, _backup_avg, _streak_n = qb_quality_gap_data(played, current_season)
     skill_out = skill_epa_out_by_team_week(current_season)
     hfa_by_season = home_field_logit_by_season(played)
     midgame_qb_injury = midgame_qb_injury_by_week(current_season)
@@ -2184,7 +2221,7 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
             continue
 
     qb_out_asof = _qb_out_doubtful_by_week(current_season)
-    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa, _names, _backup_avg = qb_quality_gap_data(played_cutoff, current_season)
+    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa, _names, _backup_avg, _streak_n = qb_quality_gap_data(played_cutoff, current_season)
     qb_gap_week: dict[tuple[str, int], float] = {}
     for (team, season, wk), is_out in qb_out_asof.items():
         if season != current_season or wk != week or not is_out:
@@ -2441,7 +2478,10 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
     # league average -- league-wide EPA/play is dominated by starters (83% of all
     # attempts), so it was quietly estimating "the replacement plays like a competent
     # starter," which is never true (see qb_quality_gap_data()'s own docstring for the real
-    # numbers and the Caleb Williams case that surfaced this, 2026-10-08).
+    # numbers and the Caleb Williams case that surfaced this, 2026-10-08). Decayed by
+    # QB_GAP_DECAY_RATE for however many straight PAST games (current_streak_n, as of the
+    # most recently played one) this same absence has already run -- same as the historical
+    # walk, continuing one more week instead of snapping back to full strength each week.
     #
     # The LIVE gate here uses ESPN's injury feed (`injuries`, same one the game-card's QB
     # chip reads), not nflverse's weekly report that every historical/backtested path below
@@ -2453,13 +2493,14 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
     # backtested number still comes from, nflverse exclusively (ESPN's feed has no
     # historical archive to validate against, same reason weather comes from a separate
     # live source instead of nflverse).
-    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa, passer_names, backup_avg_epa = qb_quality_gap_data(played, current_season)
+    _qb_gap_hist, current_primary, current_trailing_epa, league_avg_epa, passer_names, backup_avg_epa, current_streak_n = qb_quality_gap_data(played, current_season)
     qb_gap_upcoming: dict[tuple[str, int], float] = {}
     for team, primary in current_primary.items():
         if not _primary_qb_out_live(team, primary, passer_names, injuries):
             continue
         tp = current_trailing_epa.get(primary, league_avg_epa)
-        qb_gap_upcoming[(team, current_week)] = tp - backup_avg_epa
+        decay_factor = (1 - QB_GAP_DECAY_RATE) ** current_streak_n.get(team, 0)
+        qb_gap_upcoming[(team, current_week)] = (tp - backup_avg_epa) * decay_factor
     skill_out_by_tw = skill_epa_out_by_team_week(current_season)
     skill_out_upcoming = {(team, week): v for (team, season, week), v in skill_out_by_tw.items() if season == current_season}
     hfa_logit_current = home_field_logit_by_season(played).get(current_season, 0.0)

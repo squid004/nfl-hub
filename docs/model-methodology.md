@@ -65,8 +65,8 @@ graded dataset, none of them touch `POWER_WEIGHTS` or the 8-stat composite itsel
 
 | Correction | Weight | What it captures | Hit-rate mover? |
 |---|---|---|---|
-| QB health | `QB_QUALITY_GAP_WEIGHT = -0.5202` | Trailing EPA/dropback gap between a team's **current primary** (most starts in the trailing 5 games, ties broken toward the more recent start — see below) and whoever's actually playing (live/upcoming games: a **backup-average** estimate, not league average — see below) | No (calibration only) |
-| Skill-position health | `SKILL_EPA_OUT_WEIGHT = -0.0360` | Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB | No (calibration only) |
+| QB health | `QB_QUALITY_GAP_WEIGHT = -1.0556` | Trailing EPA/dropback gap between a team's **current primary** (most starts in the trailing 5 games, ties broken toward the more recent start) and whoever's actually playing, **decayed** by `QB_GAP_DECAY_RATE = 0.4` for each additional straight game the same non-primary passer has started — see below | No (calibration only) |
+| Skill-position health | `SKILL_EPA_OUT_WEIGHT = -0.0364` | Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB | No (calibration only) |
 | Home-field advantage | `HFA_WEIGHT = 0.9169` | Trailing-5-season home win rate, shrunk toward all-time average (`HFA_SHRINKAGE_K = 100`) | **Yes** |
 | Momentum | `MOMENTUM_WEIGHT = 0.0262` | Signed current win/loss streak, reset at season boundaries and ties | **Yes** |
 
@@ -124,11 +124,23 @@ yet even though the depth chart clearly had already changed. Checked empirically
 windows overreact to a single-game blip and tested worse than cumulative; 5-6 games ties/
 slightly beats it on walk-forward AUC while reacting within 2-3 games to a real change
 instead of however long a cumulative crossover takes (research/edge_signal_test_v40_qb_
-recency_decay.py). A related idea — decaying the correction the longer a backup has already
-started (since the team's own rolling rating independently catches up at the same EWMA
-rate), with a symmetric boost when the primary returns — was tested alongside this and
-**rejected**: correctly implemented, it ties production's AUC at best and underperforms it
-everywhere else in the sweep (see §3.1).
+recency_decay.py).
+
+**The gap also decays the longer a backup has already started** (`QB_GAP_DECAY_RATE = 0.4`),
+instead of applying the same flat-size correction on his 1st start and his 8th. A bundled
+version of this — decay plus a symmetric boost crediting the correction back when the
+primary returns — was tested first and tied production's AUC at best, underperforming it
+everywhere else in the sweep. Decomposing the bundle (research/edge_signal_test_v44) found it
+was hiding a real effect: decay ALONE (no reinsertion) beats static, isolated to the games
+where an absence is actually active (AUC +0.0020, logloss -0.0021, agreeing for the first
+time in this investigation); reinsertion alone made things worse every time, confirming it
+was the half dragging the bundle down (see §3.1 for the rejected reinsertion idea). The 0.4
+rate itself was then swept as its own free parameter rather than assumed equal to EWMA_ALPHA
+(research/edge_signal_test_v45) and validated with a chronological select/confirm split
+(_v46): rate 0.4, selected using only 2014-2020, replicated on the held-out 2021-2025 confirm
+set it never touched during selection (AUC +0.0018) — a 30-repeat random-split version of the
+same test agreed in direction but was noisier (70% of repeats favorable). Shipped as a real
+but not airtight finding, not a slam dunk.
 
 ### 1.4 Points prediction and weather
 
@@ -211,7 +223,9 @@ graded decided game available at the time.
 | 2026-10-11 | Specific identified backup's own trailing EPA, instead of pooled backup-average (v38) | Name resolution via ESPN's QB depth chart worked correctly against a real case (CHI → Bagent). On the 287 historical games where a real backup would've had ≥50 attempts (66.6% coverage), using their own EPA scored *worse* (176/281) than the pool average (178/281); 12-flip paired check confirms noise, not a real effect (z=-0.58) | Not shipped — reverted after backtesting; see §3.1 |
 | 2026-10-11 | Garbage-time-filtered points_off/points_def_allowed, composite reweighted (v39) | `points_off`/`points_def_allowed` are the #1 and #3 heaviest-weighted of all 8 stats (~41% combined) and the only two NOT garbage-time-filtered like every EPA stat already is. Rebuilt filtered (per-play score-state deltas, same WP band) and refit the whole composite from scratch: AUC 0.6746→0.6709, log loss and accuracy both worse too — garbage-time points aren't noise, a team that wins big enough to rack them up is still genuinely better on average | Not shipped — confirmed slightly worse, not better; see §3.1 |
 | 2026-10-11 | QB "primary" definition switched from season-cumulative attempts to a trailing 5-game window (v40/v42); refit `QB_QUALITY_GAP_WEIGHT` | Found via a live mislabeling bug (Atlanta's Details card blamed the wrong team's backup-QB situation — the cumulative definition hadn't caught up to a real in-season starter change yet). Window sweep: 3-4 games overreacts to a single-game blip and tests worse than cumulative; 5-6 games ties/slightly beats it (AUC 0.6739 vs 0.6739, accuracy 62.08% vs 61.79%) while reacting within 2-3 games instead of however long a cumulative crossover takes. Refit `QB_QUALITY_GAP_WEIGHT` -0.5903→-0.5202 (still z=-3.25) | **Shipped** — research/edge_signal_test_v40_qb_recency_decay.py, _v42_qb_window5_static_refit.py |
-| 2026-10-11 | Decaying the QB-health correction by how long a backup has started, with a symmetric reinsertion boost on the primary's return (v40/v41) | Hypothesis: the team-level rolling rating (same EWMA half-life) independently catches up to a backup's true quality after ~4-5 starts, so a flat, never-decaying correction double-counts what the rolling rating already reflects; symmetric logic on return. Tested alongside the window-5 change — AUC ties production at best (0.6739) and underperforms it everywhere else in the sweep (0.6707-0.6720) once a reinsertion-boost bug (credited only 1 week instead of decaying over several) was found and fixed | Not shipped — confirmed null once correctly implemented; see §3.1 |
+| 2026-10-11 | Decaying the QB-health correction by how long a backup has started, with a symmetric reinsertion boost on the primary's return, bundled together (v40/v41) | Hypothesis: the team-level rolling rating (same EWMA half-life) independently catches up to a backup's true quality after ~4-5 starts, so a flat, never-decaying correction double-counts what the rolling rating already reflects; symmetric logic on return. Bundled, AUC ties production at best (0.6739) and underperforms everywhere else (0.6707-0.6720) | Not shipped as a bundle — decomposed below |
+| 2026-10-11 | Decomposing decay from reinsertion (v44): decay alone beats static, reinsertion alone is what was dragging the bundle down | Isolated to the games where an absence is actually active: decay-only AUC 0.6836 vs static 0.6816 (+0.0020), logloss 0.6439 vs 0.6460 (-0.0021) — both metrics agreeing for the first time in this investigation. Reinsertion-only underperformed static in every view tested | Decay alone validated further below; reinsertion confirmed null, see §3.1 |
+| 2026-10-11 | Decay rate swept as its own free parameter (not assumed = EWMA_ALPHA) and validated with chronological + random select/confirm splits (v45/v46/v47); refit `QB_QUALITY_GAP_WEIGHT` | Sweep showed a smooth inverted-U peaking near rate 0.4 in both AUC and logloss. Chronological split (select on 2014-2020, confirm on 2021-2025, never touched during selection): rate 0.4 replicated, AUC +0.0018. A 30-repeat random 50/50 split agreed in direction but was noisier (70% of repeats favorable, vs chronological's clean replication) — real effect, not airtight. Refit `QB_QUALITY_GAP_WEIGHT` -0.5202→-1.0556 (MORE significant, z=-4.23, was z=-3.25) | **Shipped** — research/edge_signal_test_v44 through _v47 |
 
 **Net effect across the whole timeline**: the model's backtested SU hit rate moved from
 **62.87%** (pure 8-stat composite, no corrections) to **63.09%** (current, with QB/skill
@@ -281,20 +295,18 @@ revisiting.
   rack them up is still, on average, genuinely better, and filtering them out throws away
   real signal along with whatever noise came with it. Full removal (not just filtering) of
   the points terms, reweighting the remaining 6, hasn't been tested.
-- **Decaying the QB-health gap by how long a backup has already started, plus a symmetric
-  reinsertion boost when the primary returns** (v40/v41, 2026-10-11) — prompted by the same
-  Atlanta mislabeling that led to the window-5 primary fix above, plus the observation that
-  `trailing_epa` (a flat, never-decaying career average) applies the same-size correction on
-  a backup's 1st start and his 8th, even though the team's own rolling rating (EWMA_ALPHA=0.2,
-  ~4-game half-life) is independently catching up to his real level the whole time. First
-  implementation had a real bug — the reinsertion boost was gated on a counter that reset to
-  0 on the very first healthy week back, so it only ever credited ONE week of recovery
-  instead of decaying over several like the penalty does. After fixing that (decay the
-  pending credit in place each healthy week instead of gating on a separately-reset counter)
-  and re-running the sweep: window5+decay no longer ties/beats the static formula — AUC drops
-  to 0.6718-0.6720 vs the static formula's 0.6718-0.6739 depending on window size, worse in
-  every case except a tie at best. Confirmed null once correctly implemented — the window-5
-  recency fix shipped on its own with the plain static gap formula (v42).
+- **A symmetric reinsertion boost crediting the QB-health gap back when the primary
+  returns, decaying over the following games instead of snapping to 0** (v40/v41/v44,
+  2026-10-11) — the natural complement to the decay idea that DID ship (§1.3): if the
+  correction shrinks while a backup starts because the team's own rolling rating is
+  independently catching up, shouldn't it also credit something back once the real primary
+  is back and the rolling rating is still lagging behind him? Bundled with decay, this tied
+  production's AUC at best and underperformed everywhere else (after fixing a real bug where
+  the first attempt only credited ONE week of recovery instead of decaying over several).
+  DECOMPOSING decay from reinsertion (v44) confirmed it's reinsertion specifically that's the
+  problem, not decay: reinsertion-only underperformed static in every view tested (full
+  population AND isolated to active-absence games), while decay-only beat static in both.
+  Confirmed null on its own, independent of decay's fate.
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
@@ -342,9 +354,10 @@ FIRST_SEASON = 2007                FIRST_INJURY_SEASON = 2009
 EWMA_ALPHA = 0.2                   SEASON_PRIOR_GAMES = 5
 WP_LO, WP_HI = 0.05, 0.95          HFA_SHRINKAGE_K = 100
 
-QB_QUALITY_GAP_WEIGHT  = -0.5202   (calibration only)
-SKILL_EPA_OUT_WEIGHT   = -0.0360   (calibration only)
+QB_QUALITY_GAP_WEIGHT  = -1.0556   (calibration only)
+SKILL_EPA_OUT_WEIGHT   = -0.0364   (calibration only)
 PRIMARY_WINDOW         = 5 games   (trailing-window plurality, ties -> more recent start)
+QB_GAP_DECAY_RATE      = 0.4       (shrinks the gap each straight game a backup keeps starting)
 HFA_WEIGHT             = +0.9169   (moves hit rate)
 MOMENTUM_WEIGHT        = +0.0262   (moves hit rate)
 
