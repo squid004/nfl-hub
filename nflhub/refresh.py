@@ -249,11 +249,14 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         log.exception("historical power rankings refresh failed")
         summary["errors"].append(f"historical_power: {exc}")
 
-    # 4c. freeze each game's "take N" contribution once ITS OWN calendar day's earliest
-    # kickoff passes (year-end analysis) -- a Thursday night game locks only the Thursday
-    # game(s); Sunday/Monday games keep moving on live odds/ELWAY right up until THEIR OWN
-    # day's first kickoff. Grouped by local calendar date (cfg.timezone) so this works the
-    # same for any day of the week without hardcoding which weekdays NFL games fall on.
+    # 4c. freeze each game's "take N" contribution once it locks (year-end analysis).
+    # ML locks by CALENDAR DAY: a Thursday night game locks every Thursday game, while
+    # Sunday/Monday games keep moving on live odds/ELWAY right up until THEIR OWN day's
+    # first kickoff -- grouped by local calendar date (cfg.timezone) so this works the same
+    # for any day of the week without hardcoding which weekdays NFL games fall on. ATS locks
+    # per GAME instead, at that game's own kickoff -- a 1pm Sunday game locks at 1pm, a 4pm
+    # Sunday game on the same slate keeps moving until 4pm, regardless of what else already
+    # kicked off that day.
     try:
         dist_raw = store.kv_get("hist_distribution")
         if dist_raw and games:
@@ -275,15 +278,18 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
                 day = local_dt.date()
                 if day not in earliest_by_date or local_dt < earliest_by_date[day]:
                     earliest_by_date[day] = local_dt
-            locked_ids = {
+            locked_ids_by_day = {
                 gid for gid, dt in local_kickoff_by_game.items()
                 if earliest_by_date[dt.date()] <= now
+            }
+            locked_ids_own_kickoff = {
+                gid for gid, dt in local_kickoff_by_game.items() if dt <= now
             }
 
             prev_frozen = store.budget_snapshot_games(week)
             frozen_for_history = {
-                mode: {gid: g for gid, g in prev_frozen.get(mode, {}).items() if gid in locked_ids}
-                for mode in ("ml", "ats")
+                "ml": {gid: g for gid, g in prev_frozen.get("ml", {}).items() if gid in locked_ids_by_day},
+                "ats": {gid: g for gid, g in prev_frozen.get("ats", {}).items() if gid in locked_ids_own_kickoff},
             }
 
             # Prefer the cross-book average spread (Action Network, several real
@@ -299,7 +305,10 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
                 budget_odds[gid] = {**o, "spread": avg_spread if avg_spread is not None else o.get("spread")}
             for mode, rows in history.week_budget(dist, games, budget_odds, elway_rows, frozen_for_history).items():
                 store.upsert_budget_snapshot(week, mode, rows)
-            summary["budget_snapshot"] = f"written ({len(locked_ids)} game(s) locked)"
+            summary["budget_snapshot"] = (
+                f"written (ml: {len(locked_ids_by_day)} game(s) locked by day, "
+                f"ats: {len(locked_ids_own_kickoff)} game(s) locked by own kickoff)"
+            )
     except Exception as exc:  # noqa: BLE001 - best-effort analytics; don't fail the run
         log.warning("budget snapshot skipped: %s", exc)
         summary["budget_snapshot"] = f"skipped ({exc})"
