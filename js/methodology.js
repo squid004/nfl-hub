@@ -92,8 +92,8 @@ const Methodology = {
         <table>
           <thead><tr><th>Correction</th><th>Weight</th><th>Captures</th><th>Moves hit rate?</th></tr></thead>
           <tbody>
-            <tr><td>QB health</td><td class="num">-0.5903</td><td>Trailing EPA/dropback gap, normal starter vs. whoever's actually playing (live games: a backup-average estimate, not league average)</td><td><span class="chip bad">No</span> (calibration)</td></tr>
-            <tr><td>Skill-position health</td><td class="num">-0.0362</td><td>Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB</td><td><span class="chip bad">No</span> (calibration)</td></tr>
+            <tr><td>QB health</td><td class="num">-0.5202</td><td>Trailing EPA/dropback gap, current primary (most starts in trailing 5 games) vs. whoever's actually playing (live games: a backup-average estimate, not league average)</td><td><span class="chip bad">No</span> (calibration)</td></tr>
+            <tr><td>Skill-position health</td><td class="num">-0.0360</td><td>Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB</td><td><span class="chip bad">No</span> (calibration)</td></tr>
             <tr><td>Home-field advantage</td><td class="num">+0.9169</td><td>Trailing-5-season home win rate, shrunk toward all-time average</td><td><span class="chip good">Yes</span></td></tr>
             <tr><td>Momentum</td><td class="num">+0.0262</td><td>Signed current win/loss streak, reset at season boundaries/ties</td><td><span class="chip good">Yes</span></td></tr>
           </tbody>
@@ -130,6 +130,19 @@ const Methodology = {
           (research/edge_signal_test_v37): hit rate flat on the affected games (same
           "statistically flat" pattern every QB/skill check has shown), calibration gap
           trending the right direction but not alone significant. Fixed 2026-10-08.</p>
+        <p class="small"><strong>Who counts as a team's "primary" starter</strong> uses a
+          trailing 5-game window (most starts in that window, ties broken toward the more
+          recent start) -- not a season-long cumulative-attempts count. Switched 2026-10-11
+          after the cumulative definition mislabeled a live matchup: a Details card blamed a
+          backup-QB penalty on a passer who hadn't actually started in two games, because the
+          real current starter had been hurt to <em>begin</em> the season, so the backup's
+          early cumulative-attempts lead hadn't been caught up to yet even though the depth
+          chart had already changed. 3-4 game windows overreact to a single-game blip and
+          tested worse than cumulative; 5-6 games ties/slightly beats it on walk-forward AUC
+          while reacting within 2-3 games instead of however long a cumulative crossover
+          takes (research/edge_signal_test_v40). A related idea -- decaying the correction
+          the longer a backup has started, with a symmetric boost when the primary returns --
+          was tested alongside this and rejected (see Confirmed null below).</p>
         <p class="small"><strong>Neutral-site exception:</strong> the HFA term (and the
           score-distribution pipeline's home/away points bias) is forced to exactly 0 for
           neutral-site games. nflverse's own <code>location</code> field is inconsistent --
@@ -210,6 +223,8 @@ const Methodology = {
       ['2026-10-08', 'QB-health replacement estimate: backup average, not league average', 'League EPA/play (+0.035) is mostly starters (83% of attempts) -- backups alone average -0.070. No refit needed (weight was always fit against real hindsight backup data). Hit rate flat on affected games (374&rarr;375 of 591, z=+0.21) but calibration gap widened the right way (z 0.91&rarr;1.36); net historical lift +10&rarr;+11 games (62.87%&rarr;63.09%)', 'good', 'Shipped (research/edge_signal_test_v37)'],
       ['2026-10-11', 'Specific identified backup&rsquo;s own EPA, instead of pooled backup-average', 'ESPN depth-chart name resolution worked correctly against a real case (CHI &rarr; Bagent, 152 attempts). On the 287 games with enough sample to test (66.6% coverage), using it scored worse (176/281) than the pool average (178/281) -- 12-flip paired check confirms noise either way (z=-0.58)', 'bad', 'Not shipped (research/edge_signal_test_v38)'],
       ['2026-10-11', 'Garbage-time-filtered points_off/points_def_allowed, composite reweighted', 'points_off/points_def_allowed are the #1 and #3 heaviest-weighted of all 8 stats (~41% combined) and the only two not garbage-time-filtered like every EPA stat already is. Rebuilt filtered and refit the whole composite from scratch: AUC 0.6746&rarr;0.6709, log loss and accuracy both worse too', 'bad', 'Not shipped (research/edge_signal_test_v39)'],
+      ['2026-10-11', 'QB &ldquo;primary&rdquo; definition switched from season-cumulative attempts to a trailing 5-game window; refit QB_QUALITY_GAP_WEIGHT', 'Found via a live mislabeling bug (a Details card blamed the wrong team&rsquo;s backup-QB situation -- the cumulative definition hadn&rsquo;t caught up to a real in-season starter change yet). Window sweep: 3-4 games overreacts to a single-game blip and tests worse than cumulative; 5-6 games ties/slightly beats it (AUC 0.6739 vs 0.6739, accuracy 62.08% vs 61.79%). Refit -0.5903&rarr;-0.5202 (still z=-3.25)', 'good', 'Shipped (research/edge_signal_test_v40/v42)'],
+      ['2026-10-11', 'Decaying the QB-health gap by backup tenure, with a symmetric reinsertion boost on return', 'Hypothesis: the team-level rolling rating (same EWMA half-life) independently catches up to a backup&rsquo;s true quality after ~4-5 starts, so a flat correction double-counts it. Tested alongside the window-5 change -- ties production&rsquo;s AUC at best (0.6739) and underperforms it everywhere else (0.6707-0.6720) once a reinsertion-boost bug (credited only 1 week instead of decaying over several) was found and fixed', 'bad', 'Not shipped (research/edge_signal_test_v40/v41)'],
     ];
     const body = rows.map(([date, change, effect, cls, status]) => `
       <tr>
@@ -258,6 +273,7 @@ const Methodology = {
           '<strong>Single-pass opponent adjustment and full SRS/Ridge simultaneous solve</strong> -- both worse than the plain EWMA rating, likely because NFL scheduling already balances out and the market already prices in schedule strength.',
           '<strong>Specific identified backup&rsquo;s own trailing EPA, instead of pooled backup-average</strong> -- name resolution via ESPN&rsquo;s QB depth chart worked correctly (verified live), but on the 287 historical games with enough sample to test it, using the real backup&rsquo;s own EPA scored worse (176/281) than the pooled average (178/281) -- a 12-flip paired check confirms that&rsquo;s noise, not a real effect (z=-0.58). More specific isn&rsquo;t automatically more accurate at a 50-150 attempt sample size.',
           '<strong>Garbage-time-filtered points_off/points_def_allowed, composite reweighted</strong> -- points_off/points_def_allowed are the #1 and #3 heaviest-weighted of all 8 stats (~41% combined) and the only two NOT garbage-time-filtered the way every EPA stat already is. Rebuilt filtered (per-play score-state deltas, same WP band) and refit the whole 8-stat composite from scratch: AUC 0.6746&rarr;0.6709, log loss and accuracy both worse too, refit weights barely moved. Garbage-time points aren&rsquo;t noise the model was being fooled by -- a team that wins big enough to rack them up is still genuinely better on average.',
+          '<strong>Decaying the QB-health gap by how long a backup has already started, plus a symmetric reinsertion boost when the primary returns</strong> -- the team&rsquo;s own rolling rating (same EWMA half-life) independently catches up to a backup&rsquo;s real quality after ~4-5 starts, so a flat, never-decaying correction double-counts what the rolling rating already reflects. First implementation had a real bug (the reinsertion boost was gated on a counter that reset to 0 on the very first healthy week back, so it only ever credited ONE week instead of decaying over several). After fixing that: ties production&rsquo;s AUC at best and underperforms it everywhere else in the sweep -- confirmed null once correctly implemented. The window-5 recency fix above shipped on its own, with the plain static gap formula.',
         ])}
 
         ${section('Plausible but not confirmed -- parked, worth revisiting', 'warn', [
@@ -284,10 +300,11 @@ const Methodology = {
             <tr><td>FIRST_SEASON</td><td class="num">2007</td><td>FIRST_INJURY_SEASON</td><td class="num">2009</td></tr>
             <tr><td>EWMA_ALPHA</td><td class="num">0.2</td><td>SEASON_PRIOR_GAMES</td><td class="num">5</td></tr>
             <tr><td>WP_LO / WP_HI</td><td class="num">0.05 / 0.95</td><td>HFA_SHRINKAGE_K</td><td class="num">100</td></tr>
-            <tr><td>QB_QUALITY_GAP_WEIGHT</td><td class="num">-0.5903</td><td class="muted small">calibration only</td><td></td></tr>
-            <tr><td>SKILL_EPA_OUT_WEIGHT</td><td class="num">-0.0362</td><td class="muted small">calibration only</td><td></td></tr>
+            <tr><td>QB_QUALITY_GAP_WEIGHT</td><td class="num">-0.5202</td><td class="muted small">calibration only</td><td></td></tr>
+            <tr><td>SKILL_EPA_OUT_WEIGHT</td><td class="num">-0.0360</td><td class="muted small">calibration only</td><td></td></tr>
             <tr><td>HFA_WEIGHT</td><td class="num">+0.9169</td><td class="muted small">moves hit rate</td><td></td></tr>
             <tr><td>MOMENTUM_WEIGHT</td><td class="num">+0.0262</td><td class="muted small">moves hit rate</td><td></td></tr>
+            <tr><td>PRIMARY_WINDOW</td><td class="num">5 games</td><td class="muted small">trailing-window plurality, ties -> more recent start</td><td></td></tr>
             <tr><td>SCORE_HIST_FIRST_SEASON</td><td class="num">2015</td><td>MAX_TEAM_SCORE</td><td class="num">60</td></tr>
           </tbody>
         </table>

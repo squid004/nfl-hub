@@ -76,7 +76,7 @@ import logging
 import math
 import os
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict, deque
 from datetime import date, datetime, timezone
 
 import numpy as np
@@ -203,8 +203,18 @@ def delta_win_prob(delta: float) -> float:
 # flip more picks, it's so `delta` (and therefore delta_win_prob's displayed confidence)
 # honestly reflects known health context instead of silently ignoring it. Computed once
 # offline, not refit daily.
-QB_QUALITY_GAP_WEIGHT = -0.5903
-SKILL_EPA_OUT_WEIGHT = -0.0362
+# Refit 2026-10-11 (research/edge_signal_test_v42_qb_window5_static_refit.py, same joint-fit
+# recipe as v26 above, 4431 games) after qb_quality_gap_data() changed its primary-starter
+# definition from season-cumulative attempts to a trailing-5-game window -- see that
+# function's docstring and PRIMARY_WINDOW's own comment for why (research/edge_signal_
+# test_v40_qb_recency_decay.py). A separate decay/reinsertion idea (the gap shrinking the
+# longer a backup starts, with a symmetric boost when the primary returns) was tested
+# alongside the window change and rejected -- see qb_quality_gap_data()'s docstring --
+# so only the window change is reflected in this refit. SKILL_EPA_OUT_WEIGHT barely moved
+# (-0.0362 -> -0.0360); QB_QUALITY_GAP_WEIGHT moved from -0.5903 to -0.5202, still
+# significant (z=-3.25, was -3.63).
+QB_QUALITY_GAP_WEIGHT = -0.5202
+SKILL_EPA_OUT_WEIGHT = -0.0360
 
 # Home-field advantage: every OTHER signal in this model is venue-blind (a team's own rating
 # reflects its average performance regardless of where it played), so `delta` had NO
@@ -394,6 +404,18 @@ def _passer_game_stats(season: int, current_season: int) -> pd.DataFrame:
     return out
 
 
+PRIMARY_WINDOW = 5  # trailing starts considered for "who's the real current primary," ties
+# broken toward the more recent start. Replaced a season-cumulative-attempts definition
+# 2026-10-11 after it mislabeled a live matchup (Atlanta's Details card blamed a backup-QB
+# penalty on Cooper Rush when Michael Penix Jr. had already started the last two games
+# straight -- Rush kept a season-attempts lead from starting weeks 1-2 while Penix was still
+# hurt, so the cumulative crossover hadn't happened yet even though the real depth chart
+# clearly had). Checked empirically (research/edge_signal_test_v40_qb_recency_decay.py):
+# windows of 3-4 games overreact to a single-game blip and tested worse than the old
+# cumulative definition; 5-6 games ties/slightly beats it on walk-forward AUC while reacting
+# within 2-3 games to a genuine change instead of however long a cumulative crossover takes.
+
+
 def qb_quality_gap_data(played_games: list[dict], current_season: int):
     """One chronological walk over every passer's pass attempts/EPA (FIRST_INJURY_SEASON
     through current_season -- matches the window QB_QUALITY_GAP_WEIGHT was fit against)
@@ -417,17 +439,22 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
         overrates the replacement (confirmed case: Caleb Williams' own career EPA, -0.003,
         is below league average but well above backup average -- the OLD estimate made
         losing him look like a wash or even a slight improvement for Chicago; the corrected
-        one shows the real, sizable penalty it should). Walk-forward checked against the
-        existing QB_QUALITY_GAP_WEIGHT (research/edge_signal_test_v37_qb_backup_baseline.py)
-        before shipping -- see that script's own docstring for why this didn't need a
-        refit (the weight was always fit against REAL hindsight backup performance, never
-        against this estimate; only the LIVE guess needed fixing).
+        one shows the real, sizable penalty it should).
       - `passer_names` {passer_id: display name}: nflverse has no id shared with ESPN's live
         injury feed, so matching `current_primary`'s id against that feed (refresh()'s own
         live gate, see _primary_qb_out_live()) has to go through the player's name instead.
-    `primary_so_far` is cumulative attempts THIS season so far, falling back to last
-    season's leader before this season's first pass -- no lookahead, no full-season
-    hindsight."""
+    `primary_so_far` is whichever passer started a plurality of the trailing PRIMARY_WINDOW
+    games strictly before this one (ties broken toward the more recent start) -- no
+    lookahead, no season-boundary reset (a team's last few starts of the previous season are
+    still the best prior entering week 1). Replaced a season-CUMULATIVE-attempts definition
+    2026-10-11 after it mislabeled a live matchup (see PRIMARY_WINDOW's own comment).
+    DECAY/REINSERTION, rejected: also tried making the gap shrink the longer a backup has
+    already started (the team's own rolling rating is independently catching up at the same
+    EWMA_ALPHA rate) and crediting a symmetric boost back when the primary returns, instead of
+    this flat formula. Correctly implemented (research/edge_signal_test_v40_qb_recency_
+    decay.py, after fixing a bug in an earlier version that only credited the reinsertion
+    boost for one week instead of decaying it over several), it ties production's own AUC at
+    best and underperforms it everywhere else in the sweep -- confirmed null, not shipped."""
     frames = []
     for season in range(FIRST_INJURY_SEASON, current_season + 1):
         try:
@@ -470,9 +497,20 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
     gt_meta = passer_df[["game_id", "team", "season", "week"]].drop_duplicates().sort_values(["season", "week", "game_id", "team"])
     game_order = list(gt_meta.itertuples(index=False, name=None))
 
-    season_attempts: dict[tuple[str, int], dict[str, int]] = defaultdict(lambda: defaultdict(int))
-    last_season_leader: dict[str, str] = {}
-    last_season_num: dict[str, int] = {}
+    def window_pick(hist: deque) -> str | None:
+        """Plurality of `hist` (a team's trailing starts, oldest-to-newest), ties broken
+        toward whichever tied passer started more recently."""
+        if not hist:
+            return None
+        counts = Counter(hist)
+        best = max(counts.values())
+        candidates = {p for p, c in counts.items() if c == best}
+        for p in reversed(hist):
+            if p in candidates:
+                return p
+        return None  # unreachable -- hist is non-empty and every entry is in counts
+
+    window_hist: dict[str, deque] = defaultdict(lambda: deque(maxlen=PRIMARY_WINDOW))
     primary_so_far: dict[tuple[str, str], str] = {}
     passer_hist: dict[str, list[float]] = defaultdict(list)
     trailing_epa: dict[tuple[str, str], float | None] = {}
@@ -481,33 +519,25 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
     backup_attempts = 0
 
     for gid, team, season, week in game_order:
-        if last_season_num.get(team) is not None and last_season_num[team] != season and season_attempts[(team, season - 1)]:
-            last_season_leader[team] = max(season_attempts[(team, season - 1)].items(), key=lambda kv: kv[1])[0]
-        last_season_num[team] = season
-        this_season = season_attempts[(team, season)]
-        if this_season:
-            primary_so_far[(team, gid)] = max(this_season.items(), key=lambda kv: kv[1])[0]
-        elif team in last_season_leader:
-            primary_so_far[(team, gid)] = last_season_leader[team]
-        else:
-            primary_so_far[(team, gid)] = actual_passer.get((gid, team))
+        hist = window_hist[team]
+        primary_so_far[(team, gid)] = window_pick(hist) if hist else actual_passer.get((gid, team))
 
         ap = actual_passer.get((gid, team))
         if ap is not None:
-            hist = passer_hist[ap]
-            trailing_epa[(ap, gid)] = (sum(hist) / len(hist)) if hist else None
+            ph = passer_hist[ap]
+            trailing_epa[(ap, gid)] = (sum(ph) / len(ph)) if ph else None
             epa_sum, attempts = game_team_epa[(gid, team)]
             if attempts:
                 per_play = epa_sum / attempts
-                hist.append(per_play)
+                ph.append(per_play)
                 league_avg.append(per_play)
                 # A "backup appearance" is whoever played NOT being that team's own
-                # season-to-date primary -- same definition matchup_callouts()/refresh()
+                # trailing-window primary -- same definition matchup_callouts()/refresh()
                 # use to decide whether to apply a QB-health adjustment at all.
                 if primary_so_far[(team, gid)] is not None and ap != primary_so_far[(team, gid)]:
                     backup_epa_sum += epa_sum
                     backup_attempts += attempts
-            this_season[ap] += attempts
+            hist.append(ap)
 
     league_avg_epa = (sum(league_avg) / len(league_avg)) if league_avg else 0.0
     backup_avg_epa = (backup_epa_sum / backup_attempts) if backup_attempts else league_avg_epa
@@ -527,15 +557,7 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
         ta = ta if ta is not None else backup_avg_epa
         gap_by_team_week[(team, season, week)] = tp - ta
 
-    current_primary: dict[str, str] = {}
-    for team, season in season_attempts:
-        if season != last_season_num.get(team):
-            continue
-        this_season = season_attempts[(team, season)]
-        if this_season:
-            current_primary[team] = max(this_season.items(), key=lambda kv: kv[1])[0]
-        elif team in last_season_leader:
-            current_primary[team] = last_season_leader[team]
+    current_primary: dict[str, str] = {team: window_pick(hist) for team, hist in window_hist.items() if hist}
     current_trailing_epa = {p: ((sum(h) / len(h)) if h else league_avg_epa) for p, h in passer_hist.items()}
     passer_names: dict[str, str] = dict(zip(passer_df["passer_player_id"], passer_df["name"]))
 

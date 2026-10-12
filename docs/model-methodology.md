@@ -65,8 +65,8 @@ graded dataset, none of them touch `POWER_WEIGHTS` or the 8-stat composite itsel
 
 | Correction | Weight | What it captures | Hit-rate mover? |
 |---|---|---|---|
-| QB health | `QB_QUALITY_GAP_WEIGHT = -0.5903` | Trailing EPA/dropback gap between a team's normal starter and whoever's actually playing (live/upcoming games: a **backup-average** estimate, not league average — see below) | No (calibration only) |
-| Skill-position health | `SKILL_EPA_OUT_WEIGHT = -0.0362` | Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB | No (calibration only) |
+| QB health | `QB_QUALITY_GAP_WEIGHT = -0.5202` | Trailing EPA/dropback gap between a team's **current primary** (most starts in the trailing 5 games, ties broken toward the more recent start — see below) and whoever's actually playing (live/upcoming games: a **backup-average** estimate, not league average — see below) | No (calibration only) |
+| Skill-position health | `SKILL_EPA_OUT_WEIGHT = -0.0360` | Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB | No (calibration only) |
 | Home-field advantage | `HFA_WEIGHT = 0.9169` | Trailing-5-season home win rate, shrunk toward all-time average (`HFA_SHRINKAGE_K = 100`) | **Yes** |
 | Momentum | `MOMENTUM_WEIGHT = 0.0262` | Signed current win/loss streak, reset at season boundaries and ties | **Yes** |
 
@@ -109,7 +109,26 @@ everything else in `delta` (mean magnitude ≈0.10, 90th percentile ≈0.23) and
 for the ~1,200 graded games with a report-listed Out/Doubtful QB. It *can* flip a pick (62
 of those 1,196 games flip, 5.2%), but the flips split almost evenly (32 improved, 30
 regressed) — which is exactly why it's framed as a calibration correction (does `delta`
-honestly reflect known health context?) rather than a pick-accuracy play.
+honestly reflect known health context?) rather than a pick-accuracy play. (Flip counts above
+are from the season-cumulative primary definition in place before 2026-10-11; the trailing-
+window definition below is expected to hold the same directional pattern but hasn't had its
+own flip count re-measured.)
+
+**Who counts as a team's "primary" starter, for this correction, uses a trailing 5-game
+window** (most starts in that window, ties broken toward the more recent start) — not a
+season-long cumulative-attempts count. Switched 2026-10-11 after the cumulative definition
+mislabeled a live matchup: Atlanta's Details card blamed a backup-QB penalty on a passer who
+hadn't actually started in two games, because the real current starter had been hurt to
+*begin* the season, so the backup's early cumulative-attempts lead hadn't been caught up to
+yet even though the depth chart clearly had already changed. Checked empirically — 3-4 game
+windows overreact to a single-game blip and tested worse than cumulative; 5-6 games ties/
+slightly beats it on walk-forward AUC while reacting within 2-3 games to a real change
+instead of however long a cumulative crossover takes (research/edge_signal_test_v40_qb_
+recency_decay.py). A related idea — decaying the correction the longer a backup has already
+started (since the team's own rolling rating independently catches up at the same EWMA
+rate), with a symmetric boost when the primary returns — was tested alongside this and
+**rejected**: correctly implemented, it ties production's AUC at best and underperforms it
+everywhere else in the sweep (see §3.1).
 
 ### 1.4 Points prediction and weather
 
@@ -191,6 +210,8 @@ graded decided game available at the time.
 | 2026-10-08 | QB-health "replacement" estimate switched from league average to backup average (v37) | League-wide EPA/play (+0.035) is dominated by starters (83% of all attempts) — backup-only appearances actually average **−0.070**, a ~10x-larger, opposite-sign gap. The old estimate made a below-average-but-real starter (Caleb Williams, career EPA ≈ −0.003) look like an UPGRADE over his own backup once hurt. Walk-forward on the existing `QB_QUALITY_GAP_WEIGHT` (no refit needed — that weight was always fit against real hindsight backup performance, never this estimate): hit rate flat on the affected subset (374→375 of 591, 23 total flips, z=+0.21, same "statistically flat" pattern as every other QB/skill check) but the calibration gap (confidence reduced more on misses than hits) widened in the right direction (z 0.91→1.36, neither significant alone). Didn't regress anything; fixed a conceptually wrong estimator with real data behind the replacement | **Shipped** — research/edge_signal_test_v37_qb_backup_baseline.py |
 | 2026-10-11 | Specific identified backup's own trailing EPA, instead of pooled backup-average (v38) | Name resolution via ESPN's QB depth chart worked correctly against a real case (CHI → Bagent). On the 287 historical games where a real backup would've had ≥50 attempts (66.6% coverage), using their own EPA scored *worse* (176/281) than the pool average (178/281); 12-flip paired check confirms noise, not a real effect (z=-0.58) | Not shipped — reverted after backtesting; see §3.1 |
 | 2026-10-11 | Garbage-time-filtered points_off/points_def_allowed, composite reweighted (v39) | `points_off`/`points_def_allowed` are the #1 and #3 heaviest-weighted of all 8 stats (~41% combined) and the only two NOT garbage-time-filtered like every EPA stat already is. Rebuilt filtered (per-play score-state deltas, same WP band) and refit the whole composite from scratch: AUC 0.6746→0.6709, log loss and accuracy both worse too — garbage-time points aren't noise, a team that wins big enough to rack them up is still genuinely better on average | Not shipped — confirmed slightly worse, not better; see §3.1 |
+| 2026-10-11 | QB "primary" definition switched from season-cumulative attempts to a trailing 5-game window (v40/v42); refit `QB_QUALITY_GAP_WEIGHT` | Found via a live mislabeling bug (Atlanta's Details card blamed the wrong team's backup-QB situation — the cumulative definition hadn't caught up to a real in-season starter change yet). Window sweep: 3-4 games overreacts to a single-game blip and tests worse than cumulative; 5-6 games ties/slightly beats it (AUC 0.6739 vs 0.6739, accuracy 62.08% vs 61.79%) while reacting within 2-3 games instead of however long a cumulative crossover takes. Refit `QB_QUALITY_GAP_WEIGHT` -0.5903→-0.5202 (still z=-3.25) | **Shipped** — research/edge_signal_test_v40_qb_recency_decay.py, _v42_qb_window5_static_refit.py |
+| 2026-10-11 | Decaying the QB-health correction by how long a backup has started, with a symmetric reinsertion boost on the primary's return (v40/v41) | Hypothesis: the team-level rolling rating (same EWMA half-life) independently catches up to a backup's true quality after ~4-5 starts, so a flat, never-decaying correction double-counts what the rolling rating already reflects; symmetric logic on return. Tested alongside the window-5 change — AUC ties production at best (0.6739) and underperforms it everywhere else in the sweep (0.6707-0.6720) once a reinsertion-boost bug (credited only 1 week instead of decaying over several) was found and fixed | Not shipped — confirmed null once correctly implemented; see §3.1 |
 
 **Net effect across the whole timeline**: the model's backtested SU hit rate moved from
 **62.87%** (pure 8-stat composite, no corrections) to **63.09%** (current, with QB/skill
@@ -198,7 +219,9 @@ health + HFA + momentum all stacked, after the neutral-site HFA fix and the back
 fix above) across 4,977 graded decided games — a **+0.22 percentage point / +11 game** lift
 from five additions, two of which (QB and skill health) were deliberately shipped for
 calibration rather than accuracy. The model still does not beat the closing market spread
-at picking straight-up winners; it was never designed to.
+at picking straight-up winners; it was never designed to. (This headline figure predates the
+2026-10-11 primary-window change above, which was measured on its own narrower walk-forward
+subset — 2014-2025, 3,151 games — rather than folded into this full-history number.)
 
 ---
 
@@ -258,6 +281,20 @@ revisiting.
   rack them up is still, on average, genuinely better, and filtering them out throws away
   real signal along with whatever noise came with it. Full removal (not just filtering) of
   the points terms, reweighting the remaining 6, hasn't been tested.
+- **Decaying the QB-health gap by how long a backup has already started, plus a symmetric
+  reinsertion boost when the primary returns** (v40/v41, 2026-10-11) — prompted by the same
+  Atlanta mislabeling that led to the window-5 primary fix above, plus the observation that
+  `trailing_epa` (a flat, never-decaying career average) applies the same-size correction on
+  a backup's 1st start and his 8th, even though the team's own rolling rating (EWMA_ALPHA=0.2,
+  ~4-game half-life) is independently catching up to his real level the whole time. First
+  implementation had a real bug — the reinsertion boost was gated on a counter that reset to
+  0 on the very first healthy week back, so it only ever credited ONE week of recovery
+  instead of decaying over several like the penalty does. After fixing that (decay the
+  pending credit in place each healthy week instead of gating on a separately-reset counter)
+  and re-running the sweep: window5+decay no longer ties/beats the static formula — AUC drops
+  to 0.6718-0.6720 vs the static formula's 0.6718-0.6739 depending on window size, worse in
+  every case except a tie at best. Confirmed null once correctly implemented — the window-5
+  recency fix shipped on its own with the plain static gap formula (v42).
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
@@ -305,8 +342,9 @@ FIRST_SEASON = 2007                FIRST_INJURY_SEASON = 2009
 EWMA_ALPHA = 0.2                   SEASON_PRIOR_GAMES = 5
 WP_LO, WP_HI = 0.05, 0.95          HFA_SHRINKAGE_K = 100
 
-QB_QUALITY_GAP_WEIGHT  = -0.5903   (calibration only)
-SKILL_EPA_OUT_WEIGHT   = -0.0362   (calibration only)
+QB_QUALITY_GAP_WEIGHT  = -0.5202   (calibration only)
+SKILL_EPA_OUT_WEIGHT   = -0.0360   (calibration only)
+PRIMARY_WINDOW         = 5 games   (trailing-window plurality, ties -> more recent start)
 HFA_WEIGHT             = +0.9169   (moves hit rate)
 MOMENTUM_WEIGHT        = +0.0262   (moves hit rate)
 
