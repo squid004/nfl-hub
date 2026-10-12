@@ -85,7 +85,11 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 .line-move-chip { margin-left:auto; }
 .team-record { color:var(--dim); font-weight:400; font-size:.85em; }
 .market-line { font-weight:600; margin-bottom:6px; }
-.stadium-line { margin:-4px 0 6px; }
+/* .stadium-line's own margin moved to its parent .venue-row (it's a flex child there now,
+   sitting next to the QB-injury chips instead of alone on its own line). */
+.stadium-line { margin:0; }
+.venue-row { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin:-4px 0 6px; }
+.qb-injury-chips { margin-left:auto; text-align:right; }
 .game-card-body {
   /* auto-fit/minmax instead of a fixed column count -- ML cards have 5 stat blocks
      (Market/ELWAY/History/Power Model/Pool edge), ATS cards have 4 (no pool-leverage system

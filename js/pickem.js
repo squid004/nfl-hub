@@ -40,6 +40,15 @@ function elwayFullDisagree(el, home, away, favTeam) {
   return elwayFavTeam !== favTeam;
 }
 
+// Same "full flip, not just a smaller/larger margin" concept as elwayFullDisagree above, for
+// OUR OWN model instead of ELWAY's -- true when the Power Model/Power Ranking's own favorite
+// is the OTHER team entirely from the market's. Takes the model's favorite team directly
+// (ML passes pm.favorite, ATS passes its spread-favorite's team) since both callers already
+// have that derived, unlike ELWAY's raw home/away win-prob pair.
+function squidFullDisagree(modelFavTeam, favTeam) {
+  return !!modelFavTeam && !!favTeam && modelFavTeam !== favTeam;
+}
+
 // Just ELWAY's favorite + its win probability — the two-number "away% / home%" display told
 // you nothing extra once you already know who's favored (they're complements), so collapse to
 // one, same idea as the Market block's own single `favLabel`.
@@ -98,6 +107,14 @@ function qbChip(team, injuries, depthChart) {
     const cls = QB_SEVERITY[qb.status] >= 3 ? 'bad' : 'warn';
     return ` <span class="chip ${cls}" title="${esc(qb.detail || '')}">QB: ${esc(qb.player)} (${qb.status})</span>`;
   }).join('');
+}
+
+// Both teams' QB-injury chips, away then home (same order they'd read in the matchup line) --
+// pulled OUT of that header line into their own row (see venueRowHtml below) so a long
+// name/status string doesn't crowd the team names at the top of the card.
+function qbInjuryRowHtml(away, home, injuries, depthChart) {
+  const chips = `${qbChip(away, injuries, depthChart)}${qbChip(home, injuries, depthChart)}`;
+  return chips ? `<span class="qb-injury-chips">${chips}</span>` : '';
 }
 
 // True (with details) when ELWAY's "Current Rankings" tab is still evaluating `team` with
@@ -197,6 +214,17 @@ function stadiumLineHtml(matchup) {
     ? ` <span class="chip warn" title="Neither team gets a home-field edge here -- no HFA term applied to the Power Model pick for this game.">Neutral Site</span>`
     : '';
   return `<div class="stadium-line muted small">${esc(matchup.stadium)}${esc(loc)}${neutralChip}</div>`;
+}
+
+// Venue line + QB-injury chips on the same row -- chips right-aligned (margin-left:auto, CSS)
+// into the empty space to the right of the (usually short) venue text, lined up under the
+// Steam chip one row up. Renders nothing if both halves are empty, same as stadiumLineHtml
+// alone used to.
+function venueRowHtml(matchup, away, home, injuries, depthChart) {
+  const stadium = stadiumLineHtml(matchup);
+  const qb = qbInjuryRowHtml(away, home, injuries, depthChart);
+  if (!stadium && !qb) return '';
+  return `<div class="venue-row">${stadium}${qb}</div>`;
 }
 
 // Replaces the old bare "LIVE" chip once the client-side ESPN poller (App._pollLiveScores)
@@ -439,6 +467,7 @@ const Pickem = {
       const edgeRec = edgeLog[g.game_id];
       const hasEdge = edgeRec && edgeRec.recommendation && edgeRec.recommendation !== 'NO_DATA';
       const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
+      const squidFlip = hasLine && pm && squidFullDisagree(pm.favorite, favTeam);
 
       // Which side to highlight as "the suggested pick": prefer the pool-specific
       // leverage call (FADE/CHALK) when it actually has data this week, otherwise fall
@@ -464,16 +493,17 @@ const Pickem = {
       return `<div class="game-card${tied ? ' result-tie' : pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
-          <span class="matchup">${teamSpan(g.away)}${recordLabel(g.away)}${qbChip(g.away, injuries, depthChart)} @ ${teamSpan(g.home)}${recordLabel(g.home)}${qbChip(g.home, injuries, depthChart)}</span>
+          <span class="matchup">${teamSpan(g.away)}${recordLabel(g.away)} @ ${teamSpan(g.home)}${recordLabel(g.home)}</span>
           ${stateChip}
-          ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
+          ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY underdog</span>` : ''}
+          ${squidFlip ? `<span class="chip warn" title="The Power Model favors the OTHER team entirely, not just by a smaller or larger margin">Squid Underdog</span>` : ''}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
             `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
           ).join('')}
           ${matchup ? weatherChip(matchup.weather) : ''}
           ${lineMoveChip(move)}
         </div>
-        ${stadiumLineHtml(matchup)}
+        ${venueRowHtml(matchup, g.away, g.home, injuries, depthChart)}
         ${liveSituationHtml(g, live)}
         ${hasLine ? `<div class="market-line">${esc(o.book ?? 'Market')}: ${favLabel}</div>` : ''}
         <div class="game-card-body">
@@ -534,19 +564,24 @@ const Pickem = {
             the favorite is the suggested pick; <span class="pick-dog">yellow</span> = the
             dog is — pool-leverage's FADE/CHALK call when it has data this week, otherwise
             the upset-budget flag. ELWAY is Nate Silver's Silver Bulletin NFL forecasting
-            model, transcribed weekly into a Google Sheet — not a personal formula. A
-            <span class="chip warn">QB</span> chip shows that team's QB injury situation (red
-            = Out/IR) regardless of what ELWAY currently assumes at QB1 — if ELWAY's assumed
-            starter is the one flagged, another flagged QB for that team shows too (the
-            presumptive next man up); if ELWAY has already moved QB1 off an injured player (or
-            we don't know who ELWAY has at QB1), this falls back to the worst OTHER flagged QB
-            at Doubtful/Out severity only (a merely "Questionable" QB2/QB3 unrelated to a fine
-            starter doesn't get a chip; a real starter change does), so a real starter injury
-            never goes unshown just because ELWAY's own sheet caught up to it. Any net line
-            move this week shows as a "Steam:" chip, pinned to the right of the card header,
-            with the signed point move itself (<span class="chip good">Steam: +1.5</span> at/
-            above a 1.5-point move in one direction since this week's first snapshot,
-            <span class="chip">Steam: +0.5</span> plain below that).
+            model, transcribed weekly into a Google Sheet — not a personal formula.
+            <span class="chip warn">ELWAY underdog</span> = ELWAY's model favors the OTHER
+            team entirely, not just by a smaller or larger margin than the market;
+            <span class="chip warn">Squid Underdog</span> is the same full-flip concept for
+            our OWN Power Model instead of ELWAY's. A <span class="chip warn">QB</span> chip
+            (right-aligned under the venue line, below the header) shows that team's QB
+            injury situation (red = Out/IR) regardless of what ELWAY currently assumes at
+            QB1 — if ELWAY's assumed starter is the one flagged, another flagged QB for that
+            team shows too (the presumptive next man up); if ELWAY has already moved QB1 off
+            an injured player (or we don't know who ELWAY has at QB1), this falls back to the
+            worst OTHER flagged QB at Doubtful/Out severity only (a merely "Questionable"
+            QB2/QB3 unrelated to a fine starter doesn't get a chip; a real starter change
+            does), so a real starter injury never goes unshown just because ELWAY's own sheet
+            caught up to it. Any net line move this week shows as a "Steam:" chip, pinned to
+            the right of the card header, with the signed point move itself
+            (<span class="chip good">Steam: +1.5</span> at/above a 1.5-point move in one
+            direction since this week's first snapshot, <span class="chip">Steam: +0.5</span>
+            plain below that).
             <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
             rating that team with a QB1 our live injury feed now shows hurt — a breaking-news
             injury ELWAY's own depth-chart tracking hasn't caught up to yet.
@@ -751,6 +786,7 @@ const Pickem = {
         ? `<span class="result-good">${team} ${score}</span>` : `${team} ${score}`;
 
       const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
+      const squidFlip = hasLine && prSf && squidFullDisagree(prSf.team, favTeam);
 
       const btn = team => `<button data-act="${M.act}" data-week="${week}" data-game="${g.game_id}"
         data-team="${team}" data-spread="${hasLine ? effSpread : ''}"
@@ -765,16 +801,17 @@ const Pickem = {
       return `<div class="game-card${pushed ? ' result-tie' : pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
-          <span class="matchup">${g.away}${recordLabel(g.away)}${qbChip(g.away, injuries, depthChart)} @ ${g.home}${recordLabel(g.home)}${qbChip(g.home, injuries, depthChart)}</span>
+          <span class="matchup">${g.away}${recordLabel(g.away)} @ ${g.home}${recordLabel(g.home)}</span>
           ${stateChip}
-          ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY flip</span>` : ''}
+          ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY underdog</span>` : ''}
+          ${squidFlip ? `<span class="chip warn" title="The Power Ranking favors the OTHER team entirely, not just by a smaller or larger margin">Squid Underdog</span>` : ''}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
             `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
           ).join('')}
           ${matchup ? weatherChip(matchup.weather) : ''}
           ${lineMoveChip(move)}
         </div>
-        ${stadiumLineHtml(matchup)}
+        ${venueRowHtml(matchup, g.away, g.home, injuries, depthChart)}
         ${liveSituationHtml(g, live)}
         <div class="game-card-body">
           <div class="stat-block">
@@ -839,8 +876,13 @@ const Pickem = {
           <p class="tablefoot muted">Each stat block states that source's own spread + O/U
             (Market/ELWAY/Power Ranking) or historical ATS cover rate (History) instead of a
             straight-up pick. ELWAY is Nate Silver's Silver Bulletin NFL forecasting model,
-            transcribed weekly into a Google Sheet. A
-            <span class="chip warn">QB</span> chip shows that team's QB injury situation (red
+            transcribed weekly into a Google Sheet.
+            <span class="chip warn">ELWAY underdog</span> = ELWAY's model favors the OTHER
+            team entirely, not just by a smaller or larger margin than the market;
+            <span class="chip warn">Squid Underdog</span> is the same full-flip concept for
+            our OWN Power Ranking instead of ELWAY's. A
+            <span class="chip warn">QB</span> chip (right-aligned under the venue line, below
+            the header) shows that team's QB injury situation (red
             = Out/IR) regardless of what ELWAY currently assumes at QB1 — if ELWAY's assumed
             starter is the one flagged, another flagged QB for that team shows too (the
             presumptive next man up); if ELWAY has already moved QB1 off an injured player (or
