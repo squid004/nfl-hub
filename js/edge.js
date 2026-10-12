@@ -48,12 +48,15 @@ const Edge = {
     return `
       <div class="panel">
         <h2>Pool bias by team</h2>
-        <p class="muted">Learned per-team pool bias = your pool's pick% minus the national
-          pick% for that team, averaged and damped under 3 observations.
-          <span class="pick-fav">Green</span>/right = your pool overpicks that team vs. the
-          country; <span class="pick-dog">amber</span>/left = underpicks. Learned automatically
-          from opponent picks pulled from the pool sheet each refresh.</p>
-        <div class="bias-chart">${rows}</div>
+        <details>
+          <summary class="muted small">Show pool bias by team</summary>
+          <p class="muted">Learned per-team pool bias = your pool's pick% minus the national
+            pick% for that team, averaged and damped under 3 observations.
+            <span class="pick-fav">Green</span>/right = your pool overpicks that team vs. the
+            country; <span class="pick-dog">amber</span>/left = underpicks. Learned automatically
+            from opponent picks pulled from the pool sheet each refresh.</p>
+          <div class="bias-chart">${rows}</div>
+        </details>
       </div>`;
   },
 };
