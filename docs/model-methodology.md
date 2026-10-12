@@ -190,6 +190,7 @@ graded decided game available at the time.
 | 2026-10-08 | Live QB Out/Doubtful gate switched to ESPN's feed for the current/upcoming week | No backtested-effect number — this changes WHEN the existing QB-health correction fires this week, not what it's fit against. Found via a live case: Caleb Williams (CHI, 2026 wk5) was already "Out" on ESPN Monday but nflverse's `report_status` was still blank Wednesday, so the live card's QB chip and the model's QB-health term disagreed | **Shipped** — timeliness fix for the live prediction only; every backtest/fit/historical path stays on nflverse exclusively |
 | 2026-10-08 | QB-health "replacement" estimate switched from league average to backup average (v37) | League-wide EPA/play (+0.035) is dominated by starters (83% of all attempts) — backup-only appearances actually average **−0.070**, a ~10x-larger, opposite-sign gap. The old estimate made a below-average-but-real starter (Caleb Williams, career EPA ≈ −0.003) look like an UPGRADE over his own backup once hurt. Walk-forward on the existing `QB_QUALITY_GAP_WEIGHT` (no refit needed — that weight was always fit against real hindsight backup performance, never this estimate): hit rate flat on the affected subset (374→375 of 591, 23 total flips, z=+0.21, same "statistically flat" pattern as every other QB/skill check) but the calibration gap (confidence reduced more on misses than hits) widened in the right direction (z 0.91→1.36, neither significant alone). Didn't regress anything; fixed a conceptually wrong estimator with real data behind the replacement | **Shipped** — research/edge_signal_test_v37_qb_backup_baseline.py |
 | 2026-10-11 | Specific identified backup's own trailing EPA, instead of pooled backup-average (v38) | Name resolution via ESPN's QB depth chart worked correctly against a real case (CHI → Bagent). On the 287 historical games where a real backup would've had ≥50 attempts (66.6% coverage), using their own EPA scored *worse* (176/281) than the pool average (178/281); 12-flip paired check confirms noise, not a real effect (z=-0.58) | Not shipped — reverted after backtesting; see §3.1 |
+| 2026-10-11 | Garbage-time-filtered points_off/points_def_allowed, composite reweighted (v39) | `points_off`/`points_def_allowed` are the #1 and #3 heaviest-weighted of all 8 stats (~41% combined) and the only two NOT garbage-time-filtered like every EPA stat already is. Rebuilt filtered (per-play score-state deltas, same WP band) and refit the whole composite from scratch: AUC 0.6746→0.6709, log loss and accuracy both worse too — garbage-time points aren't noise, a team that wins big enough to rack them up is still genuinely better on average | Not shipped — confirmed slightly worse, not better; see §3.1 |
 
 **Net effect across the whole timeline**: the model's backtested SU hit rate moved from
 **62.87%** (pure 8-stat composite, no corrections) to **63.09%** (current, with QB/skill
@@ -242,6 +243,21 @@ revisiting.
   pooled over 46,000 backup attempts — more specific isn't automatically more accurate at
   this sample size. Shrinking the specific number toward the pool average by sample size,
   instead of using it outright, might recover something — not attempted.
+- **Garbage-time-filtered points_off/points_def_allowed, composite reweighted** (v39,
+  2026-10-11) — prompted by noticing `points_off`/`points_def_allowed` are the #1 and #3
+  heaviest-weighted of all 8 stats (~41% of total weight combined) *and* the only two not
+  garbage-time-filtered the way every EPA stat already is (literal final box score, blowout
+  garbage-time scoring included). Rebuilt both as a garbage-time-filtered stat (same WP_LO-
+  WP_HI band, applied per-play via score-state deltas so it works for scoring plays without
+  excluding non-run/pass types -- field goals, kick/punt return TDs, defensive scores) and
+  refit the full 8-stat composite from scratch against it, same non-negative L2-regularized
+  walk-forward methodology as the original fit. Made it slightly *worse*, not better: AUC
+  0.6746 → 0.6709, log loss and accuracy both worse too, all three metrics agreeing. The
+  refit weights barely moved (`points_off` still heaviest at 0.1520 vs 0.1587) -- garbage-
+  time points aren't noise the model was being fooled by; a team that wins big enough to
+  rack them up is still, on average, genuinely better, and filtering them out throws away
+  real signal along with whatever noise came with it. Full removal (not just filtering) of
+  the points terms, reweighting the remaining 6, hasn't been tested.
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
