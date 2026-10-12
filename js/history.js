@@ -256,16 +256,9 @@ const History = {
 
     const totRate = totN ? Math.round(totPrimary / totN * 100) : 0;
 
-    const locked = (ctx.bSnap || []).find(r => r.mode === mode && r.bin === 'TOTAL');
-    const lockLine = locked
-      ? `<p class="muted">Locked for the record: <strong>take ${locked.suggested}</strong>
-         (frozen ${fmtLocal(locked.captured_at)}). Live number above may drift as lines move.</p>`
-      : '';
-
     host.innerHTML = `
       <div class="panel">
         <h2>${M.budgetTitle} by spread bin &mdash; Week ${ctx.week}</h2>
-        ${lockLine}
         <table><thead><tr><th>Spread bin</th><th class="num">Games</th>
           <th class="num">${M.budgetCol}</th><th class="num">${M.budgetVerb}</th><th>${M.fadeLabel}</th></tr></thead>
           <tbody>${rows}
