@@ -23,29 +23,26 @@ const HIST_MODES = {
   },
 };
 
-// "Chalk is king" reminder for the bottom of the Upset Budget panel: how chalk-heavy this
-// season's front-runner(s) and each week's actual winner(s) have been, from
-// nflhub.sources.edge_core.pool_leaderboard_summary (kv 'edge_pool_leaderboard', rebuilt
-// once/day). Moneyline only -- "dog pick" is an SU concept, not an ATS one.
+// Target-setting reminder for the bottom of the Upset Budget panel: how many games per
+// week the pool's actual winner has beaten the market ("always pick the favorite") baseline
+// by, from nflhub.sources.edge_core.pool_leaderboard_summary (kv 'edge_pool_leaderboard',
+// rebuilt once/day). Moneyline only -- "beat the market" is an SU concept here, not an ATS
+// one. Reframed 2026-10-12 from a dog-pick-percentage narrative ("chalk is king") to an
+// explicit target: that's the bar a real pick has to clear, not picking more dogs for its
+// own sake.
 function chalkReminderHtml(ctx) {
   const lb = ctx.edgeLeaderboard;
   if (!lb) return '';
-  const pct = v => v == null ? '—' : Math.round(v * 100) + '%';
-  const leaders = lb.season_leaders;
-  const leaderLine = leaders
-    ? `This season's front-runner${leaders.names.length > 1 ? 's are' : ' is'} ` +
-      `${esc(leaders.names.join(' / '))} (${leaders.correct}/${leaders.total} correct, ` +
-      `only ${pct(leaders.dog_pct)} of picks on a dog).`
-    : '';
   const winners = lb.week_winners || [];
-  const winnersLine = winners.length
-    ? `Every week's actual winner so far has picked dogs just ${pct(lb.week_winner_dog_pct)} ` +
-      `of the time on average (` +
-      winners.map(w => `wk${w.week}: ${esc(w.names.join('/'))} at ${pct(w.dog_pct)}`).join(', ') +
-      `).`
-    : '';
-  if (!leaderLine && !winnersLine) return '';
-  return `<p class="muted small" style="margin-top:14px;"><strong>Chalk is king:</strong> ${leaderLine} ${winnersLine}</p>`;
+  const fmtMargin = v => (v > 0 ? '+' : '') + v;
+  const withMargin = winners.filter(w => w.margin_over_market != null);
+  if (!withMargin.length || lb.avg_margin_over_market == null) return '';
+  const avg = lb.avg_margin_over_market;
+  const weekList = withMargin.map(w => `wk${w.week}: ${fmtMargin(w.margin_over_market)}`).join(', ');
+  return `<p class="muted small" style="margin-top:14px;"><strong>Target to beat the market:</strong> ` +
+    `this season's weekly winner has beaten the "always take the favorite" baseline by ` +
+    `${fmtMargin(avg)} game${Math.abs(avg) === 1 ? '' : 's'} per week on average -- that's ` +
+    `roughly what it takes to win a given week. By week: ${weekList}.</p>`;
 }
 
 const History = {

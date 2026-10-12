@@ -226,8 +226,12 @@ def monday_night_tiebreaker(my_estimate: float, crowd_estimate: float) -> float:
 # every individual week's winner picked chalk on the large majority of games (85-98% of
 # picks for the season leaders; never more than 5 of 16 picks on a dog for any week's
 # winner), and beat a robot that always picks the favorite on the identical slate by only
-# +1 or +2 games out of 48 -- well within noise. This surfaces that same read live, every
-# refresh, instead of it being a one-off finding that goes stale.
+# +1 or +2 games out of 48 -- well within noise. Reframed 2026-10-12 around that same robot
+# as an explicit target instead of a dog-pick-percentage narrative: how many games PER WEEK
+# does the actual winner beat "always take the favorite" by, on average, and in each
+# individual week so far -- that's the bar a real pick has to clear, not picking more dogs
+# for its own sake. This surfaces that same read live, every refresh, instead of it being a
+# one-off finding that goes stale.
 
 def pool_leaderboard_summary(
     picks: list[dict[str, Any]], results: dict[tuple[int, str], dict[str, bool]],
@@ -238,9 +242,11 @@ def pool_leaderboard_summary(
     the caller from whatever historical odds/results source it has (see refresh.py), so this
     stays pure and doesn't need to know where that data comes from.
 
-    "Dog pick" = a pick that was NOT the market favorite. Returns each week's winner(s) (ties
-    included) and the season leader(s), each with how much of their pick history was chalk --
-    the reminder this exists for.
+    Returns each week's winner(s) (ties included) and the season leader(s), plus how many
+    games per week the "always pick the favorite" robot would have gotten right on that
+    same slate (from `results` directly, independent of `picks` -- it covers every graded
+    game, not just ones someone in the pool happened to pick) and the winner's margin over
+    that baseline, individually per week and averaged across the season so far.
     """
     per_week: dict[int, dict[str, dict[str, int]]] = defaultdict(dict)
     season_totals: dict[str, dict[str, int]] = defaultdict(lambda: {"correct": 0, "total": 0, "dog_picks": 0})
@@ -258,8 +264,18 @@ def pool_leaderboard_summary(
             if not r["fav"]:
                 d["dog_picks"] += 1
 
+    # "Always take the favorite" robot's correct count, per week -- every graded game
+    # contributes exactly one (week, team) entry with fav=True (whichever side was
+    # favored), so counting those with won=True also true is the same as counting games
+    # the favorite actually won.
+    market_correct_by_week: dict[int, int] = defaultdict(int)
+    for (week, _team), r in results.items():
+        if r["fav"] and r["won"]:
+            market_correct_by_week[week] += 1
+
     week_winners: list[dict[str, Any]] = []
     winner_dog_sum = winner_total_sum = 0
+    margins: list[int] = []
     for week in sorted(per_week):
         wk = per_week[week]
         if not wk:
@@ -268,9 +284,15 @@ def pool_leaderboard_summary(
         names = sorted(opp for opp, s in wk.items() if s["correct"] == best)
         dogs = sum(wk[n]["dog_picks"] for n in names)
         tot = sum(wk[n]["total"] for n in names)
+        market_correct = market_correct_by_week.get(week)
+        margin = best - market_correct if market_correct is not None else None
+        if margin is not None:
+            margins.append(margin)
         week_winners.append({
             "week": week, "names": names, "correct": best,
             "dog_pct": round(dogs / tot, 4) if tot else None,
+            "market_correct": market_correct,
+            "margin_over_market": margin,
         })
         winner_dog_sum += dogs
         winner_total_sum += tot
@@ -290,4 +312,5 @@ def pool_leaderboard_summary(
         "week_winners": week_winners,
         "week_winner_dog_pct": round(winner_dog_sum / winner_total_sum, 4) if winner_total_sum else None,
         "season_leaders": season_leaders,
+        "avg_margin_over_market": round(sum(margins) / len(margins), 2) if margins else None,
     }
