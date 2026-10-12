@@ -233,6 +233,11 @@ def monday_night_tiebreaker(my_estimate: float, crowd_estimate: float) -> float:
 # for its own sake. This surfaces that same read live, every refresh, instead of it being a
 # one-off finding that goes stale.
 
+# Bump whenever pool_leaderboard_summary()'s output shape changes; refresh.py rebuilds a stored
+# blob with an older version immediately instead of waiting for its once-a-day gate.
+LEADERBOARD_SCHEMA_VERSION = 2
+
+
 def pool_leaderboard_summary(
     picks: list[dict[str, Any]], results: dict[tuple[int, str], dict[str, bool]],
 ) -> dict[str, Any]:
@@ -309,6 +314,7 @@ def pool_leaderboard_summary(
         }
 
     return {
+        "schema_version": LEADERBOARD_SCHEMA_VERSION,
         "week_winners": week_winners,
         "week_winner_dog_pct": round(winner_dog_sum / winner_total_sum, 4) if winner_total_sum else None,
         "season_leaders": season_leaders,

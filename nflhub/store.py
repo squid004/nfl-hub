@@ -321,7 +321,20 @@ def edge_delete_opponent_pick(season: int, week: int, opponent: str, team_picked
 
 
 def edge_all_opponent_picks() -> list[dict[str, Any]]:
-    return _get("edge_opponent_pick", {"select": "season,week,opponent,team_picked"})
+    # PostgREST caps a single response at 1000 rows, and this table passed that mid-season;
+    # page through it with a stable (primary-key) order so nothing is silently dropped.
+    rows: list[dict[str, Any]] = []
+    page, offset = 1000, 0
+    while True:
+        chunk = _get("edge_opponent_pick", {
+            "select": "season,week,opponent,team_picked",
+            "order": "season,week,opponent,team_picked",
+            "limit": page, "offset": offset,
+        })
+        rows.extend(chunk)
+        if len(chunk) < page:
+            return rows
+        offset += page
 
 
 def edge_games_for_team(team: str) -> list[dict[str, Any]]:

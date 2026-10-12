@@ -529,7 +529,11 @@ def _apply_edge_leaderboard(season: int) -> str:
     game's spread once it's final -- same reason history.py/team_ratings.py use nflverse for
     anything historical). At most once/day, like hist_distribution."""
     today = date.today().isoformat()
-    if store.kv_get("edge_leaderboard_date") == today:
+    # A blob from an older pool_leaderboard_summary() shape is rebuilt now, not tomorrow, or the
+    # frontend reminder renders nothing until the date gate rolls over.
+    cached = store.kv_get("edge_pool_leaderboard")
+    if (store.kv_get("edge_leaderboard_date") == today and cached
+            and json.loads(cached).get("schema_version") == edge_core.LEADERBOARD_SCHEMA_VERSION):
         return "cached"
 
     picks = [p for p in store.edge_all_opponent_picks() if p.get("season") == season]

@@ -23,26 +23,59 @@ const HIST_MODES = {
   },
 };
 
-// Target-setting reminder for the bottom of the Upset Budget panel: how many games per
-// week the pool's actual winner has beaten the market ("always pick the favorite") baseline
-// by, from nflhub.sources.edge_core.pool_leaderboard_summary (kv 'edge_pool_leaderboard',
-// rebuilt once/day). Moneyline only -- "beat the market" is an SU concept here, not an ATS
-// one. Reframed 2026-10-12 from a dog-pick-percentage narrative ("chalk is king") to an
-// explicit target: that's the bar a real pick has to clear, not picking more dogs for its
-// own sake.
-function chalkReminderHtml(ctx) {
+// Target-setting chart for the bottom of the Upset Budget panel: each week, how many more
+// games the pool's weekly winner got right than the market ("always pick the favorite")
+// baseline, from nflhub.sources.edge_core.pool_leaderboard_summary (kv 'edge_pool_leaderboard',
+// rebuilt once/day). Moneyline only -- "beat the market" is an SU concept here, not an ATS one.
+// It's the bar a real pick has to clear, not a reason to pick more dogs for its own sake.
+function chalkMarginData(ctx) {
   const lb = ctx.edgeLeaderboard;
-  if (!lb) return '';
-  const winners = lb.week_winners || [];
-  const fmtMargin = v => (v > 0 ? '+' : '') + v;
-  const withMargin = winners.filter(w => w.margin_over_market != null);
-  if (!withMargin.length || lb.avg_margin_over_market == null) return '';
-  const avg = lb.avg_margin_over_market;
-  const weekList = withMargin.map(w => `wk${w.week}: ${fmtMargin(w.margin_over_market)}`).join(', ');
-  return `<p class="muted small" style="margin-top:14px;"><strong>Target to beat the market:</strong> ` +
-    `this season's weekly winner has beaten the "always take the favorite" baseline by ` +
-    `${fmtMargin(avg)} game${Math.abs(avg) === 1 ? '' : 's'} per week on average -- that's ` +
-    `roughly what it takes to win a given week. By week: ${weekList}.</p>`;
+  if (!lb || lb.avg_margin_over_market == null) return null;
+  const rows = (lb.week_winners || []).filter(w => w.margin_over_market != null);
+  return rows.length ? { rows, avg: lb.avg_margin_over_market } : null;
+}
+
+function chalkReminderHtml(ctx) {
+  const d = chalkMarginData(ctx);
+  if (!d) return '';
+  const avg = (d.avg > 0 ? '+' : '') + (Math.round(d.avg * 10) / 10);
+  return `<div style="margin-top:14px;">
+    <div id="chalk-margin-chart" style="height:200px;"></div>
+    <p class="muted small" style="margin:4px 0 0;">Correct picks by each week's pool winner over the
+      "always take the favorite" baseline. The weekly winner has averaged <strong>${avg}</strong>
+      game${Math.abs(d.avg) === 1 ? '' : 's'} per week over the market &mdash; pick your spots.</p>
+  </div>`;
+}
+
+function drawChalkMarginChart(ctx) {
+  const d = chalkMarginData(ctx);
+  const el = document.getElementById('chalk-margin-chart');
+  if (!d || !el || typeof Plotly === 'undefined') return;
+  const cs = getComputedStyle(document.documentElement);
+  const cssVar = name => cs.getPropertyValue(name).trim();
+  const colors = { text: cssVar('--text'), dim: cssVar('--dim'), line: cssVar('--line'),
+    panel: cssVar('--panel2'), good: cssVar('--good'), warn: cssVar('--warn') };
+  const weeks = d.rows.map(w => w.week);
+  const axisCommon = { gridcolor: colors.line, color: colors.dim, tickfont: { size: 11 } };
+  Plotly.react(el, [{
+    type: 'bar', x: weeks, y: d.rows.map(w => w.margin_over_market),
+    customdata: d.rows.map(w => [w.correct, w.market_correct]),
+    marker: { color: colors.good },
+    hovertemplate: 'Week %{x}: winner %{customdata[0]} correct vs market %{customdata[1]} ' +
+      '(%{y:+d})<extra></extra>',
+  }], {
+    autosize: true,
+    margin: { l: 40, r: 16, t: 8, b: 36 },
+    paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+    font: { color: colors.text, size: 12 },
+    xaxis: Object.assign({ title: { text: 'NFL week' }, dtick: 1 }, axisCommon),
+    yaxis: Object.assign({ title: { text: 'Correct picks over market' }, zeroline: true,
+      zerolinecolor: colors.dim, rangemode: 'tozero', dtick: 1 }, axisCommon),
+    shapes: [{ type: 'line', xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: d.avg, y1: d.avg,
+      line: { color: colors.warn, width: 2, dash: 'dash' } }],
+    showlegend: false,
+    hoverlabel: { bgcolor: colors.panel, bordercolor: colors.line, font: { color: colors.text, size: 12 } },
+  }, { responsive: true, displaylogo: false, displayModeBar: false });
 }
 
 const History = {
@@ -264,6 +297,7 @@ const History = {
           </tbody></table>
         ${mode === 'ml' ? chalkReminderHtml(ctx) : ''}
       </div>`;
+    if (mode === 'ml') drawChalkMarginChart(ctx);
   },
 
   render(ctx, mode = 'ml') {
