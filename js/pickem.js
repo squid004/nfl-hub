@@ -315,12 +315,20 @@ function powerModelBreakdownHtml(matchup, home, away) {
   const vs = (key, digits) => `${home} ${(hr[key] ?? 0).toFixed(digits)} vs ${away} ${(ar[key] ?? 0).toFixed(digits)}`;
 
   const hfaDetail = pm.hfa_term !== 0 ? `${home} gets the standard home-field edge` : 'no home-field term';
-  const qbDetail = pm.home_qb_gap || pm.away_qb_gap
-    ? `${pm.home_qb_gap ? home : away} starting a backup (trailing EPA/dropback gap ${(pm.home_qb_gap || pm.away_qb_gap).toFixed(3)})`
-    : 'Not applied';
-  const skillDetail = pm.home_skill_out || pm.away_skill_out
-    ? `${pm.home_skill_out ? home : away} missing skill-position EPA (${(pm.home_skill_out || pm.away_skill_out).toFixed(3)} summed)`
-    : 'Not applied';
+  // Each side's gap is independent -- both home_*/away_* can be nonzero at once (e.g. both
+  // teams have a flagged-out "primary" passer). Naming the team by truthiness of just one
+  // side (the old `cond ? home : away` pattern) silently mislabeled whichever team happened
+  // to be checked first whenever the OTHER side's gap was actually the larger, real story.
+  const gapPhrase = (homeVal, awayVal, phrase) => {
+    const parts = [];
+    if (homeVal) parts.push(`${home} ${phrase(homeVal)}`);
+    if (awayVal) parts.push(`${away} ${phrase(awayVal)}`);
+    return parts.length ? parts.join('; ') : 'Not applied';
+  };
+  const qbDetail = gapPhrase(pm.home_qb_gap, pm.away_qb_gap,
+    v => `starting a backup (trailing EPA/dropback gap ${v.toFixed(3)})`);
+  const skillDetail = gapPhrase(pm.home_skill_out, pm.away_skill_out,
+    v => `missing skill-position EPA (${v.toFixed(3)} summed)`);
   const streakDetail = pm.home_streak || pm.away_streak
     ? `${home} ${pm.home_streak >= 0 ? pm.home_streak + 'W' : Math.abs(pm.home_streak) + 'L'} streak, ${away} ${pm.away_streak >= 0 ? pm.away_streak + 'W' : Math.abs(pm.away_streak) + 'L'} streak`
     : 'Not applied';
