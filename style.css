@@ -54,6 +54,7 @@ tr:last-child td { border-bottom:none; }
 .chip.warn { color:var(--warn); border-color:#5a4a1e; }
 .chip.bad  { color:var(--bad);  border-color:#5a2020; }
 .chip.good { color:var(--good); border-color:#1e5a3e; }
+.chip.gut  { color:var(--accent); border-color:#1e3a5a; font-weight:600; }
 .chip.muted { color:var(--dim); }
 
 .muted { color:var(--dim); }

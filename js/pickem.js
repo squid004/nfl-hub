@@ -417,6 +417,8 @@ const Pickem = {
     const records = (teamRatings && teamRatings.team_records) || {};
     const recordLabel = team => { const r = records[team]; return r ? ` <span class="team-record">(${r.wins}-${r.losses}${r.ties ? '-' + r.ties : ''})</span>` : ''; };
 
+    const gutPicks = ctx.gutPicks || {};
+
     const cards = games.map(g => {
       const o = odds[g.game_id] || {};
       const matchup = matchupFor(teamRatings, g.home, g.away);
@@ -437,6 +439,32 @@ const Pickem = {
       const favLabel = !hasLine ? '—' : (effSpread === 0 ? 'Pick’em' : `${favTeam} ${-Math.abs(effSpread)}`);
       const mine = (picks[g.game_id] || {}).pick;
       const mineIsDog = mine && dogTeam && mine === dogTeam;
+
+      // Gut-pick lock: a game that hasn't started, has no gut pick yet, and has no existing
+      // pick shows ONLY teams/records/QB chip/weather chip/venue plus the pick buttons --
+      // nothing from the market, ELWAY, History, Power Model, or Details until a team is
+      // clicked. That first click is recorded once as the gut pick (never changed again) and
+      // also saved as the real pick (changeable as usual). Past weeks, started games, and
+      // games already picked before this feature existed are never locked.
+      const gut = gutPicks[g.game_id];
+      const gutLocked = !ctx.isPastWeek && g.state !== 'in' && g.state !== 'post' && !gut && !mine;
+      if (gutLocked) {
+        const gutBtn = team => `<button data-act="gutpick" data-week="${week}" data-game="${g.game_id}"
+          data-team="${team}" data-home="${g.home}" data-away="${g.away}"
+          data-spread="${hasLine ? effSpread : ''}">${team}</button>`;
+        return `<div class="game-card">
+          <div class="game-card-head">
+            <span class="muted">${fmtLocal(g.kickoff, false)}</span>
+            <span class="matchup">${g.away}${recordLabel(g.away)} @ ${g.home}${recordLabel(g.home)}</span>
+            ${matchup ? weatherChip(matchup.weather) : ''}
+          </div>
+          ${venueRowHtml(matchup, g.away, g.home, injuries, depthChart)}
+          <div class="game-card-pick">
+            ${gutBtn(g.away)} ${gutBtn(g.home)}
+            <span class="game-card-mine muted small">Pick blind to lock in your gut call &mdash; the rest of the card loads once you do.</span>
+          </div>
+        </div>`;
+      }
 
       // `live` tracks a game currently in progress the SAME way `postGame` tracks a final
       // one -- home_score/away_score are the real live score straight from ESPN regardless
@@ -560,6 +588,9 @@ const Pickem = {
             <div class="stat-label" title="Every term that moved delta for this matchup -- the 9-stat composite rating plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
             ${powerModelBreakdownHtml(matchup, g.home, g.away)}
           </div>
+          ${gut ? `<div class="small" style="padding-top:8px;">Gut pick: <strong>${esc(gut.pick)}</strong>
+            <span class="chip gut">GUT</span>
+            <span class="muted"> &mdash; your first pick, made before anything else on this card was visible. It doesn't change even if your pick above does.</span></div>` : ''}
         </details>
       </div>`;
     }).join('');
@@ -602,6 +633,11 @@ const Pickem = {
             &ge;20mph wind, &ge;10mm precip, any snow, or sub-20&deg;F highs; shown here as
             context only -- the actual weather-adjusted point forecast lives on the Against
             the Spread tab.
+            <span class="chip gut">GUT</span> = Moneyline cards stay locked (teams, records, QB
+            and weather chips only) until you click a team; that first click is saved as your
+            gut pick and never changes, while the pick itself stays editable. Cards for games
+            already started, past weeks, and games you picked before this existed are never
+            locked.
             <span class="stat-label" style="display:inline;text-transform:none;font-weight:600;">Power Model</span>
             is the Power Rankings composite (same 9 EPA/points/turnover/penalty stats as the Power
             Rankings tab) applied to this matchup, with its margin (&Delta;) converted into a
@@ -937,6 +973,16 @@ const Pickem = {
   async pick(week, gameId, team, spread) {
     try { await DB.setPickemPick(+week, gameId, team, spread === '' ? null : spread); App.reload(); }
     catch (e) { alert('Could not save pick: ' + e.message); }
+  },
+
+  // First click on a locked Moneyline card: record the gut pick (write-once) AND save the
+  // same team as the real pick, then reload so the card fills in.
+  async gutpick(week, gameId, team, spread, home, away) {
+    try {
+      await DB.recordGutPick(gameId, { pick: team, week: +week, season: App._ctx ? App._ctx.season : null, home, away });
+      await DB.setPickemPick(+week, gameId, team, spread === '' ? null : spread);
+      App.reload();
+    } catch (e) { alert('Could not save pick: ' + e.message); }
   },
 
   async atspick(week, gameId, team, spread) {

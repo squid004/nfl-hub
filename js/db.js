@@ -251,6 +251,26 @@ const DB = {
     if (error) throw error;
   },
 
+  // Gut picks: the FIRST team clicked on a Moneyline card while it was still locked (nothing
+  // but teams/records/QB chip/weather chip visible). Stored as one kv blob,
+  // { [game_id]: { pick, week, season, home, away, at } }, so no schema change is needed.
+  // Write-once per game: recordGutPick re-reads fresh and never overwrites an existing entry.
+  async gutPicks() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'gut_picks').maybeSingle();
+    if (!data || !data.value) return {};
+    try { return JSON.parse(data.value) || {}; } catch { return {}; }
+  },
+
+  async recordGutPick(gameId, entry) {
+    const cur = await this.gutPicks();
+    if (cur[gameId]) return;
+    cur[gameId] = { ...entry, at: new Date().toISOString() };
+    const { error } = await this._c().from('kv')
+      .upsert({ key: 'gut_picks', value: JSON.stringify(cur), updated_at: new Date().toISOString() },
+              { onConflict: 'key' });
+    if (error) throw error;
+  },
+
   async budgetSnapshot(week) {
     const { data } = await this._c().from('budget_snapshot').select('*').eq('week', week);
     return data || [];

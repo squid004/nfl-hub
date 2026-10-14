@@ -289,7 +289,7 @@ const ModelTrends = {
       this._scatterGenerated = data.generated;
     }
 
-    this._drawSeasonHitRate(scatter, ctx.elwayScoreHistory || []);
+    this._drawSeasonHitRate(scatter, ctx.elwayScoreHistory || [], ctx.gutPicks || {});
   },
 
   // Wired exactly once, right where these elements are created -- the shell (and these
@@ -526,14 +526,14 @@ const ModelTrends = {
   // row before this app started recording picks or for a week still in progress -- that
   // shows up here as a gap in ELWAY's bars, not a fabricated 0%, since a week with zero
   // decided ELWAY games is left out of its own series rather than counted.
-  _drawSeasonHitRate(scatter, elwayHistory) {
+  _drawSeasonHitRate(scatter, elwayHistory, gutPicks) {
     const chartEl = document.getElementById('season-hitrate-chart');
     if (!chartEl) return;
     const cs = getComputedStyle(document.documentElement);
     const cssVar = name => cs.getPropertyValue(name).trim();
     const colors = {
       text: cssVar('--text'), dim: cssVar('--dim'), line: cssVar('--line'), panel: cssVar('--panel2'),
-      market: cssVar('--accent'), elway: cssVar('--warn'), power: cssVar('--good'),
+      market: cssVar('--accent'), elway: cssVar('--warn'), power: cssVar('--good'), gut: cssVar('--text'),
     };
 
     const season = scatter.length ? Math.max(...scatter.map(r => r.season)) : null;
@@ -541,7 +541,7 @@ const ModelTrends = {
 
     const byWeek = new Map();  // week -> { market:{hit,n}, elway:{hit,n}, power:{hit,n} }
     const bump = (week, key, isHit) => {
-      if (!byWeek.has(week)) byWeek.set(week, { market: { hit: 0, n: 0 }, elway: { hit: 0, n: 0 }, power: { hit: 0, n: 0 } });
+      if (!byWeek.has(week)) byWeek.set(week, { market: { hit: 0, n: 0 }, elway: { hit: 0, n: 0 }, power: { hit: 0, n: 0 }, gut: { hit: 0, n: 0 } });
       const b = byWeek.get(week)[key];
       b.n++; if (isHit) b.hit++;
     };
@@ -555,23 +555,34 @@ const ModelTrends = {
       bump(r.week, 'elway', r.elway_favorite === r.winner);
     });
 
+    // My Gut: the blind first-click picks (see DB.recordGutPick), graded against the same
+    // nflverse scatter rows by (season, week, home, away). Ties are skipped, like ELWAY's.
+    const resultByGame = new Map(seasonRows.map(r => [`${r.week}|${r.home}|${r.away}`, r]));
+    Object.values(gutPicks).forEach(gp => {
+      if (gp.season !== season) return;
+      const r = resultByGame.get(`${gp.week}|${gp.home}|${gp.away}`);
+      if (!r || r.home_score === r.away_score) return;
+      bump(gp.week, 'gut', gp.pick === (r.home_score > r.away_score ? r.home : r.away));
+    });
+
     const weeks = Array.from(byWeek.keys()).sort((a, b) => a - b);
     const pct = b => b.n ? 100 * b.hit / b.n : null;
 
-    const totals = { market: { hit: 0, n: 0 }, elway: { hit: 0, n: 0 }, power: { hit: 0, n: 0 } };
+    const totals = { market: { hit: 0, n: 0 }, elway: { hit: 0, n: 0 }, power: { hit: 0, n: 0 }, gut: { hit: 0, n: 0 } };
     weeks.forEach(w => {
       const b = byWeek.get(w);
-      ['market', 'elway', 'power'].forEach(k => { totals[k].hit += b[k].hit; totals[k].n += b[k].n; });
+      ['market', 'elway', 'power', 'gut'].forEach(k => { totals[k].hit += b[k].hit; totals[k].n += b[k].n; });
     });
     const fmt = (label, t) => `${label} ${t.n ? (100 * t.hit / t.n).toFixed(1) + '%' : '—'} (${t.hit}/${t.n})`;
     const summaryEl = document.getElementById('season-hitrate-summary');
     if (summaryEl) summaryEl.textContent = season == null ? 'No data yet.'
-      : `Season ${season} so far — ${fmt('Market', totals.market)} · ${fmt('ELWAY', totals.elway)} · ${fmt('Power Rankings', totals.power)}`;
+      : `Season ${season} so far — ${fmt('Market', totals.market)} · ${fmt('ELWAY', totals.elway)} · ${fmt('Power Rankings', totals.power)} · ${fmt('My Gut', totals.gut)}`;
 
     const series = [
       ['market', 'Market', colors.market],
       ['elway', 'ELWAY', colors.elway],
       ['power', 'Power Rankings', colors.power],
+      ['gut', 'My Gut', colors.gut],
     ];
     const traces = series.map(([key, name, color]) => ({
       name,

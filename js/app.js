@@ -52,6 +52,7 @@ const App = {
       const b = e.target.closest('button[data-act]');
       if (!b) return;
       if (b.dataset.act === 'pick') Pickem.pick(b.dataset.week, b.dataset.game, b.dataset.team, b.dataset.spread);
+      if (b.dataset.act === 'gutpick') Pickem.gutpick(b.dataset.week, b.dataset.game, b.dataset.team, b.dataset.spread, b.dataset.home, b.dataset.away);
       if (b.dataset.act === 'atspick') Pickem.atspick(b.dataset.week, b.dataset.game, b.dataset.team, b.dataset.spread);
       if (b.dataset.act === 'refresh') App.requestRefresh();
       if (b.dataset.act === 'power-sort') Power.sortBy(b.dataset.col);
@@ -97,7 +98,7 @@ const App = {
       const [games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks, refreshReq, lastRefresh, hist, bSnap,
              edgeLog, edgeBias, edgeLeaderboard, injuries, spreadHist, elwayQb1,
              teamRatingsLive, qbDepthChart, parlaySnapshotLive, historicalPower, weeklyPowerRankings, liveGames, elwayScoreHistory,
-             pipelineHealth] =
+             pipelineHealth, gutPicks] =
         await Promise.all([
           DB.weekGames(viewWeek), DB.weekOdds(viewWeek), DB.bestPriceOdds(viewWeek), DB.bookOdds(viewWeek), DB.elwayOdds(viewWeek),
           DB.latestRoster('yahoo'), DB.latestRoster('espn'),
@@ -107,7 +108,7 @@ const App = {
           DB.injuries(), DB.spreadHistory(viewWeek), DB.elwayQb1(),
           DB.teamRatings(), DB.qbDepthChart(), DB.parlayRatingsSnapshot(), DB.historicalPower(),
           DB.weeklyPowerRankings(), isPast ? DB.weekGames(liveWeek) : Promise.resolve(null), DB.elwayScoreHistory(),
-          DB.pipelineHealth(),
+          DB.pipelineHealth(), DB.gutPicks(),
         ]);
 
       // Power Rankings/Parlays: a browsed PAST week reads its own permanently-frozen
@@ -142,7 +143,7 @@ const App = {
                     refreshReq, lastRefresh, hist, bSnap,
                     edgeLog, edgeBias, edgeLeaderboard,
                     injuries, spreadHist, elwayQb1, teamRatings, qbDepthChart, parlaySnapshot, historicalPower, elwayScoreHistory,
-                    pipelineHealth };
+                    pipelineHealth, gutPicks };
       this._ctx = ctx;
       this._renderWeekSelect(liveWeek, viewWeek);
       // Deadlines always reflects the REAL current week/games, never the browsed one -- a
