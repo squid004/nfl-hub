@@ -196,6 +196,22 @@ const ModelTrends = {
           <div id="season-hitrate-chart" style="height:400px;"></div>
         </div>
 
+        <div class="panel" id="distribution-panel" style="overflow:visible;">
+          <h2>Distribution: market spread vs. model delta</h2>
+          <div class="backtest-control-row">
+            <label>Games <select id="dist-scope">
+              <option value="all">All graded seasons</option>
+              <option value="season">This season only</option>
+            </select></label>
+            <span id="dist-summary" class="muted small"></span>
+          </div>
+          <div id="dist-chart" style="height:340px;"></div>
+          <div id="dist-stats" style="overflow-x:auto;"></div>
+          <p class="muted small">Both on the market's scale: home-favored positive, in points. The
+            model's delta is converted at <span id="dist-slope">—</span> pts per 1.0 delta (refit on
+            every graded game). Rebuilds as each week's games are graded.</p>
+        </div>
+
         <div class="panel" id="backtest-panel">
           <h2>Model vs. market, every graded game</h2>
           <p class="muted small">Market spread against the live Power Rankings model's own
@@ -277,7 +293,9 @@ const ModelTrends = {
         </div>`;
       this._shellBuilt = true;
       this._wireBacktestControls();
+      document.getElementById('dist-scope').addEventListener('change', () => this._drawDistributions(this._lastScatter));
     }
+    this._lastScatter = scatter;
 
     if (this._scatterGenerated !== data.generated) {
       this._renderBacktestChart(scatter);
@@ -285,6 +303,66 @@ const ModelTrends = {
     }
 
     this._drawSeasonHitRate(scatter, ctx.elwayScoreHistory || [], ctx.gutPicks || {});
+    this._drawDistributions(scatter);
+  },
+
+  // Overlaid histograms of the market spread and the model's delta (converted to points), plus
+  // a stats table. Recomputed from the scatter on every render, so it grows with each graded week.
+  _drawDistributions(scatter) {
+    const chartEl = document.getElementById('dist-chart');
+    if (!chartEl || !scatter || !scatter.length) return;
+    const scope = document.getElementById('dist-scope').value;
+    const lastSeason = Math.max(...scatter.map(r => r.season));
+    const rows = scope === 'season' ? scatter.filter(r => r.season === lastSeason) : scatter;
+    const k = Agreement.slope(scatter);  // always fit on all games, so the scale is stable across scopes
+    const slopeEl = document.getElementById('dist-slope');
+    if (slopeEl) slopeEl.textContent = k.toFixed(2);
+
+    const mkt = rows.map(r => r.spread);
+    const mdl = rows.map(r => r.delta * k);
+    const raw = rows.map(r => r.delta);
+    const sumEl = document.getElementById('dist-summary');
+    if (sumEl) sumEl.textContent = `${rows.length} games` + (scope === 'season' ? ` in ${lastSeason}` : ` since ${Math.min(...scatter.map(r => r.season))}`);
+
+    const cs = getComputedStyle(document.documentElement);
+    const cssVar = name => cs.getPropertyValue(name).trim();
+    const colors = { text: cssVar('--text'), dim: cssVar('--dim'), line: cssVar('--line'), panel: cssVar('--panel2'),
+      market: cssVar('--accent'), power: cssVar('--good') };
+    const axisCommon = { gridcolor: colors.line, color: colors.dim, tickfont: { size: 11 } };
+    const hist = (name, x, color) => ({
+      type: 'histogram', name, x, histnorm: 'percent', opacity: 0.6, marker: { color },
+      xbins: { start: -25, end: 25, size: 1 },
+      hovertemplate: `${name}: %{y:.1f}% of games in %{x} pts<extra></extra>`,
+    });
+    Plotly.react('dist-chart', [hist('Market spread', mkt, colors.market), hist('Model delta (pts)', mdl, colors.power)], {
+      autosize: true, barmode: 'overlay',
+      margin: { l: 48, r: 12, t: 40, b: 52 },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
+      font: { color: colors.text, size: 12 },
+      xaxis: Object.assign({ title: { text: 'Home favored by (points)' }, range: [-20, 20], dtick: 5 }, axisCommon),
+      yaxis: Object.assign({ title: { text: '% of games' } }, axisCommon),
+      legend: { orientation: 'h', x: 0, y: 1, yanchor: 'bottom', font: { color: colors.text, size: 12 } },
+      hoverlabel: { bgcolor: colors.panel, bordercolor: colors.line, font: { color: colors.text, size: 12 } },
+    }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] });
+
+    const cols = [['Market spread', mkt, 1], ['Model delta (pts)', mdl, 1], ['Model delta (raw)', raw, 2]]
+      .map(([label, vals, dp]) => ({ label, dp, s: Agreement.summarize(vals), a: Agreement.summarize(vals.map(Math.abs)) }));
+    const f = (v, dp) => (v == null || !Number.isFinite(v)) ? '—' : v.toFixed(dp);
+    const line = (label, pick) => `<tr><td>${label}</td>${cols.map(c => `<td class="num">${f(pick(c), c.dp)}</td>`).join('')}</tr>`;
+    document.getElementById('dist-stats').innerHTML = `<table class="small">
+      <thead><tr><th></th>${cols.map(c => `<th class="num">${c.label}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${line('Mean (home +)', c => c.s && c.s.mean)}
+        ${line('Std dev', c => c.s && c.s.sd)}
+        ${line('5th pct', c => c.s && c.s.p5)}
+        ${line('25th pct', c => c.s && c.s.p25)}
+        ${line('Median', c => c.s && c.s.p50)}
+        ${line('75th pct', c => c.s && c.s.p75)}
+        ${line('95th pct', c => c.s && c.s.p95)}
+        ${line('Mean |value|', c => c.a && c.a.mean)}
+        ${line('Median |value|', c => c.a && c.a.p50)}
+        ${line('95th pct |value|', c => c.a && c.a.p95)}
+      </tbody></table>`;
   },
 
   // Wired exactly once, right where these elements are created -- the shell (and these

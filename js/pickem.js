@@ -588,6 +588,9 @@ const Pickem = {
             <div class="stat-label" title="Every term that moved delta for this matchup -- the 9-stat composite rating plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
             ${powerModelBreakdownHtml(matchup, g.home, g.away)}
           </div>
+          ${hasLine && pm && pm.delta != null ? Agreement.similarHtml(
+            (ctx.historicalPower && ctx.historicalPower.backtest_scatter) || [],
+            -effSpread, pm.delta, { season: ctx.season, week, home: g.home, away: g.away }) : ''}
           ${gut ? `<div class="small" style="padding-top:8px;">Gut pick: <strong>${esc(gut.pick)}</strong>
             <span class="chip gut">GUT</span>
             <span class="muted"> &mdash; your first pick, made before anything else on this card was visible. It doesn't change even if your pick above does.</span></div>` : ''}
