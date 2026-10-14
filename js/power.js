@@ -27,6 +27,7 @@ const POWER_COLS = [
   ['points_def_allowed', 'Points Allowed/G'],
   ['turnovers_off', 'Turnovers/G'],
   ['turnovers_def_forced', 'Takeaways/G'],
+  ['pen_presnap_yds', 'Pre-snap Pen Yds/G', 'Yards lost per game to pre-snap penalties (false start, delay of game, offside, encroachment, neutral zone infraction, illegal formation/shift/substitution, too many men, illegal motion). Fewer is better -- a discipline signal, not a luck one.'],
   ['sos', 'SOS', 'Strength of schedule: an EWMA-weighted average of opponents’ own Power Score AT THE TIME each game was played (older games count less, same decay as every other rating here), on the same 0-100 scale as Power Score. 100 = toughest schedule ever recorded, 0 = easiest. Descriptive only -- not folded into Power Score itself.'],
 ];
 

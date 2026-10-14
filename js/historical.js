@@ -22,6 +22,7 @@ const HIST_COLS = [
   ['points_def_allowed', 'Points Allowed/G'],
   ['turnovers_off', 'Turnovers/G'],
   ['turnovers_def_forced', 'Takeaways/G'],
+  ['pen_presnap_yds', 'Pre-snap Pen Yds/G', 'Yards lost per game to pre-snap penalties (false start, delay of game, offside, encroachment, etc.). Fewer is better.'],
   ['sos', 'SOS', 'Strength of schedule for that season: the average of that team\'s own opponents\' season-long Power Scores, on the same 0-100 pooled scale. 100 = toughest schedule ever recorded, 0 = easiest. Descriptive only -- not folded into Power Score itself.'],
 ];
 const HIST_0_100_COLS = new Set(['score', 'sos', 'rush_off_epa', 'pass_off_epa', 'rush_def_epa_allowed', 'pass_def_epa_allowed']);

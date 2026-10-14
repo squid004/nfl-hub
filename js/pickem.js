@@ -317,10 +317,11 @@ function forecastHtml(matchup, home, away) {
   return (forecast + proj) || '<div class="muted small">No forecast data yet.</div>';
 }
 
-// Every term that moved delta this matchup -- the 8-stat composite rating (power_model.
+// Every term that moved delta this matchup -- the 9-stat composite rating (power_model.
 // rating_terms, minus turnovers_def_forced, which has never once had a nonzero weighted
 // contribution in any matchup frozen this season -- dead weight) plus the 4 additive
-// corrections. Oriented to whichever team is the actual FAVORITE, not home/away: +/green
+// corrections. The pre-snap penalty row only appears for matchups computed after it
+// shipped (older frozen weeks have no such rating term). Oriented to whichever team is the actual FAVORITE, not home/away: +/green
 // always means "helped the favorite win," -/red always means "worked against them" -- so
 // e.g. home-field advantage shows red whenever the AWAY team is favored, since that edge is
 // then working against the favorite. The caption states whose perspective the table is in
@@ -386,6 +387,7 @@ function powerModelBreakdownHtml(matchup, home, away) {
       ${row('Points/G', rt.points_off, vs('points_off', 1))}
       ${row('Points Allowed/G', rt.points_def_allowed, vs('points_def_allowed', 1))}
       ${row('Turnovers/G', rt.turnovers_off, vs('turnovers_off', 2))}
+      ${rt.pen_presnap_yds != null ? row('Pre-snap Pen Yds/G', rt.pen_presnap_yds, vs('pen_presnap_yds', 1)) : ''}
       ${row('Home-field advantage', pm.hfa_term, hfaDetail)}
       ${row('QB health', pm.qb_term, qbDetail)}
       ${row('Flex Health', pm.skill_term, skillDetail)}
@@ -535,7 +537,7 @@ const Pickem = {
             <div class="muted">${bucketLabel ? `${bucketLabel} bucket` : ' '}</div>
           </div>
           <div class="stat-block">
-            <div class="stat-label" title="The Power Rankings composite (8 EPA/points/turnover stats) applied to this matchup, calibrated into a win probability from backtested accuracy at that confidence level (QB-injury games excluded from calibration). Backtesting found this does NOT beat the market -- a third data point alongside ELWAY/History, not a replacement.">Power Model</div>
+            <div class="stat-label" title="The Power Rankings composite (9 EPA/points/turnover/penalty stats) applied to this matchup, calibrated into a win probability from backtested accuracy at that confidence level (QB-injury games excluded from calibration). Backtesting found this does NOT beat the market -- a third data point alongside ELWAY/History, not a replacement.">Power Model</div>
             <div class="${resultClass(pmHit)}">${pm && pm.favorite ? `${pm.favorite} ${pct(pm.prob)}` : '<span class="muted">&mdash;</span>'}</div>
             <div class="muted">${pm ? `&Delta; ${pm.delta >= 0 ? '+' : ''}${pm.delta.toFixed(2)}` : ' '}</div>
           </div>
@@ -551,11 +553,11 @@ const Pickem = {
         <details class="game-card-details" id="ml-details-${g.game_id}">
           <summary>Details</summary>
           <div class="game-card-matchup">
-            <div class="stat-label" title="Each side's own offense (0-100 EPA scale) against the OTHER side's defense -- the 8-stat foundation every prediction on this card is built from, before any of the adjustments below.">EPA matchup</div>
+            <div class="stat-label" title="Each side's own offense (0-100 EPA scale) against the OTHER side's defense -- the 9-stat foundation every prediction on this card is built from, before any of the adjustments below.">EPA matchup</div>
             ${epaMatchupVizHtml(matchup, g.home, g.away)}
           </div>
           <div class="game-card-matchup">
-            <div class="stat-label" title="Every term that moved delta for this matchup -- the 8-stat composite rating plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
+            <div class="stat-label" title="Every term that moved delta for this matchup -- the 9-stat composite rating plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
             ${powerModelBreakdownHtml(matchup, g.home, g.away)}
           </div>
         </details>
@@ -601,7 +603,7 @@ const Pickem = {
             context only -- the actual weather-adjusted point forecast lives on the Against
             the Spread tab.
             <span class="stat-label" style="display:inline;text-transform:none;font-weight:600;">Power Model</span>
-            is the Power Rankings composite (same 8 EPA/points/turnover stats as the Power
+            is the Power Rankings composite (same 9 EPA/points/turnover/penalty stats as the Power
             Rankings tab) applied to this matchup, with its margin (&Delta;) converted into a
             win probability from a calibration curve fit against real backtested accuracy at
             each confidence level (games where either team's QB was Out/Doubtful excluded from
@@ -855,11 +857,11 @@ const Pickem = {
         <details class="game-card-details" id="ats-details-${g.game_id}">
           <summary>Details</summary>
           ${matchup ? `<div class="game-card-matchup">
-            <div class="stat-label" title="Each side's own offense (0-100 EPA scale) against the OTHER side's defense -- the 8-stat foundation every prediction on this card is built from.">EPA matchup</div>
+            <div class="stat-label" title="Each side's own offense (0-100 EPA scale) against the OTHER side's defense -- the 9-stat foundation every prediction on this card is built from.">EPA matchup</div>
             ${epaMatchupVizHtml(matchup, g.home, g.away)}
           </div>` : ''}
           ${matchup ? `<div class="game-card-matchup">
-            <div class="stat-label" title="Every term that moved delta for this matchup -- the 8-stat composite rating plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
+            <div class="stat-label" title="Every term that moved delta for this matchup -- the 9-stat composite rating plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
             ${powerModelBreakdownHtml(matchup, g.home, g.away)}
           </div>` : ''}
           ${matchup ? `<div class="game-card-matchup">

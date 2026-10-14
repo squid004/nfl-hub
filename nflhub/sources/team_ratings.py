@@ -1,8 +1,8 @@
-"""Per-team rolling ratings across 8 stats: rush/pass offense EPA, rush/pass defense EPA
-allowed, points scored, points allowed, turnovers committed, turnovers forced. EPA and
-turnovers exclude garbage time (win probability outside [0.05, 0.95] dropped); points are
-final-score based (not garbage-time filtered -- a final score IS the whole-game outcome, so
-filtering it would fight the stat's own meaning).
+"""Per-team rolling ratings across 9 stats: rush/pass offense EPA, rush/pass defense EPA
+allowed, points scored, points allowed, turnovers committed, turnovers forced, and own
+pre-snap penalty yards. EPA and turnovers exclude garbage time (win probability outside
+[0.05, 0.95] dropped); points and penalty yards are whole-game (not garbage-time filtered --
+a final score IS the whole-game outcome, and a flag is a flag at any score).
 
 Ported from research/*.py in this repo, where the methodology was validated: walk-forward
 backtesting (2007-2025) showed none of these, alone or combined, beats the closing market
@@ -22,7 +22,7 @@ season's starting prior, gone entirely (not just diluted) by SEASON_PRIOR_GAMES 
 the new season. Purely descriptive, not folded into the composite score itself.
 
 Power ranking: a single composite score per team, `POWER_WEIGHTS[m] * ORIENTATION[m] *
-z-score(team, m)` summed across all 8 stats. Weights come from ONE joint model across all 8
+z-score(team, m)` summed across all 9 stats. Weights come from ONE joint model across all 9
 stats at once (not 8 independent single-stat fits, which is what an earlier version did) --
 specifically an L2-regularized logistic regression against historical home_win, with
 coefficients constrained >= 0 after each stat is oriented so higher-is-always-better
@@ -30,9 +30,10 @@ coefficients constrained >= 0 after each stat is oriented so higher-is-always-be
 is the fix for a real failure mode: an unconstrained joint fit sign-flipped weak/collinear
 stats (turnovers committed came out positively weighted) because points, EPA, and turnovers
 overlap heavily -- non-negative coefficients can only shrink a redundant stat toward zero,
-never flip its sign. Regularization strength (L2=0.3) was chosen by walk-forward validation
-(research/edge_signal_test_v8_power_weights.py, 2007-2025, out-of-sample AUC), not in-sample
-fit quality. Notably, turnovers_def_forced optimizes to exactly 0.0 -- once the other 7 stats
+never flip its sign. Regularization strength (L2=0.03) was chosen by walk-forward validation
+(research/edge_signal_test_v8_power_weights.py, then extended below its old 0.3 grid floor in
+research/edge_signal_test_v57_l2_grid_extension.py; out-of-sample AUC), not in-sample
+fit quality. Notably, turnovers_def_forced optimizes to exactly 0.0 -- once the other stats
 are known, takeaways forced adds no information, it's not just weak on its own. Computed once
 offline, not refit daily -- see POWER_WEIGHTS/ORIENTATION below.
 
@@ -55,8 +56,8 @@ most once/day (see `refresh`), same cadence as sources/history.py's hist_distrib
 
 QB/skill-position health adjustment: `delta` (the composite's whole point -- fed into both
 the Historical Power tab's backtest scatter and the Moneyline Pick'em tab's Power Model pick)
-is NOT pure POWER_WEIGHTS output anymore. It's that 8-stat composite PLUS two small,
-data-driven corrections for information those 8 stats have zero visibility into (who's
+is NOT pure POWER_WEIGHTS output anymore. It's that 9-stat composite PLUS two small,
+data-driven corrections for information those 9 stats have zero visibility into (who's
 actually playing THIS week): QB_QUALITY_GAP_WEIGHT * qb_quality_gap (see
 qb_quality_gap_data()) and SKILL_EPA_OUT_WEIGHT * skill_epa_out (see
 skill_epa_out_by_team_week()). Both weights were fit once offline (research/edge_signal_
@@ -111,19 +112,29 @@ WP_LO, WP_HI = 0.05, 0.95  # garbage-time filter: drop plays outside this win-pr
 RATING_METRICS = (
     "rush_off_epa", "pass_off_epa", "rush_def_epa_allowed", "pass_def_epa_allowed",
     "points_off", "points_def_allowed", "turnovers_off", "turnovers_def_forced",
+    "pen_presnap_yds",
 )
 # EPA metrics get a 0-100 display scale anchored to the best/worst ever recorded across the
 # whole dataset (see compute_ratings' historical_bounds). Points/turnovers are "definitively
 # countable" -- displayed as their own raw per-game average, no rescaling at all.
 EPA_DISPLAY_METRICS = ("rush_off_epa", "pass_off_epa", "rush_def_epa_allowed", "pass_def_epa_allowed")
-COUNTABLE_METRICS = ("points_off", "points_def_allowed", "turnovers_off", "turnovers_def_forced")
+COUNTABLE_METRICS = ("points_off", "points_def_allowed", "turnovers_off", "turnovers_def_forced", "pen_presnap_yds")
 # How many teams need a complete rating before a point-in-time snapshot counts toward the
 # historical composite-score bounds -- high enough to skip the first week or two of a new
 # season (when only a handful of teams have played their first game and z-scores against a
 # tiny pool are noisy), without requiring literally every team (bye weeks, mid-week ties).
 MIN_TEAMS_FOR_HISTORICAL_SNAPSHOT = 28
 PBP_COLS = ["game_id", "season", "week", "season_type", "posteam", "defteam", "play_type",
-            "epa", "wp", "interception", "fumble_lost"]
+            "epa", "wp", "interception", "fumble_lost",
+            "penalty", "penalty_team", "penalty_yards", "penalty_type", "play_deleted"]
+# Accepted pre-snap (discipline, not play-outcome) penalties: they happen before the ball is
+# live, so they measure a team's own sloppiness rather than the opponent's play. Whole-game,
+# not garbage-time filtered (a flag is a flag at any score).
+PRESNAP_PENALTY_TYPES = {
+    "False Start", "Delay of Game", "Defensive Offside", "Neutral Zone Infraction", "Encroachment",
+    "Illegal Formation", "Illegal Shift", "Illegal Motion", "Illegal Substitution",
+    "Defensive 12 On-field", "Offensive 12 On-field", "Offside on Free Kick",
+}
 MISMATCH_Z_THRESHOLD = 1.5  # combined (offense z + opposing defense-allowed z) needed to flag a callout
 
 # +1 if higher is already better, -1 if the raw stat needs flipping to be "higher=better"
@@ -131,31 +142,48 @@ MISMATCH_Z_THRESHOLD = 1.5  # combined (offense z + opposing defense-allowed z) 
 ORIENTATION = {
     "rush_off_epa": 1, "pass_off_epa": 1, "rush_def_epa_allowed": -1, "pass_def_epa_allowed": -1,
     "points_off": 1, "points_def_allowed": -1, "turnovers_off": -1, "turnovers_def_forced": 1,
+    "pen_presnap_yds": -1,
 }
 
-# Non-negative joint logistic-regression weights vs. historical home_win, L2=0.3, walk-forward
-# validated (research/edge_signal_test_v13_new_window_weights.py, 4927 games, 2007-2025).
-# Re-fit here against the CURRENT season_prior-fade rating windowing (see SEASON_PRIOR_GAMES)
-# -- the original v8 fit (4436 games) used the old forever-decaying carryover mechanism,
-# a different predictor, so its weights weren't technically valid for this one. The refit
-# landed very close to the old values (same relative ranking, turnovers_def_forced again
-# optimizing to exactly 0.0) and the same best L2=0.3, so the windowing change didn't
-# meaningfully change which stats matter -- reassuring, not a coincidence worth skipping.
-# Walk-forward AUC: composite alone 0.6746, market spread alone 0.7224, both together 0.7226
-# -- same conclusion as before, just confirmed under the new windowing: doesn't beat the
-# market, and adding it to the market doesn't move the needle. Apply as
+# Non-negative joint logistic-regression weights vs. historical home_win, L2=0.03, walk-forward
+# validated, 9 stats. Latest refit 2026-10-13 (research/edge_signal_test_v57_l2_grid_extension.py):
+# L2 lowered 0.3 -> 0.03. The original v8 grid bottomed out at 0.3, so the optimum sat off its
+# edge; extending the grid (0, 0.001 ... 0.1, 0.3) on this module's own compute_ratings game_log
+# showed AUC 0.6763 -> 0.6787 and log-loss 0.6457 -> 0.6390 walk-forward (better in 75% of test
+# seasons, positive in BOTH the <=2018 and >2018 halves, bootstrap p~0). 0.03 is the largest L2
+# within 0.0005 AUC of the best (0.0 - 0.01 are indistinguishable). Weights roughly doubled in
+# scale (sum 0.68 -> 0.97, std of delta_raw 0.44 -> 0.66): 0.3 was over-shrinking, which
+# understated confidence everywhere. Every delta-scale constant below was refit in the same
+# script, so "delta" numbers are NOT comparable to pre-2026-10-13 ones. Prior fit (L2=0.3,
+# 2026-10-13, research/edge_signal_test_v54_pen_presnap_
+# production_refit.py, 4991 decided games, 2007-2026, run on THIS module's own compute_ratings
+# game_log): adds pen_presnap_yds (own accepted pre-snap penalty yards -- false starts, delay of
+# game, offside, encroachment, illegal formation/shift/motion/substitution, 12-on-the-field) as
+# the 9th stat. Walk-forward AUC 0.6749 -> 0.6763 and log-loss -0.0007 (better in 14 of 16 held-out
+# seasons, bootstrap p<=0.002 on log-loss, positive weight in 16 of 16 folds, replicated across
+# the <=2018 and >2018 halves; research/edge_signal_test_v52/v53). Small, but it is a real,
+# replicated improvement to a model that never looks at the market, so it ships -- the market
+# already prices part of this signal, which is irrelevant to whether the market-free model is
+# better with it. Earlier history: the v13 refit (8 stats, 4927 games) matched the original v8 fit
+# closely against the current season_prior-fade windowing; composite alone 0.6746 vs market
+# spread alone 0.7224 -- same conclusion, doesn't beat the market. Apply as
 # POWER_WEIGHTS[m] * ORIENTATION[m] * z-score -- these are all >= 0 by construction (see
 # module docstring). Recompute that script and update these if you want to refresh the fit;
-# not refit automatically.
+# not refit automatically. The downstream delta-equivalent constants below (QB/skill/HFA/
+# momentum/delta calibration) were re-checked against the 9-stat composite in the same script and
+# moved by <2% (streak 7%, within noise), so they were deliberately left unchanged.
+# (L2=0.3 weights, superseded: 0.0858 / 0.1489 / 0.0561 / 0.0619 / 0.1570 / 0.1002 / 0.0207 /
+# 0.0 / 0.0495 in the key order below.)
 POWER_WEIGHTS = {
-    "rush_off_epa": 0.0850,
-    "pass_off_epa": 0.1536,
-    "rush_def_epa_allowed": 0.0572,
-    "pass_def_epa_allowed": 0.0578,
-    "points_off": 0.1587,
-    "points_def_allowed": 0.1006,
-    "turnovers_off": 0.0217,
+    "rush_off_epa": 0.1003,
+    "pass_off_epa": 0.2197,
+    "rush_def_epa_allowed": 0.0540,
+    "pass_def_epa_allowed": 0.0207,
+    "points_off": 0.2878,
+    "points_def_allowed": 0.2094,
+    "turnovers_off": 0.0000,
     "turnovers_def_forced": 0.0000,
+    "pen_presnap_yds": 0.0769,
 }
 
 # Calibrates the composite power-ranking delta into "P(the model's favorite wins)" for the
@@ -168,8 +196,12 @@ POWER_WEIGHTS = {
 # seasons. DELTA_PROB_MAX clips the output -- the highest-confidence bin ever actually
 # observed in that backtest was ~77%, so the raw curve's extrapolation past ~85% at rare
 # extreme deltas isn't trusted blindly. Computed once offline, not refit daily.
-DELTA_CALIBRATION_INTERCEPT = 0.0484
-DELTA_CALIBRATION_SLOPE = 1.4497
+# Refit 2026-10-13 for the L2=0.03 composite (research/edge_signal_test_v57_l2_grid_extension.py,
+# 4348 clean games, fav hit 0.6336): was 0.0484 / 1.4497 at L2=0.3. The slope fell because
+# |delta| is ~1.45x wider now (std 0.32 -> 0.47); the probabilities themselves stay on the
+# same empirical curve.
+DELTA_CALIBRATION_INTERCEPT = -0.0841
+DELTA_CALIBRATION_SLOPE = 1.0852
 DELTA_PROB_MAX = 0.85
 
 
@@ -195,7 +227,7 @@ def delta_win_prob(delta: float) -> float:
 # coefficient to delta's own IS directly "how many delta-equivalent units this gap is worth."
 # Both terms came back significant with the expected sign (QB z=-3.63, skill z=-2.46 --
 # more missing value lowers delta, as it should). This does NOT touch POWER_WEIGHTS or the
-# underlying 8-stat composite at all -- it's a purely additive correction on top, informed
+# underlying composite at all -- it's a purely additive correction on top, informed
 # by current-week injury context those 8 inputs have zero visibility into (they only know
 # how a team has actually performed with whoever played, never who's playing THIS week).
 # Walk-forward backtests of this adjustment's effect on raw hit-rate (research/edge_signal_
@@ -221,8 +253,11 @@ def delta_win_prob(delta: float) -> float:
 # of this one, not a replacement. QB_QUALITY_GAP_WEIGHT moved again, -1.0556 -> -0.8818
 # (still significant, z=-3.46) now that fantasy_gap_diff is absorbing some of the same
 # explanatory power; SKILL_EPA_OUT_WEIGHT essentially unchanged (-0.0364 -> -0.0363).
-QB_QUALITY_GAP_WEIGHT = -0.8818
-SKILL_EPA_OUT_WEIGHT = -0.0363
+# Refit 2026-10-13 (v57, same joint-fit recipe) for the L2=0.03 composite, whose delta is ~1.45x
+# wider, so every delta-equivalent weight scales up with it: QB -0.8818 -> -1.3268 (z=-3.3),
+# SKILL -0.0363 -> -0.0608 (z=-2.6). Same z-scores as before, i.e. the same information.
+QB_QUALITY_GAP_WEIGHT = -1.3268
+SKILL_EPA_OUT_WEIGHT = -0.0608
 
 # Home-field advantage: every OTHER signal in this model is venue-blind (a team's own rating
 # reflects its average performance regardless of where it played), so `delta` had NO
@@ -243,7 +278,8 @@ SKILL_EPA_OUT_WEIGHT = -0.0363
 # just reused here instead of invented fresh. Recomputed every refresh from `played` (already
 # fetched for everything else) -- never a stale, separately-maintained number.
 HFA_SHRINKAGE_K = 100
-HFA_WEIGHT = 0.9169
+# Refit 2026-10-13 (v57) for the L2=0.03 composite: was 0.9169 (z=2.2 in the joint fit).
+HFA_WEIGHT = 1.0407
 
 # Neutral-site games get none of the home-field term above -- confirmed as a real,
 # recurring gap, not a one-off: nflverse's games.csv `location` column correctly flags 72
@@ -328,7 +364,7 @@ def home_field_logit_by_season(played_games: list[dict]) -> dict[int, float]:
 # N straight losses, reset to 0 at a season boundary and after any tie) -- fit ONCE offline
 # (research/edge_signal_test_v35_momentum.py, 4977 games 2007-2025) as a joint logistic
 # regression of home_win ~ delta + streak_diff, where delta is the full production composite
-# (8-stat + QB/skill/HFA, already recency-weighted at the STAT level via compute_ratings'
+# (9-stat + QB/skill/HFA, already recency-weighted at the STAT level via compute_ratings'
 # own EWMA). The question this answers isn't "do good teams win more" -- delta already
 # reflects recent form -- it's whether streak length carries anything EXTRA once delta
 # already knows the team's been playing well. It does: streak_diff survived at z=3.74
@@ -337,7 +373,7 @@ def home_field_logit_by_season(played_games: list[dict]) -> dict[int, float]:
 # plus a strong calibration signal (confidence reduced 25.8% of misses vs 20.4% of hits,
 # z=4.35, p<0.0001). No new data source: games.csv's own chronological results are already
 # fetched for everything else in this module.
-MOMENTUM_WEIGHT = 0.0262
+MOMENTUM_WEIGHT = 0.0256  # refit 2026-10-13 (v57) for the L2=0.03 composite, was 0.0262
 
 
 def team_streak_by_week(played_games: list[dict]) -> dict[tuple[str, int, int], int]:
@@ -375,6 +411,44 @@ def team_streak_by_week(played_games: list[dict]) -> dict[tuple[str, int, int], 
             else:
                 streak = streak - 1 if streak <= 0 else -1
     return out
+
+
+def upcoming_streaks(played_games: list[dict], season: int, upcoming: list[dict]) -> dict[tuple[str, int], int]:
+    """{(team, week): signed streak entering that UPCOMING game}. team_streak_by_week() only
+    has entries for games that already have a result, so on its own it returns nothing for a
+    game that hasn't been played yet -- which meant MOMENTUM_WEIGHT silently contributed 0 to
+    every live and backfilled-week matchup (found 2026-10-13). Same win/loss/tie rules, read
+    off each team's streak after its last game strictly before the queried week."""
+    results: dict[str, dict[int, str]] = defaultdict(dict)  # team -> {week: win/loss/tie}
+    for g in played_games:
+        try:
+            if int(g["season"]) != season:
+                continue
+            week = int(g["week"])
+            home, away = normalize_team(g["home_team"]), normalize_team(g["away_team"])
+            hp, ap = float(g["home_score"]), float(g["away_score"])
+        except (ValueError, TypeError, UnknownTeamError):
+            continue
+        if hp == ap:
+            results[home][week] = results[away][week] = "tie"
+        else:
+            results[home][week] = "win" if hp > ap else "loss"
+            results[away][week] = "loss" if hp > ap else "win"
+
+    def streak_before(team: str, week: int) -> int:
+        streak = 0
+        for w in sorted(w for w in results[team] if w < week):
+            res = results[team][w]
+            if res == "tie":
+                streak = 0
+            elif res == "win":
+                streak = streak + 1 if streak >= 0 else 1
+            else:
+                streak = streak - 1 if streak <= 0 else -1
+        return streak
+
+    return {(team, int(u["week"])): streak_before(team, int(u["week"]))
+            for u in upcoming for team in (u["home_team"], u["away_team"])}
 
 
 def _norm_player_name(name: str) -> str:
@@ -609,7 +683,7 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
     return gap_by_team_week, current_primary, current_trailing_epa, league_avg_epa, passer_names, backup_avg_epa, current_streak_n
 
 
-QB_FANTASY_GAP_WEIGHT = -0.0429  # see qb_fantasy_gap_data()'s own docstring. Fit jointly
+QB_FANTASY_GAP_WEIGHT = -0.0651  # refit 2026-10-13 (v57) for the L2=0.03 composite, was -0.0429; see qb_fantasy_gap_data()'s own docstring. Fit jointly
 # with QB_QUALITY_GAP_WEIGHT (research/edge_signal_test_v51_fantasypros_qb_gap_refit.py,
 # z=-3.24) -- a SEPARATE, additive term on top of the EPA-based gap, not a replacement for
 # it. Much smaller in magnitude than QB_QUALITY_GAP_WEIGHT because fantasy_gap_diff's own
@@ -1188,7 +1262,7 @@ FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
 # Weather ADJUSTMENT on top of predict_points()'s base prediction -- fit as a separate
 # residual regression (actual_points - base_prediction) ~ wind/precip/cold, NOT refit jointly
-# with the 8 team-rating weights above, specifically so "no weather data" cleanly means
+# with the 9 team-rating weights above, specifically so "no weather data" cleanly means
 # "adjustment = 0" with zero risk of implicitly assuming calm/dry conditions for a game we
 # simply don't have a forecast for yet. Non-negative L2-regularized (L2=0.01), walk-forward
 # validated (research/edge_signal_test_v10_weather.py, 5926 team-game rows, 2007-2025):
@@ -1261,14 +1335,24 @@ def fetch_forecast_weather(team: str, date_str: str) -> dict[str, float] | None:
 
 def _phase_stats_for_season(season: int, current_season: int) -> pd.DataFrame:
     """One row per (game_id, team): garbage-time-filtered rush/pass offensive EPA/play plus
-    turnovers committed (same filtered play population, for consistency)."""
+    turnovers committed (same filtered play population, for consistency), plus the team's own
+    accepted pre-snap penalty yards for the whole game (unfiltered, 0 if none)."""
     if season < current_season:
         path = os.path.join(DATA_DIR, f"team_game_phase_{season}.parquet")
         if os.path.exists(path):
-            return pd.read_parquet(path)
+            cached = pd.read_parquet(path)
+            if "pen_presnap_yds" in cached.columns:
+                return cached
 
     df = pd.read_csv(PBP_URL.format(season=season), compression="gzip", usecols=PBP_COLS, low_memory=False)
-    df = df[(df["season_type"] == "REG") & (df["play_type"].isin(["run", "pass"]))]
+    df = df[df["season_type"] == "REG"]
+
+    is_presnap = (df["play_deleted"].fillna(0) != 1) & (df["penalty"] == 1) & df["penalty_type"].isin(PRESNAP_PENALTY_TYPES)
+    pen = df[is_presnap].dropna(subset=["penalty_team"])
+    presnap = pen.groupby(["game_id", "penalty_team"])["penalty_yards"].sum().reset_index()
+    presnap = presnap.rename(columns={"penalty_team": "team", "penalty_yards": "pen_presnap_yds"})
+
+    df = df[df["play_type"].isin(["run", "pass"])]
     df = df.dropna(subset=["wp", "epa", "posteam"])
     df = df[(df["wp"] >= WP_LO) & (df["wp"] <= WP_HI)]
     df["turnover"] = df["interception"].fillna(0) + df["fumble_lost"].fillna(0)
@@ -1287,6 +1371,8 @@ def _phase_stats_for_season(season: int, current_season: int) -> pd.DataFrame:
         .rename(columns={"posteam": "team", "turnover": "turnovers_committed"})
     out = off[["game_id", "team", "rush_off_epa", "pass_off_epa"]].merge(tov, on=["game_id", "team"], how="left")
     out["turnovers_committed"] = out["turnovers_committed"].fillna(0.0)
+    out = out.merge(presnap, on=["game_id", "team"], how="left")
+    out["pen_presnap_yds"] = out["pen_presnap_yds"].fillna(0.0)
     return out.dropna(subset=["rush_off_epa", "pass_off_epa"])
 
 
@@ -1643,7 +1729,7 @@ def matchup_callouts(
             ratings[home].get(m) is not None and ratings[away].get(m) is not None for m in RATING_METRICS
         ):
             diffs = {m: ORIENTATION[m] * (ratings[home][m] - ratings[away][m]) for m in RATING_METRICS}
-            # Each of the 8 stats' own standardized, weighted contribution to delta_raw --
+            # Each of the 9 stats' own standardized, weighted contribution to delta_raw --
             # same sum as before, just captured per-term instead of only the total, so the
             # frontend can show "how much of delta came from pass offense EPA" etc.
             rating_terms = {m: POWER_WEIGHTS[m] * ((diffs[m] - diff_mu[m]) / diff_sd[m]) for m in RATING_METRICS}
@@ -1703,7 +1789,7 @@ def matchup_callouts(
                             "home_fantasy_gap": round(home_fantasy_gap, 4), "away_fantasy_gap": round(away_fantasy_gap, 4),
                             "home_skill_out": round(home_skill_out, 4), "away_skill_out": round(away_skill_out, 4),
                             "home_streak": home_streak, "away_streak": away_streak,
-                            # All 8 of POWER_WEIGHTS' own stats, individually -- the frontend
+                            # All 9 of POWER_WEIGHTS' own stats, individually -- the frontend
                             # currently only charts the 4 EPA ones (rush/pass off+def), but
                             # points/turnovers are included too rather than arbitrarily left
                             # out of an otherwise-complete breakdown.
@@ -1750,7 +1836,7 @@ def matchup_callouts(
 
 def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict[str, tuple[float, float]]) -> dict[str, dict]:
     """Composite score per team: sum of POWER_WEIGHTS[m] * ORIENTATION[m] * z-score(team, m)
-    across all 8 stats, ranked 1 = best. Each z-score is cross-sectional (against the other 31
+    across all 9 stats, ranked 1 = best. Each z-score is cross-sectional (against the other 31
     current teams), so the underlying fit still reflects current relative standing, not an
     absolute scale -- only the DISPLAY representation below is anchored to history instead.
 
@@ -1852,7 +1938,7 @@ def compute_historical_season_averages(
 ) -> tuple[dict[tuple[str, int], dict[str, float]], dict[tuple[str, int], list[str]]]:
     """One row per (team, season) for every FULLY COMPLETED season in `played_games`
     (season < current_season) -- the simple, equally-weighted average of that team's own
-    games THAT SEASON for each of the 8 RATING_METRICS, deliberately NOT the EWMA-decayed
+    games THAT SEASON for each of the RATING_METRICS, deliberately NOT the EWMA-decayed
     rolling rating compute_ratings() produces for the live dashboard. A live rating is a
     point-in-time snapshot answering "how good is this team right now, weighted toward
     recent form" -- correct for a live pick'em tool, but wrong for "how good was the 2007
@@ -2188,7 +2274,7 @@ def compute_backtest_scatter(
     logit_by_season(), optional): QB_QUALITY_GAP_WEIGHT or QB_FANTASY_GAP_WEIGHT (whichever
     `fantasy_available` says applied that season/week -- EITHER one, never both, see
     matchup_callouts()'s own comment for why) plus SKILL_EPA_OUT_WEIGHT/HFA_WEIGHT ADD to
-    the pure 8-stat composite below, producing the `delta` this function actually returns --
+    the pure stat composite below, producing the `delta` this function actually returns --
     `delta_raw` keeps the unadjusted composite for comparison. See each weight's own
     docstring for why it's a real, data-driven correction.
 
@@ -2503,7 +2589,8 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
 
     return matchup_callouts(ratings, week_games, historical_bounds, diff_mu, diff_sd,
                              qb_gap_week, fantasy_gap_week, fantasy_healthy_week, skill_out_week, hfa_logit,
-                             points_bias_asof, sd_home, sd_away, hist_score_freq)
+                             points_bias_asof, sd_home, sd_away, hist_score_freq,
+                             upcoming_streaks(played_cutoff, current_season, week_games))
 
 
 # Bump whenever matchup_callouts()'s/power_model's own output schema meaningfully changes
@@ -2516,9 +2603,18 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
 # neutral-site HFA fix + stadium/location fields were all missing from weeks backfilled
 # before those shipped. v3: corrected STADIUM_LOCATIONS spellings for a few international
 # venues (Azteca/Corinthians/Maracana/Melbourne) that were wrong or missing in v2. v4: added
-# `rating_terms`, each of the 8 POWER_WEIGHTS stats' own individual weighted contribution to
-# delta_raw (previously only the combined delta_raw was exposed).
-MATCHUPS_SCHEMA_VERSION = 4
+# `rating_terms`, each of the 9 POWER_WEIGHTS stats' own individual weighted contribution to
+# delta_raw (previously only the combined delta_raw was exposed). v5 (2026-10-13): the L2=0.03
+# composite refit changed POWER_WEIGHTS and every delta-scale constant (so every stored
+# power_model.prob and score_distribution moved), and momentum (streak) now actually reaches
+# upcoming/backfilled games -- see upcoming_streaks().
+MATCHUPS_SCHEMA_VERSION = 5
+
+# Bump whenever POWER_WEIGHTS / the rating pipeline changes, so a frozen week's stored `teams`,
+# `power_rankings` and `parlay_teams` (which MATCHUPS_SCHEMA_VERSION does NOT touch) are rebuilt
+# from scratch with today's constants instead of keeping stale Power Scores from the old
+# weights. Also resets the per-game score_distribution_snapshot (see _freeze_score_distributions).
+RATINGS_SCHEMA_VERSION = 2
 
 
 def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: int, current_week: int) -> None:
@@ -2556,6 +2652,8 @@ def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: i
     for week in range(1, current_week + 1):
         week_key = str(week)
         existing_week = season_weeks.get(week_key)
+        if existing_week is not None and existing_week.get("ratings_schema") != RATINGS_SCHEMA_VERSION:
+            existing_week = None  # built under older POWER_WEIGHTS -- rebuild it whole below
         if existing_week is not None:
             # Ratings/power_rankings/parlay_teams are frozen forever once computed -- but a
             # field added to this snapshot AFTER a week was already frozen (e.g. team_records,
@@ -2621,6 +2719,7 @@ def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: i
             # games -- see _week_matchups_asof()'s own docstring for the cutoff/caveats.
             "matchups": _week_matchups_asof(played_cutoff, all_rows, current_season, week),
             "matchups_schema": MATCHUPS_SCHEMA_VERSION,
+            "ratings_schema": RATINGS_SCHEMA_VERSION,
         }
         changed = True
 
@@ -2645,6 +2744,12 @@ def _freeze_score_distributions(store, matchups: dict[str, dict], today: str) ->
         frozen = {}
 
     changed = False
+    # Frozen distributions were computed under whichever model was live at the time -- after a
+    # model refit (RATINGS_SCHEMA_VERSION bump) they'd keep showing the old probabilities for
+    # games already in progress, so start over and re-freeze from the current model.
+    if frozen.get("__ratings_schema__") != RATINGS_SCHEMA_VERSION:
+        frozen = {"__ratings_schema__": RATINGS_SCHEMA_VERSION}
+        changed = True
     for key, info in matchups.items():
         gid = info.get("game_id")
         gameday = info.get("gameday")
@@ -2658,7 +2763,8 @@ def _freeze_score_distributions(store, matchups: dict[str, dict], today: str) ->
                 frozen[gid] = info["score_distribution"]
                 changed = True
 
-    stale = [gid for gid in frozen if gid not in {m.get("game_id") for m in matchups.values()}]
+    stale = [gid for gid in frozen
+             if gid != "__ratings_schema__" and gid not in {m.get("game_id") for m in matchups.values()}]
     for gid in stale:
         del frozen[gid]
         changed = True
@@ -2774,8 +2880,7 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
     skill_out_by_tw = skill_epa_out_by_team_week(current_season)
     skill_out_upcoming = {(team, week): v for (team, season, week), v in skill_out_by_tw.items() if season == current_season}
     hfa_logit_current = home_field_logit_by_season(played).get(current_season, 0.0)
-    streak_by_tsw = team_streak_by_week(played)
-    streak_upcoming = {(team, week): v for (team, season, week), v in streak_by_tsw.items() if season == current_season}
+    streak_upcoming = upcoming_streaks(played, current_season, upcoming)
 
     # Score-distribution pipeline (Against the Spread tab) -- reuses the SAME game_log
     # compute_ratings() already built above (now carries home_pred_points/away_pred_points,
@@ -2814,9 +2919,9 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
         "power_rankings": power,
         "team_records": team_records,
         "power_ranking_meta": {
-            "method": "L2-regularized (L2=0.3) logistic regression, coefficients constrained "
-                      ">= 0, jointly fit across all 8 stats at once against real game outcomes "
-                      "(2007-2025, 4927 games), chosen by walk-forward out-of-sample validation "
+            "method": "L2-regularized (L2=0.03) logistic regression, coefficients constrained "
+                      ">= 0, jointly fit across all 9 stats at once against real game outcomes "
+                      "(2007-2026, 4991 games), chosen by walk-forward out-of-sample validation "
                       "-- not an in-sample fit, and re-fit against this rating's own season-"
                       "prior-fade windowing (not the old forever-decaying one). Walk-forward "
                       "AUC 0.6746 vs. 0.7224 for the closing market spread alone -- does not "

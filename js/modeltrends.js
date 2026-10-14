@@ -7,7 +7,7 @@
 // descriptive ranking of teams.
 const BACKTEST_OUTCOME_LABEL = { hit: 'Hit', miss: 'Miss', tie: 'Tie', push: 'Push' };
 const BACKTEST_MIN_SPREAD_MAX = 20;  // slider ceiling -- real |spread| tops out well under this
-const BACKTEST_MIN_DELTA_MAX = 2;    // slider ceiling -- real |delta| tops out well under this
+const BACKTEST_MIN_DELTA_MAX = 4;    // slider ceiling -- real |delta| tops out just under this (3.64 as of the L2=0.03 refit)
 
 // r.outcome (from the backend) is always MODEL-relative. This recomputes the same hit/miss/
 // tie/push classification relative to the MARKET favorite instead, from fields already on
