@@ -190,15 +190,10 @@ const ModelTrends = {
       teams.forEach(t => teamOpts.push(`<option value="${esc(t)}">${esc(t)}</option>`));
 
       el.innerHTML = `
-        <div class="panel" id="season-hitrate-panel">
+        <div class="panel" id="season-hitrate-panel" style="overflow:visible;">
           <h2>This season: hit rate by model</h2>
-          <p class="muted small">Straight-up pick accuracy, 2026 only, each model scored
-            against whatever games it actually has a pick for. ELWAY has no pick before this
-            app started recording it (wk2) and excludes any week still in progress -- Market
-            and Power Rankings aren't held back by that, so their games-counted totals run
-            ahead of ELWAY's by design, not by bug.</p>
           <div id="season-hitrate-summary" class="muted small"></div>
-          <div id="season-hitrate-chart"></div>
+          <div id="season-hitrate-chart" style="height:400px;"></div>
         </div>
 
         <div class="panel" id="backtest-panel">
@@ -598,12 +593,12 @@ const ModelTrends = {
     Plotly.react('season-hitrate-chart', traces, {
       autosize: true,
       barmode: 'group',
-      margin: { l: 48, r: 16, t: 8, b: 40 },
+      margin: { l: 48, r: 12, t: 60, b: 52 },
       paper_bgcolor: 'transparent', plot_bgcolor: 'transparent',
       font: { color: colors.text, size: 12 },
       xaxis: Object.assign({ title: { text: 'NFL week' }, dtick: 1 }, axisCommon),
       yaxis: Object.assign({ title: { text: 'Hit rate %' }, range: [0, 100] }, axisCommon),
-      legend: { orientation: 'h', x: 0, y: 1.12, font: { color: colors.text, size: 12 } },
+      legend: { orientation: 'h', x: 0, y: 1, yanchor: 'bottom', font: { color: colors.text, size: 12 } },
       hoverlabel: { bgcolor: colors.panel, bordercolor: colors.line, font: { color: colors.text, size: 12 } },
     }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] });
   },
