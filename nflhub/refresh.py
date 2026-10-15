@@ -396,6 +396,24 @@ def _apply_edge(
             ])
             summary["edge_sheet"] = f"{len(sheet.picks)} picks, {sheet.pool_size} opponents"
 
+            # Catch-up for the week that just ended: if the pool's tab for it only appeared
+            # after the week rolled over, its picks were never stored and the leaderboard /
+            # bias would silently skip that week. insert is idempotent on re-runs.
+            if week > 1 and not any(
+                p.get("week") == week - 1 and p.get("season") == season
+                for p in store.edge_all_opponent_picks()
+            ):
+                try:
+                    prev = edge_sheet.fetch_week(cfg.edge.sheet_id, week - 1, normalize_team)
+                    store.edge_insert_opponent_picks([
+                        {"season": season, "week": week - 1, "opponent": p.opponent,
+                         "team_picked": p.team_picked, "source": "sheet"}
+                        for p in prev.picks
+                    ])
+                    summary["edge_sheet_prev"] = f"backfilled {len(prev.picks)} picks for week {week - 1}"
+                except edge_sheet.EdgeSheetUnavailable:
+                    pass
+
             if cfg.edge.my_name:
                 mine = next(
                     (s for s in sheet.standings if cfg.edge.my_name.lower() in s.opponent.lower()),
