@@ -246,7 +246,9 @@ def delta_win_prob(delta: float) -> float:
     if delta == 0:
         return 0.5
     p = 1.0 / (1.0 + np.exp(-(DELTA_CALIBRATION_INTERCEPT + DELTA_CALIBRATION_SLOPE * abs(delta))))
-    return min(p, DELTA_PROB_MAX)
+    # Floor at 50%: a model's favorite can't be an underdog by its own measure (the curve's
+    # intercept used to be slightly negative, which gave a dead-even delta a 47.9% favorite).
+    return min(max(p, 0.5), DELTA_PROB_MAX)
 
 
 # Converts two current-week injury signals -- QB_QUALITY_GAP (see qb_quality_gap_data()
@@ -2353,6 +2355,7 @@ def compute_backtest_scatter(
     hfa_by_season: dict[int, float] | None = None,
     midgame_qb_injury: dict[tuple[str, int, int], bool] | None = None,
     streak: dict[tuple[str, int, int], int] | None = None,
+    walkforward: list[dict | None] | None = None,
 ) -> list[dict]:
     """Turns compute_ratings()'s optional `game_log` into ready-to-plot rows for the
     Historical Power tab's backtest scatter: market spread vs. the CURRENT production
@@ -2397,7 +2400,8 @@ def compute_backtest_scatter(
     sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in POWER_METRICS}
 
     out = []
-    for r in game_log:
+    for idx, r in enumerate(game_log):
+        wf = walkforward[idx] if walkforward else None
         delta_raw = sum(POWER_WEIGHTS[m] * ((r["diffs"][m] - mu[m]) / sd[m]) for m in POWER_METRICS)
         # EITHER the fantasy gap OR the EPA gap, never both -- see matchup_callouts()'s own
         # comment for why (fantasy_healthy's live-path meaning here is "was real FantasyPros
@@ -2425,6 +2429,13 @@ def compute_backtest_scatter(
             "home_score": r["home_score"], "away_score": r["away_score"],
             "spread": round(r["spread_line"], 1), "delta": round(delta, 4), "delta_raw": round(delta_raw, 4),
             "outcome": outcome,
+            # Walk-forward twin of delta/outcome (every fitted piece trained on earlier seasons
+            # only; None before WF_TEST_START) -- see compute_walkforward_deltas().
+            "delta_wf": round(wf["delta"], 4) if wf else None,
+            "p_home_wf": round(wf["p_home"], 4) if wf else None,
+            "outcome_wf": None if not wf else (
+                "tie" if r["home_score"] == r["away_score"] else "push" if wf["delta"] == 0
+                else ("hit" if (wf["delta"] > 0) == (r["home_score"] > r["away_score"]) else "miss")),
             "home_qb_out": qb_out.get((r["home"], r["season"], r["week"]), False),
             "away_qb_out": qb_out.get((r["away"], r["season"], r["week"]), False),
             "home_qb_injured_ingame": midgame_qb_injury.get((r["home"], r["season"], r["week"]), False),
@@ -2434,6 +2445,138 @@ def compute_backtest_scatter(
             "neutral": bool(r.get("neutral")),
         })
     return out
+
+
+# Walk-forward ("honest") backtest. The scatter's `delta` applies constants fit ONCE on all data
+# (including the season being scored) to every past game -- fine for showing what today's model
+# says, but an optimistic hit rate. research/edge_signal_test_v64_honest_walkforward_delta.py
+# measured the gap piece by piece: refitting the composite weights and z-score stats
+# walk-forward costs ~0.2 points of hit rate, the QB/skill/HFA/momentum constants ~1.7 more (the
+# early walk-forward HFA constants are unstable with only a few training seasons), calibration
+# ~0. WF_TEST_START is the first season scored out-of-sample (needs 4+ training seasons);
+# WF_CORR_FROM is when the injury data behind those corrections starts.
+WF_TEST_START = 2011
+WF_CORR_FROM = 2009
+WF_RECENT_FROM = 2017  # "recent" window for the summary: every season here has 8+ training seasons
+
+
+def _fit_nonneg_logistic(X: np.ndarray, y: np.ndarray, l2: float) -> np.ndarray:
+    from scipy.optimize import minimize
+    n, p = X.shape
+    Xb = np.hstack([np.ones((n, 1)), X])
+
+    def f(w):
+        ph = 1 / (1 + np.exp(-(Xb @ w)))
+        nll = -np.mean(y * np.log(ph + 1e-12) + (1 - y) * np.log(1 - ph + 1e-12)) + 0.5 * l2 * np.sum(w[1:] ** 2)
+        g = Xb.T @ (ph - y) / n
+        g[1:] += l2 * w[1:]
+        return nll, g
+
+    return minimize(f, np.zeros(p + 1), jac=True, method="L-BFGS-B", bounds=[(None, None)] + [(0, None)] * p).x
+
+
+def _fit_logistic(X: np.ndarray, y: np.ndarray) -> np.ndarray:
+    from scipy.optimize import minimize
+    n, k = X.shape
+    Xb = np.hstack([np.ones((n, 1)), X])
+
+    def f(w):
+        ph = 1 / (1 + np.exp(-(Xb @ w)))
+        return -np.sum(y * np.log(ph + 1e-12) + (1 - y) * np.log(1 - ph + 1e-12)), Xb.T @ (ph - y)
+
+    return minimize(f, np.zeros(k + 1), jac=True, method="L-BFGS-B").x
+
+
+def compute_walkforward_deltas(
+    game_log: list[dict], qb_out, qb_gap, fantasy_gap, fantasy_available, skill_out, hfa_by_season, streak,
+) -> list[dict | None]:
+    """One entry per `game_log` row (same order): {"delta", "p_home"} produced by a model whose
+    EVERY fitted piece -- z-score mean/std, composite weights (non-negative L2 logistic), the
+    QB/fantasy/skill/HFA/momentum constants (joint logistic, as in the research refits), and the
+    delta->probability calibration -- uses only seasons BEFORE the game's own season. None for
+    seasons before WF_TEST_START. A correction with no training data yet (e.g. FantasyPros before
+    its first season) gets weight 0."""
+    n = len(game_log)
+    out: list[dict | None] = [None] * n
+    if not n:
+        return out
+    qb_out, qb_gap, fantasy_gap = qb_out or {}, qb_gap or {}, fantasy_gap or {}
+    fantasy_available, skill_out, hfa_by_season, streak = fantasy_available or {}, skill_out or {}, hfa_by_season or {}, streak or {}
+    seasons = np.array([r["season"] for r in game_log])
+    decided = np.array([r["home_score"] != r["away_score"] for r in game_log])
+    y = np.array([1.0 if r["home_score"] > r["away_score"] else 0.0 for r in game_log])
+    X = np.array([[r["diffs"][m] for m in POWER_METRICS] for r in game_log])
+
+    def gap(d, r, side):
+        return d.get((r[side], r["season"], r["week"]), 0.0)
+
+    qb = np.array([gap(qb_gap, r, "home") - gap(qb_gap, r, "away") for r in game_log])
+    fa = np.array([gap(fantasy_gap, r, "home") - gap(fantasy_gap, r, "away") for r in game_log])
+    sk = np.array([gap(skill_out, r, "home") - gap(skill_out, r, "away") for r in game_log])
+    hf = np.array([0.0 if r.get("neutral") else hfa_by_season.get(r["season"], 0.0) for r in game_log])
+    stk = np.array([gap(streak, r, "home") - gap(streak, r, "away") for r in game_log])
+    use_fp = np.array([fantasy_available.get((r["season"], r["week"]), False) for r in game_log])
+    clean = np.array([not (qb_out.get((r["home"], r["season"], r["week"]), False)
+                           or qb_out.get((r["away"], r["season"], r["week"]), False)) for r in game_log])
+
+    for season in sorted(set(seasons.tolist())):
+        if season < WF_TEST_START:
+            continue
+        tri, tei = decided & (seasons < season), seasons == season
+        if tri.sum() < 500:
+            continue
+        mu, sd = X[tri].mean(0), X[tri].std(0)
+        sd[sd == 0] = 1.0
+        w = _fit_nonneg_logistic((X[tri] - mu) / sd, y[tri], 0.03)[1:]
+        d_raw = ((X - mu) / sd) @ w
+        kp = tri & (seasons >= WF_CORR_FROM)
+        feats = np.column_stack([d_raw, qb, fa, sk, hf, stk])
+        live = feats[kp].std(0) > 0
+        live[0] = True
+        coef = _fit_logistic(feats[kp][:, live], y[kp])
+        ratio = np.zeros(6)
+        ratio[live] = np.concatenate([[1.0], coef[2:] / coef[1]])
+        delta = d_raw + np.where(use_fp, ratio[2] * fa, ratio[1] * qb) + ratio[3] * sk + ratio[4] * hf + ratio[5] * stk
+        fav = np.where(delta > 0, y, 1 - y)
+        km = kp & clean & (delta != 0)
+        a, b = _fit_logistic(np.abs(delta[km])[:, None], fav[km])
+        for i in np.where(tei)[0]:
+            p_fav = min(max(1.0 / (1.0 + math.exp(-(a + b * abs(delta[i])))), 0.5), DELTA_PROB_MAX)
+            out[i] = {"delta": float(delta[i]), "p_home": p_fav if delta[i] > 0 else 1.0 - p_fav}
+    return out
+
+
+def compute_walkforward_summary(scatter: list[dict]) -> dict | None:
+    """Honest-vs-in-sample hit rates and a reliability table, from the scatter rows that carry
+    `delta_wf` (computed alongside by compute_backtest_scatter). In-sample = the same games'
+    `delta` (constants fit on all data)."""
+    rows = [r for r in scatter if r.get("delta_wf") is not None and r["home_score"] != r["away_score"]]
+    if not rows:
+        return None
+
+    def rate(sub, key):
+        graded = [r for r in sub if r[key] != 0]
+        return (sum((r[key] > 0) == (r["home_score"] > r["away_score"]) for r in graded) / len(graded)) if graded else None
+
+    def block(sub):
+        return {"n": len(sub), "hit_wf": rate(sub, "delta_wf"), "hit_in_sample": rate(sub, "delta")}
+
+    by_season = [dict(season=s, **block([r for r in rows if r["season"] == s])) for s in sorted({r["season"] for r in rows})]
+    bins = []
+    edges = (0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 99.0)
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        sub = [r for r in rows if lo <= abs(r["delta_wf"]) < hi]
+        if sub:
+            fav_won = [(r["delta_wf"] > 0) == (r["home_score"] > r["away_score"]) for r in sub]
+            pred = [r["p_home_wf"] if r["delta_wf"] > 0 else 1.0 - r["p_home_wf"] for r in sub]
+            bins.append({"lo": lo, "hi": hi if hi < 99 else None, "n": len(sub),
+                         "predicted": round(sum(pred) / len(sub), 4), "actual": round(sum(fav_won) / len(sub), 4)})
+    ll = -sum(math.log(max(r["p_home_wf"] if r["home_score"] > r["away_score"] else 1.0 - r["p_home_wf"], 1e-9)) for r in rows) / len(rows)
+    return {
+        "first_season": min(r["season"] for r in rows), "all": block(rows),
+        "recent_from": WF_RECENT_FROM, "recent": block([r for r in rows if r["season"] >= WF_RECENT_FROM]),
+        "log_loss": round(ll, 4), "by_season": by_season, "reliability": bins,
+    }
 
 
 def compute_calibration_stats(scatter: list[dict]) -> dict | None:
@@ -2552,8 +2695,10 @@ def refresh_historical(store, force: bool = False) -> str:
     hfa_by_season = home_field_logit_by_season(played)
     midgame_qb_injury = midgame_qb_injury_by_week(current_season)
     streak = team_streak_by_week(played)
-    scatter = compute_backtest_scatter(game_log, qb_out, qb_gap, fantasy_gap, fantasy_available, skill_out, hfa_by_season, midgame_qb_injury, streak)
+    walkforward = compute_walkforward_deltas(game_log, qb_out, qb_gap, fantasy_gap, fantasy_available, skill_out, hfa_by_season, streak)
+    scatter = compute_backtest_scatter(game_log, qb_out, qb_gap, fantasy_gap, fantasy_available, skill_out, hfa_by_season, midgame_qb_injury, streak, walkforward)
     calibration = compute_calibration_stats(scatter)
+    walkforward_summary = compute_walkforward_summary(scatter)
 
     store.kv_set("historical_power_rankings", json.dumps({
         "generated": datetime.now(timezone.utc).isoformat(),
@@ -2561,6 +2706,7 @@ def refresh_historical(store, force: bool = False) -> str:
         "rankings": rankings,
         "backtest_scatter": scatter,
         "calibration": calibration,
+        "walkforward": walkforward_summary,
     }))
     store.kv_set("historical_power_date", today)
     return (
@@ -2873,6 +3019,58 @@ def _freeze_score_distributions(store, matchups: dict[str, dict], today: str) ->
     return matchups
 
 
+PROSPECTIVE_LOG_KEY = "prospective_log"
+
+
+def _log_prospective(store, matchups: dict[str, dict], all_rows: list[dict], today: str) -> int:
+    """Append-only log of the model's pre-kickoff prediction for every game, plus the market line at
+    that moment, for the prospective scorecard on Model Trends. Unlike score_distribution_snapshot or
+    the per-week power-ranking snapshots, this is NEVER rebuilt when the model is refit -- it is the
+    only place a prediction exists exactly as it was made, which is what makes 2026 a true holdout.
+    A game's entry is rewritten on every run until its gameday begins (so it ends up as the last
+    pre-gameday prediction, same date-level freeze convention as _freeze_score_distributions) and is
+    never touched again after. Returns the number of entries written this run."""
+    raw = store.kv_get(PROSPECTIVE_LOG_KEY)
+    try:
+        log: dict[str, dict] = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        log = {}
+    rows_by_id = {r["game_id"]: r for r in all_rows}
+
+    def num(row: dict, key: str) -> float | None:
+        try:
+            return float(row[key])
+        except (KeyError, ValueError, TypeError):
+            return None
+
+    written = 0
+    for info in matchups.values():
+        gid, gameday, pm = info.get("game_id"), info.get("gameday"), info.get("power_model")
+        if not gid or not gameday or not pm or today >= gameday:
+            continue
+        row = rows_by_id.get(gid, {})
+        home, away = info.get("home"), info.get("away")
+        prob_fav = pm.get("prob")
+        if home is None or away is None or prob_fav is None:
+            continue
+        p_home = prob_fav if pm.get("favorite") == home else (1.0 - prob_fav if pm.get("favorite") == away else 0.5)
+        entry = {
+            "season": int(row["season"]) if row.get("season") else None,
+            "week": int(row["week"]) if row.get("week") else None,
+            "home": home, "away": away, "gameday": gameday,
+            "delta": pm.get("delta"), "p_home": round(p_home, 4),
+            "spread_line": num(row, "spread_line"),
+            "ml_home": num(row, "home_moneyline"), "ml_away": num(row, "away_moneyline"),
+            "ratings_schema": RATINGS_SCHEMA_VERSION,
+        }
+        if {k: v for k, v in log.get(gid, {}).items() if k != "logged_at"} != entry:
+            log[gid] = {**entry, "logged_at": datetime.now(timezone.utc).isoformat()}
+            written += 1
+    if written:
+        store.kv_set(PROSPECTIVE_LOG_KEY, json.dumps(log))
+    return written
+
+
 def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None = None) -> str:
     """Rebuild team EPA ratings at most once per day. `injuries` (ESPN's live feed, see
     _primary_qb_out_live()) is normally passed in by refresh.py, which already fetches it
@@ -3004,6 +3202,10 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
                                  points_bias_live, sd_home, sd_away, hist_score_freq,
                                  streak_upcoming)
     matchups = _freeze_score_distributions(store, matchups, date.today().isoformat())
+    try:
+        _log_prospective(store, matchups, all_rows, date.today().isoformat())
+    except Exception as exc:  # noqa: BLE001 - analytics only; never block the rating refresh
+        log.warning("prospective log skipped: %s", exc)
     power = power_rankings(ratings, historical_bounds)
     team_records = season_records(played, current_season)
     _refresh_parlay_snapshot(store, current_season, current_week, power, all_rows)
@@ -3019,11 +3221,10 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
         "team_records": team_records,
         "power_ranking_meta": {
             "method": "L2-regularized (L2=0.03) logistic regression, coefficients constrained "
-                      ">= 0, jointly fit across all 9 stats at once against real game outcomes "
-                      "(2007-2026, 4991 games), chosen by walk-forward out-of-sample validation "
-                      "-- not an in-sample fit, and re-fit against this rating's own season-"
-                      "prior-fade windowing (not the old forever-decaying one). Walk-forward "
-                      "AUC 0.6746 vs. 0.7224 for the closing market spread alone -- does not "
+                      ">= 0, jointly fit across all 10 stats (9 rolling stats + Elo) at once against real game "
+                      "outcomes (2007-2026, 4991 games), chosen by walk-forward out-of-sample validation "
+                      "-- not an in-sample fit. Walk-forward "
+                      "AUC 0.6983 vs. 0.7224 for the closing market spread alone -- does not "
                       "beat the market at predicting winners; shown as descriptive context only.",
             "weights": {m: round(POWER_WEIGHTS[m] * ORIENTATION[m], 4) for m in POWER_METRICS},
         },

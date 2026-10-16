@@ -43,6 +43,26 @@ function calibrationSummaryHtml(cal) {
       : 'not yet a statistically significant difference.'}</p>`;
 }
 
+// Honest backtest: every fitted piece (z-score stats, composite weights, QB/skill/HFA/momentum
+// constants, calibration) trained on earlier seasons only -- see compute_walkforward_deltas() in
+// team_ratings.py and research/edge_signal_test_v64. The scatter's own `delta` uses constants fit
+// on ALL data, so its hit rate is the optimistic in-sample one.
+function walkforwardSummaryHtml(wf) {
+  if (!wf || !wf.all) return '';
+  const pct = v => (v == null ? '—' : (100 * v).toFixed(1) + '%');
+  const rel = (wf.reliability || []).map(b =>
+    `<tr><td>${b.lo.toFixed(2)}${b.hi == null ? '+' : '–' + b.hi.toFixed(2)}</td><td class="num">${b.n}</td>` +
+    `<td class="num">${pct(b.predicted)}</td><td class="num">${pct(b.actual)}</td></tr>`).join('');
+  return `<p class="lean" title="Each season is scored by a model fit only on earlier seasons: z-score stats, composite weights, QB/skill/home-field/momentum constants and the probability calibration. The all-data numbers elsewhere use constants that have seen the games they score.">
+    <strong>Honest (walk-forward) hit rate:</strong> ${pct(wf.all.hit_wf)} over ${wf.all.n} games
+    (${wf.first_season} on) vs. ${pct(wf.all.hit_in_sample)} for the same games with today&rsquo;s all-data constants;
+    since ${wf.recent_from}: ${pct(wf.recent.hit_wf)} vs. ${pct(wf.recent.hit_in_sample)}
+    (${wf.recent.n} games). Out-of-sample log loss ${wf.log_loss}.</p>
+  <details class="small"><summary>Calibration by confidence (walk-forward)</summary>
+    <table class="small"><thead><tr><th>|delta|</th><th class="num">Games</th><th class="num">Predicted P(favorite)</th><th class="num">Actual</th></tr></thead>
+    <tbody>${rel}</tbody></table></details>`;
+}
+
 const ModelTrends = {
   _shellBuilt: false,
   _scatterGenerated: null,
@@ -212,6 +232,11 @@ const ModelTrends = {
             every graded game). Rebuilds as each week's games are graded.</p>
         </div>
 
+        <div class="panel" id="prospective-panel" style="overflow:visible;">
+          <h2>Prospective scorecard</h2>
+          <div id="prosp-body" class="small"></div>
+        </div>
+
         <div class="panel" id="backtest-panel">
           <h2>Model vs. market, every graded game</h2>
           <p class="muted small">Market spread against the live Power Rankings model's own
@@ -222,6 +247,7 @@ const ModelTrends = {
             selected side's favorite won / lost / the game tied. Scroll/drag to zoom, hover a
             point for details, click to pin it below.</p>
           ${calibrationSummaryHtml(data.calibration)}
+          ${walkforwardSummaryHtml(data.walkforward)}
 
           <div class="backtest-controls">
             <div class="backtest-control-row">
@@ -304,6 +330,69 @@ const ModelTrends = {
 
     this._drawSeasonHitRate(scatter, ctx.elwayScoreHistory || [], ctx.gutPicks || {});
     this._drawDistributions(scatter);
+    this._drawProspective(scatter, ctx.prospectiveLog || {});
+  },
+
+  // Frozen-before-kickoff predictions (kv prospective_log, append-only, never rebuilt by a model
+  // refit) scored against the results in the backtest scatter, next to the de-vigged moneyline.
+  // The only genuinely out-of-sample record of the live model -- 2026 is the untouched holdout.
+  _drawProspective(scatter, plog) {
+    const el = document.getElementById('prosp-body');
+    if (!el) return;
+    const entries = Object.values(plog);
+    if (!entries.length) {
+      el.innerHTML = '<p class="muted">No predictions logged yet -- each game is logged the day before its gameday and never changed after.</p>';
+      return;
+    }
+    const result = new Map(scatter.map(r => [`${r.season}|${r.week}|${r.home}|${r.away}`, r]));
+    const implied = ml => ml == null ? null : (ml < 0 ? -ml / (-ml + 100) : 100 / (ml + 100));
+    const scored = [];
+    let pending = 0;
+    entries.forEach(g => {
+      const r = result.get(`${g.season}|${g.week}|${g.home}|${g.away}`);
+      if (!r || r.home_score === r.away_score) { if (!r) pending++; return; }
+      const y = r.home_score > r.away_score ? 1 : 0;
+      const ph = implied(g.ml_home), pa = implied(g.ml_away);
+      const mk = (ph != null && pa != null) ? ph / (ph + pa) : null;
+      scored.push({ week: g.week, y, p: g.p_home, mk, spreadFav: g.spread_line > 0 ? 1 : (g.spread_line < 0 ? 0 : null), delta: g.delta });
+    });
+    const logloss = (p, y) => -Math.log(Math.max(1e-6, y ? p : 1 - p));
+    const agg = rows => {
+      const withMk = rows.filter(r => r.mk != null);
+      const hit = (arr, f) => arr.length ? arr.filter(f).length / arr.length : null;
+      const mean = (arr, f) => arr.length ? arr.reduce((s, r) => s + f(r), 0) / arr.length : null;
+      const dec = rows.filter(r => r.p !== 0.5);
+      return {
+        n: rows.length,
+        hit: hit(dec, r => (r.p > 0.5) === (r.y === 1)),
+        ll: mean(rows, r => logloss(r.p, r.y)), brier: mean(rows, r => (r.p - r.y) ** 2),
+        nm: withMk.length,
+        mhit: hit(withMk.filter(r => r.spreadFav != null), r => r.spreadFav === r.y),
+        mll: mean(withMk, r => logloss(r.mk, r.y)), mbrier: mean(withMk, r => (r.mk - r.y) ** 2),
+        // model on the SAME games the market has odds for, so the comparison is like-for-like
+        ll_m: mean(withMk, r => logloss(r.p, r.y)), brier_m: mean(withMk, r => (r.p - r.y) ** 2),
+      };
+    };
+    const f = (v, d = 3) => v == null ? '—' : v.toFixed(d);
+    const pc = v => v == null ? '—' : (100 * v).toFixed(1) + '%';
+    const weeks = Array.from(new Set(scored.map(r => r.week))).sort((a, b) => a - b);
+    const line = (label, rows) => {
+      const a = agg(rows);
+      return `<tr><td>${label}</td><td class="num">${a.n}</td><td class="num">${pc(a.hit)}</td><td class="num">${pc(a.mhit)}</td>` +
+        `<td class="num">${f(a.ll_m)}</td><td class="num">${f(a.mll)}</td><td class="num">${f(a.brier_m)}</td><td class="num">${f(a.mbrier)}</td></tr>`;
+    };
+    const first = entries.map(g => g.gameday).sort()[0];
+    el.innerHTML = `
+      <p class="muted">Each prediction is logged the day before its game and never changed afterward, then scored against
+        the result and the de-vigged moneyline from the same moment. First game logged ${first}; ${scored.length} scored,
+        ${pending} awaiting results. Log loss and Brier: lower is better; the model rows use the same games the market has odds for.</p>
+      ${scored.length ? `<div style="overflow-x:auto;"><table class="small">
+        <thead><tr><th></th><th class="num">Games</th><th class="num">Model hit</th><th class="num">Market hit</th>
+          <th class="num">Model log loss</th><th class="num">Market log loss</th><th class="num">Model Brier</th><th class="num">Market Brier</th></tr></thead>
+        <tbody>${weeks.map(w => line('Week ' + w, scored.filter(r => r.week === w))).join('')}
+          ${line('All logged games', scored)}</tbody></table></div>` : ''}
+      <p class="muted small">Weeks 1-5 of 2026 can't be scored here: those predictions were recomputed by later model
+        refits before this log existed, so they are not true pre-kickoff records.</p>`;
   },
 
   // Overlaid histograms of the market spread and the model's delta (converted to points), plus
@@ -621,7 +710,10 @@ const ModelTrends = {
     seasonRows.forEach(r => {
       const mkt = marketOutcome(r);
       if (mkt === 'hit' || mkt === 'miss') bump(r.week, 'market', mkt === 'hit');
-      if (r.outcome === 'hit' || r.outcome === 'miss') bump(r.week, 'power', r.outcome === 'hit');
+      // walk-forward outcome when the row has one (this season's games are scored by a model
+      // trained on earlier seasons only), else the all-data outcome
+      const po = r.outcome_wf || r.outcome;
+      if (po === 'hit' || po === 'miss') bump(r.week, 'power', po === 'hit');
     });
     elwayHistory.filter(r => season == null || r.season === season).forEach(r => {
       if (!r.elway_favorite || !r.winner) return;  // pick'em or tie -- not decidable

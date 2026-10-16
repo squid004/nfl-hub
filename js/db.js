@@ -201,6 +201,15 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return null; }
   },
 
+  // {game_id: {season, week, home, away, gameday, delta, p_home, spread_line, ml_home, ml_away}} --
+  // the model's pre-kickoff prediction and the market line at that moment, append-only (never
+  // rebuilt on a model refit; written by team_ratings._log_prospective). The 2026 holdout.
+  async prospectiveLog() {
+    const raw = await this.kv('prospective_log');
+    if (!raw) return {};
+    try { return JSON.parse(raw); } catch { return {}; }
+  },
+
   // [{season, week, home, away, home_score, away_score, elway_favorite, winner}, ...] --
   // every COMPLETED game that has a stored ELWAY pick (written by nflhub.refresh; see
   // nflhub/sources/elway.py's score_history()). Starts wherever this app began recording
