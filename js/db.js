@@ -201,6 +201,15 @@ const DB = {
     try { return JSON.parse(data.value); } catch { return null; }
   },
 
+  // The pool Monte Carlo's recommendation for the current week (nflhub/sources/pool_recommend.py):
+  // {season, week, generated, pot, p_win, ev_dollars, tiebreak_guess, all_favorites, games: {game_id: {pick,
+  // contrarian, gain_dollars, ...}}} or null when it hasn't run (no pool history yet, week 1, etc).
+  async poolRecommendation() {
+    const raw = await this.kv('pool_recommendation');
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  },
+
   // {game_id: {season, week, home, away, gameday, delta, p_home, spread_line, ml_home, ml_away}} --
   // the model's pre-kickoff prediction and the market line at that moment, append-only (never
   // rebuilt on a model refit; written by team_ratings._log_prospective). The 2026 holdout.

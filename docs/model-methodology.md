@@ -261,13 +261,45 @@ before its gameday and never changed or rebuilt afterward. Model Trends scores i
 loss, Brier) against the de-vigged moneyline. Weeks 1-5 of 2026 predate it and can't be scored
 this way. 2026 is treated as the untouched holdout from here on.
 
-### 1.8 Pool-edge leverage system (adjacent, not part of the prediction model)
+### 1.8 Pool optimizer (adjacent, not part of the prediction model)
 
-A separate decision layer on the Moneyline tab (ported from github.com/squid004/pickem-edge):
-de-vigged market probability, pool-popularity estimate (scraped national pick% + a learned
-per-team bias), and a deviation budget by season standing, producing FADE/CHALK/NO_PLAY
-recommendations. This operates on market odds and the user's specific pool dynamics — it
-does not feed into or draw from `delta`.
+A separate decision layer on the Moneyline tab that picks the card maximizing **expected dollars** in
+this specific pool (`nflhub/sources/pool_mc.py`, inputs built by `pool_recommend.py`). It uses market odds
+and the pool's own behavior only; it does not feed into or draw from `delta`. It replaced the earlier
+FADE / CHALK / NO_PLAY tags (ported from github.com/squid004/pickem-edge: de-vigged probability,
+national pick % + learned per-team bias, a hand-set deviation budget by standing), which are no longer
+shown (their per-game log is still written for comparison).
+
+**Pool rules.** $180 entry = $10 per entrant per week, 27 entrants → a $270 weekly pot. 80% ($216) goes to
+the week's winner (most correct picks); ties go to the closest Monday-night total guess, and entrants still
+tied after that split the prize. The other 20% ($54/week, $972 over 18 weeks) pays the season's top three
+in total wins 60 / 30 / 10 ($583.20 / $291.60 / $97.20). All dollar figures are shown for the real $270 pot
+(`EDGE_WEEKLY_POT`).
+
+**Model.** 20,000 simulated weeks. Each unfinished game is a Bernoulli draw from the de-vigged closing
+moneyline. Each opponent takes the favorite with probability
+`sigmoid(0.02 + 0.33·logit(market P(fav)) + 0.76·logit(national pick %) + offset_j)`, where `offset_j` is
+that entrant's persistent chalk tendency shrunk from their own past picks. v65 (2026 weeks 1-5) found the
+field takes the favorite 78% of the time vs. 65% market probability, and entrants differ persistently
+(chalk-residual correlation +0.46 between weeks 1-2 and 3-5; observed spread 0.076 vs. 0.045 if everyone
+picked independently), so the plan's "independent opponents" model was replaced. Opponents' tiebreak
+guesses ~ Normal(posted total − 1.5, 4.5); the actual total ~ Normal(posted total, 13.3).
+**Objective** = 0.8 × P(win week) + λ × E[correct picks], in weekly-pot units, where λ is the marginal
+value of one more season win from a rest-of-season simulation (about $7 now, 12 weeks left; near zero when
+far from the top three). The card is found by greedy single flips from all-favorites, jointly with the
+tiebreaker guess. The Moneyline tab shows each game's pick and what it's worth in dollars versus the other
+side with the rest of the card fixed.
+
+**Sequential use.** Picks lock by game day. Once a day's games have kicked off, the user's saved pick and
+the game's result are fixed and only the open games and the tiebreaker are re-optimized (recomputed every
+45 minutes; stops when the week is final). The field's revealed picks and the user's own official picks
+come from an optional **"Week N live" tab** in the pool sheet, written by a scraper/Cowork run after each game day's
+first kickoff: same row layout as the final "Week N" tab (name, weekly, season, then pick cells), but only the picks
+visible at that moment are filled, plus one row whose first cell is `Captured` and whose second cell is an ISO
+timestamp. The CBS pool is the official record, so the user's locked picks are read from it (the in-app pick is only an
+unverified, labelled fallback when no live tab exists, and a locked game with no pick anywhere counts as no pick). Each
+game is flagged when the app and CBS disagree, when CBS has a pick the app doesn't, or when CBS shows no pick after
+lock. Without the tab, the field's locked picks are predicted. The final "Week N" tab, once it exists, supersedes it.
 
 ---
 
@@ -307,6 +339,7 @@ graded decided game available at the time.
 | 2026-10-15 | Rating update speed retuned: `EWMA_ALPHA` 0.2 → 0.08 with a bias-corrected EWMA, `SEASON_PRIOR_GAMES` 5 → 8; composite weights, QB/fantasy/skill/HFA/momentum constants and delta calibration refit (v61/v62) | `EWMA_ALPHA = 0.2` was "reused convention, not independently tuned". A first 24-cell sweep with the classic first-game-seeded EWMA found slower speeds monotonically WORSE (alpha 0.06 AUC 0.626): a slow EWMA seeded with game 1 stays anchored to it. Adding a bias-corrected EWMA (geometric-weighted average of the season's games so far) as a second estimator (48 cells; amendment documented in the v61 docstring, rule not loosened) reversed that. Pre-registered ADOPT rule on the production `compute_ratings` game_log, 9 stats, weights refit per walk-forward fold at L2=0.03, test seasons 2011-2026 (3,984 games), candidate chosen on <=2018 only: alpha 0.08 / prior 8 / bias-corrected vs. 0.2 / 5 / classic: AUC 0.6787→0.6941, log loss 0.6390→0.6304, select +0.0162 / confirm +0.0150 AUC, +0.0089 / +0.0083 log loss, bootstrap p<0.001, better in 13 of 16 seasons. The whole alpha 0.06-0.12, prior 8-12 bias-corrected region is a plateau; v62 found no gain from separate speeds for EPA / points / turnovers+penalties groups (dAUC +0.0002, p=0.19) or from a different L2 (0.003/0.01 within noise, 0.1/0.3 worse). The points-prediction model was re-checked on the new ratings (MAE 7.57, margin AUC 0.695) and left unchanged. Refit delta constants: QB -1.3268→-1.2518, fantasy gap -0.0651→-0.0598, skill -0.0608→-0.0726, HFA 1.0407→1.0319, momentum 0.0256→0.0164 (now z=1.6, below the usual bar; kept, same recipe); calibration -0.0841/1.0852→0.0336/0.9921 (the favorite no longer gets under 50% at delta 0). delta sd 0.66→0.78. Full-delta hit rate over all decided games 63.5%→65.3% | **Shipped** — research/edge_signal_test_v61, v62 (+ `_ship_refit`, `_points_model_refit`) |
 | 2026-10-16 | Elo added as a 10th composite stat; weights, delta constants and calibration refit (v63) | The cowork review found Elo alone scores AUC 0.692 and carries most of what a slower update recovers (corr 0.88 with the composite). Tested on top of the 2026-10-15 composite under the pre-registered ADOPT rule (production `compute_ratings` game_log, weights refit per walk-forward fold at L2=0.03, test seasons 2011-2026, 3,984 games): 9 stats → 9 stats + Elo AUC 0.6941→0.6983, log loss 0.6304→0.6270, select +0.0028 / confirm +0.0058 AUC, +0.0040 / +0.0029 log loss, bootstrap p=0.001, better in 13 of 16 seasons; Elo's weight is positive in all 16 folds (mean 0.30 standardized). Elo alone ties the 9-stat composite (AUC 0.6925, not adopted as a replacement). Elo is the published 538 formulation, no constants tuned; a standalone 1999-warmed Elo gives the same result as production's 2007-start Elo. Elo's weight comes mostly out of the points and EPA weights; `pass_def_epa_allowed` falls to 0. Refit delta constants: QB -1.2518→-1.2399, fantasy gap -0.0598→-0.0618, skill -0.0726→-0.0767, HFA 1.0319→1.0079, momentum 0.0164→0.0071 (z=0.7 now, i.e. noise; Elo's margin-aware results already carry the streak signal; kept pending a drop test), calibration 0.0336/0.9921→0.0017/1.0505. Full-history hit rate 65.3%→65.6% (in-sample) | **Shipped** — research/edge_signal_test_v63 (+ `_ship_refit`) |
 | 2026-10-16 | Validation hygiene: honest walk-forward backtest, prospective log, P(favorite) floor (v64) | Measured, not a candidate. The backtest scatter's `delta` uses constants fit once on ALL data (z-score stats, composite weights, QB/fantasy/skill/HFA/momentum constants, calibration), so its hit rate is in-sample. v64 rebuilt the whole pipeline walk-forward one piece at a time (test seasons 2011-2026, 3,984 games; training = earlier seasons only): V0 production in-sample hit 65.3% / log loss 0.6209 → weights walk-forward 65.1% → + z-score stats from training seasons only 65.1% → + QB/fantasy/skill/HFA/momentum refit walk-forward **63.5%** (log loss 0.6421, AUC 0.7066→0.6891) → + calibration walk-forward 63.5% (log loss 0.6299). Almost all of the drop is the corrections: with only 2-5 training seasons the early walk-forward home-field constant is unstable (4.4 in 2011 vs ~1.0 since 2017). Since 2017 (8+ training seasons) honest vs. in-sample is **64.4% vs. 65.5%**. Walk-forward calibration by |delta| bin is within ±4 points everywhere (largest miss: 1.0-1.5, predicted 73.2% vs. actual 69.4%). Shipped: `delta_wf` / `p_home_wf` / `outcome_wf` on every scatter row from 2011, a summary on Model Trends (the season hit-rate chart now scores Power Rankings with the walk-forward outcome), P(favorite) floored at 50% (moot at the current 0.0017 intercept, but it was 47.9% at delta 0 before the Elo refit; 8% of walk-forward games would otherwise give the favorite under 50%, floor changes log loss 0.6303→0.6299), and the append-only prospective log with a scorecard. Not changed: the live constants stay all-data fits (a walk-forward constant for the upcoming week would just be the all-data fit from the prior season) | **Shipped** — research/edge_signal_test_v64 |
+| 2026-10-16 | Pool optimizer replaces the FADE / CHALK / NO_PLAY tags (v65/v66) | The hand-set deviation budget (`pool_size / 10`-style heuristics) was never validated, and the objective is dollars, not correct picks. Built a market-only Monte Carlo (`pool_mc.py`) of the week under the pool's payout rules ($10/entrant/week, 80% weekly winner, 20% to the season top three 60/30/10; ties → closest Monday-night guess, then split). Calibrated on the pool sheet's weeks 1-5 (v65): the field takes the favorite 78% of the time vs. 65% market (logit slope 0.33 on market + 0.76 on national pick %), and entrants differ persistently (+0.46 correlation), so each opponent gets a shrunk chalk offset. Tiebreak rule verified against all five real weekly winners. Backtest weeks 1-5 (v66, opponent model fit leave-one-week-out; the model's own P(win week), not a significance test): what was played 5.2%, the app's old card 4.0%, always-favorite 3.4%, optimizer 6.9%. Realized: every card won 0 of 5 weeks (10.0 correct a week for the optimizer, all-favorites and the old card; 9.6 for the card played). Sequential, 11 post-game-day windows: re-optimizing would have changed an open pick or the tiebreaker in 8; the only one that changed a result was week 4, where a tiebreak of 52 instead of 44 would have won the four-way tie at 12. Simulated opponent scores ran slightly above real ones (9.6 vs. 9.1), consistent with five weeks of luck | **Shipped** — research/edge_signal_test_v65, v66 |
 
 **Net effect across the whole timeline**: the model's backtested SU hit rate moved from
 **62.87%** (pure 8-stat composite, no corrections) to **63.09%** (current, with QB/skill

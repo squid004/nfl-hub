@@ -397,6 +397,34 @@ function powerModelBreakdownHtml(matchup, home, away) {
   </table>`;
 }
 
+// Summary line for the pool optimizer (nflhub/sources/pool_recommend.py): win chance, dollars, tiebreaker.
+function poolOptimizerSummaryHtml(rec) {
+  const pct = v => (100 * v).toFixed(1) + '%';
+  const d = v => '$' + (Math.abs(v) < 10 ? v.toFixed(2) : Math.round(v));
+  const af = rec.all_favorites || {};
+  const weeklyEv = rec.p_win * rec.weekly_prize;
+  const ups = Object.values(rec.games || {}).filter(g => g.contrarian && !g.locked);
+  const nLocked = Object.values(rec.games || {}).filter(g => g.locked).length;
+  const cbs = rec.cbs || {};
+  const flags = Object.values(rec.games || {}).filter(g => g.flag).length;
+  const cbsNote = !cbs.available
+    ? `<span class="result-bad">CBS picks not loaded</span> (no "Week ${rec.week} live" tab) &mdash; ${nLocked ? `your ${cbs.unverified_locked || nLocked} locked pick${(cbs.unverified_locked || nLocked) === 1 ? '' : 's'} are taken from this app, unverified, and the field's picks are predicted` : 'your picks are from this app, unverified'}.`
+    : `CBS picks as of ${cbs.captured_at ? new Date(cbs.captured_at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'an unknown time'}${flags ? `; <span class="result-bad">${flags} pick${flags === 1 ? '' : 's'} differ between this app and CBS</span>` : '; no differences with this app'}.`;
+  const gen = rec.generated ? new Date(rec.generated).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+  return `<div class="pool-optimizer" style="margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);">
+    <div><strong>Pool optimizer</strong> &mdash; ${nLocked ? `with ${nLocked} game${nLocked === 1 ? '' : 's'} already locked, the` : 'the'} recommended card wins the week
+      <strong>${pct(rec.p_win)}</strong> of the time (always taking the favorite: ${pct(af.p_win || 0)}) &mdash;
+      ${d(weeklyEv)} expected from the ${d(rec.weekly_prize)} weekly prize, and about
+      <strong>${d(rec.ev_dollars - (af.ev_dollars || 0))}</strong> more total expected winnings than all favorites once each
+      correct pick's value toward the season pot is counted.
+      ${ups.length ? `${ups.length} upset pick${ups.length === 1 ? '' : 's'}: ${ups.map(g => g.pick).join(', ')}.` : 'No upset picks this week.'}
+      Tiebreaker guess: <strong>${rec.tiebreak_guess}</strong>.</div>
+    <div class="muted small" style="margin-top:4px;">20,000 simulated weeks from the market odds and this pool's pick tendencies
+      (${rec.inputs.entrants} entrants, ${rec.inputs.history_weeks.length} weeks of history). One more season win is worth about
+      ${d(rec.season_win_value_dollars)}. Updated ${gen}. ${cbsNote}${nLocked ? ' Locked games keep your saved pick and their result; only the open games and the tiebreaker are re-optimized.' : ''}</div>
+  </div>`;
+}
+
 const Pickem = {
   render(ctx, mode = 'ml') {
     if (mode === 'ml') this._renderCards(ctx);
@@ -407,7 +435,7 @@ const Pickem = {
     const M = PICK_MODES.ml;
     const { week, games, odds, hist } = ctx;
     const picks = ctx[M.picksKey] || {};
-    const edgeLog = ctx.edgeLog || {};
+    const poolRecWeek = (ctx.poolRec && ctx.poolRec.week === week) ? ctx.poolRec : null;
     const elway = ctx.elway || {};
     const injuries = ctx.injuries || {};
     const spreadHist = ctx.spreadHist || {};
@@ -505,16 +533,17 @@ const Pickem = {
       // average spread when available) over recomputing from o.spread alone — otherwise
       // the badge could name a different bucket than the rank next to it was computed in.
       const bucketLabel = bucketRank ? bucketRank.lab : (hasLine ? History.bucketLabel(Math.abs(effSpread)) : null);
-      const edgeRec = edgeLog[g.game_id];
-      const hasEdge = edgeRec && edgeRec.recommendation && edgeRec.recommendation !== 'NO_DATA';
+      // Pool Monte Carlo recommendation for this game (only for the week it was built for)
+      const poolRec = (ctx.poolRec && ctx.poolRec.week === week) ? ctx.poolRec : null;
+      const mc = poolRec && poolRec.games ? poolRec.games[g.game_id] : null;
       const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
       const squidFlip = hasLine && pm && squidFullDisagree(pm.favorite, favTeam);
 
-      // Which side to highlight as "the suggested pick": prefer the pool-specific
-      // leverage call (FADE/CHALK) when it actually has data this week, otherwise fall
-      // back to the upset-budget flag (same source as the "budget dog" chip above).
-      const suggestedIsDog = hasLine && (hasEdge ? edgeRec.recommendation === 'FADE' : !!(bucketRank && bucketRank.taken));
-      const suggestedTeam = hasLine ? (suggestedIsDog ? dogTeam : favTeam) : null;
+      // Which side to highlight as "the suggested pick": the pool Monte Carlo's pick when it
+      // has run this week, otherwise the upset-budget flag (same source as the "budget dog" chip).
+      const mcOpen = mc && !mc.locked ? mc : null;
+      const suggestedIsDog = hasLine && (mcOpen ? mcOpen.contrarian : !!(bucketRank && bucketRank.taken));
+      const suggestedTeam = mcOpen ? mcOpen.pick : (hasLine ? (suggestedIsDog ? dogTeam : favTeam) : null);
       const teamSpan = team => {
         if (team !== suggestedTeam) return team;
         return `<span class="${suggestedIsDog ? 'pick-dog' : 'pick-fav'}">${team}</span>`;
@@ -524,12 +553,23 @@ const Pickem = {
         data-team="${team}" data-spread="${hasLine ? effSpread : ''}"
         class="${mine === team ? 'primary' : ''}">${team}</button>`;
 
-      const edgeLabel = edgeRec && edgeRec.recommendation === 'NO_PLAY' ? 'NO PLAY' : edgeRec?.recommendation;
-      const edgeChip = hasEdge
-        ? `<span class="chip ${edgeRec.recommendation === 'FADE' ? 'good' : ''}"
-             title="p=${(edgeRec.p_favorite * 100).toFixed(1)}%, f=${edgeRec.f_estimate != null ? Math.round(edgeRec.f_estimate * 100) + '%' : '—'}, leverage=${edgeRec.leverage != null ? edgeRec.leverage.toFixed(3) : '—'}">
-             ${edgeLabel}${edgeRec.recommendation === 'FADE' ? ' ' + edgeRec.underdog_team : ''}</span>`
-        : '<span class="muted">—</span>';
+      const money = v => '$' + (Math.abs(v) < 10 ? v.toFixed(2) : Math.round(v));
+      const edgeChip = (mc && mc.locked)
+        ? `<span class="muted small">locked${mc.final ? ' &middot; final' : ''}</span>`
+        : mc
+        ? `<span class="chip ${mc.contrarian ? 'good' : ''}"
+             title="Take ${mc.pick} over ${mc.other}: worth about ${money(mc.gain_dollars)} in expected winnings with the rest of the card held fixed. The market gives the favorite ${(mc.p_favorite * 100).toFixed(0)}%; the pool is expected to take the favorite ${(mc.pool_favorite_share * 100).toFixed(0)}% of the time. Weekly win chance with this pick ${(poolRec.p_win * 100).toFixed(1)}%, if flipped ${(mc.p_win_if_flipped * 100).toFixed(1)}%.">
+             ${mc.pick}${mc.contrarian ? ' (upset)' : ''} +${money(mc.gain_dollars)}</span>
+           <div class="muted small">pool takes ${mc.favorite} ${(mc.pool_favorite_share * 100).toFixed(0)}%</div>`
+        : '<span class="muted">&mdash;</span>';
+      const mcMineNote = (mc && !mc.locked && mine && mine !== mc.pick)
+        ? ` <span class="muted small">(optimizer: ${mc.pick}, +${money(mc.gain_dollars)} vs your side)</span>` : '';
+      // CBS is the official record: flag any pick that differs between this app and CBS
+      const cbsFlag = !mc || !mc.flag ? '' : ({
+        differs: `<span class="chip bad" title="This app has ${esc(mc.app_pick)} but the CBS pool shows ${esc(mc.cbs_pick)}. CBS is the official pick.">CBS has ${esc(mc.cbs_pick)} (app: ${esc(mc.app_pick)})</span>`,
+        cbs_only: `<span class="chip warn" title="The CBS pool has a pick for this game that isn't saved in this app.">On CBS: ${esc(mc.cbs_pick)} (not saved here)</span>`,
+        missing_on_cbs: `<span class="chip bad" title="This app has ${esc(mc.app_pick)} but the CBS pool shows no pick for this locked game.">No CBS pick!</span>`,
+      })[mc.flag] || '';
 
       return `<div class="game-card${tied ? ' result-tie' : pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
         <div class="game-card-head">
@@ -571,13 +611,13 @@ const Pickem = {
             <div class="muted">${pm ? `&Delta; ${pm.delta >= 0 ? '+' : ''}${pm.delta.toFixed(2)}` : ' '}</div>
           </div>
           <div class="stat-block">
-            <div class="stat-label">Pool edge</div>
+            <div class="stat-label" title="The pool Monte Carlo: 20,000 simulated weeks of the market odds and this pool's picks, searching for the card that maximizes expected dollars (weekly prize plus the value of each correct pick toward the season pot).">Pool optimizer</div>
             <div>${edgeChip}</div>
           </div>
         </div>
         <div class="game-card-pick">
           ${btn(g.away)} ${btn(g.home)}
-          <span class="game-card-mine">${mine ? `Your pick: <strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">No pick yet</span>'}</span>
+          <span class="game-card-mine">${mine ? `Your pick: <strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}${mcMineNote} ${cbsFlag}` : `<span class="muted">No pick yet</span> ${cbsFlag}`}</span>
         </div>
         <details class="game-card-details" id="ml-details-${g.game_id}">
           <summary>Details</summary>
@@ -604,13 +644,15 @@ const Pickem = {
       <div class="panel">
         <h2>${M.title} &mdash; ${made}/${games.length} made
           &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
+        ${poolRecWeek ? poolOptimizerSummaryHtml(poolRecWeek) : ''}
         <div class="game-card-grid">${cards}</div>
         <details>
           <summary class="muted small">Chip legend</summary>
           <p class="tablefoot muted"><span class="pick-fav">Green</span> in the matchup =
             the favorite is the suggested pick; <span class="pick-dog">yellow</span> = the
-            dog is — pool-leverage's FADE/CHALK call when it has data this week, otherwise
-            the upset-budget flag. ELWAY is Nate Silver's Silver Bulletin NFL forecasting
+            dog is — the pool optimizer's pick when it has run this week, otherwise
+            the upset-budget flag. The <strong>Pool optimizer</strong> chip shows its pick and what
+            that pick is worth in dollars versus the other side (rest of the card held fixed). ELWAY is Nate Silver's Silver Bulletin NFL forecasting
             model, transcribed weekly into a Google Sheet — not a personal formula.
             <span class="chip warn">ELWAY underdog</span> = ELWAY's model favors the OTHER
             team entirely, not just by a smaller or larger margin than the market;

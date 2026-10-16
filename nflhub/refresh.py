@@ -21,6 +21,7 @@ from .sources import (
     history,
     nfl_schedule,
     odds,
+    pool_recommend,
     team_ratings,
     yahoo_fantasy,
 )
@@ -319,6 +320,15 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - best-effort; a broken step here never
         log.exception("edge step failed")  # blocks fantasy/odds/etc. from refreshing
         summary["edge_recommendation"] = f"error ({exc})"
+
+    # 4d2. pool Monte Carlo: expected-dollar pick recommendation per game (replaces the FADE/CHALK/
+    # NO_PLAY tags on the Moneyline tab). Reads the pool sheet + market odds; soft-fails on its own.
+    try:
+        summary["pool_recommendation"] = pool_recommend.refresh(
+            cfg, season, week, games, wk_odds, _week_first_kickoff(games), history.fetch_games)
+    except Exception as exc:  # noqa: BLE001 - best-effort; never block the rest of refresh
+        log.exception("pool recommendation failed")
+        summary["pool_recommendation"] = f"error ({exc})"
 
     # 4e. pool leaderboard chalk/dog-pick reminder for the Upset Budget panel (rebuilt
     # once/day, same cadence as hist_distribution)

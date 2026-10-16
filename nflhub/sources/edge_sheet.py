@@ -59,8 +59,8 @@ class SheetWeekData:
     pool_size: int
 
 
-def _csv_url(sheet_id: str, week: int) -> str:
-    tab = quote(f"Week {week}")
+def _csv_url(sheet_id: str, week: int, suffix: str = "") -> str:
+    tab = quote(f"Week {week}{suffix}")
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={tab}"
 
 
@@ -68,14 +68,14 @@ def _htmlview_url(sheet_id: str) -> str:
     return f"https://docs.google.com/spreadsheets/d/{sheet_id}/htmlview"
 
 
-def _tab_exists(sheet_id: str, week: int) -> bool:
+def _tab_exists(sheet_id: str, week: int, suffix: str = "") -> bool:
     try:
         resp = requests.get(_htmlview_url(sheet_id), timeout=TIMEOUT)
         resp.raise_for_status()
     except requests.RequestException as exc:
         raise EdgeSheetUnavailable(f"could not list sheet tabs: {exc}") from exc
     # Tab switcher bootstrap: items.push({name: "Week 1", pageUrl: "..."});
-    pattern = re.compile(r'\{name:\s*"Week ' + str(week) + r'",\s*pageUrl:')
+    pattern = re.compile(r'\{name:\s*"Week ' + str(week) + re.escape(suffix) + r'",\s*pageUrl:')
     return pattern.search(resp.text) is not None
 
 
@@ -134,3 +134,48 @@ def fetch_week(sheet_id: str, week: int, normalize_team) -> SheetWeekData:
     if not picks:
         raise EdgeSheetUnavailable(f"parsed 0 picks from Week {week} tab — sheet layout may have changed")
     return SheetWeekData(picks=picks, standings=standings, pool_size=len(standings))
+
+
+@dataclass(frozen=True)
+class LiveWeekData:
+    captured_at: str | None            # ISO timestamp from the tab's "Captured" row, if present
+    picks: dict[str, list[str]]        # entrant -> team codes visible so far (locked picks; the user's own may include open games)
+
+
+def fetch_live_week(sheet_id: str, week: int, normalize_team) -> LiveWeekData:
+    """Reads the optional mid-week "Week N live" tab: same row layout as the final tab (name, weekly, season, picks...),
+    but only the picks that were visible at capture time are filled, and one row starting with "Captured" carries the
+    capture timestamp in its second cell. It never replaces the final "Week N" tab (fetch_week) -- once that exists the
+    live tab is ignored by callers. Raises EdgeSheetUnavailable if the tab doesn't exist or has no picks."""
+    if not sheet_id:
+        raise EdgeSheetUnavailable("no sheet id configured")
+    if not _tab_exists(sheet_id, week, " live"):
+        raise EdgeSheetUnavailable(f"no 'Week {week} live' tab")
+    try:
+        resp = requests.get(_csv_url(sheet_id, week, " live"), timeout=TIMEOUT)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        raise EdgeSheetUnavailable(f"live tab request failed: {exc}") from exc
+    captured = None
+    picks: dict[str, list[str]] = {}
+    for row in csv.reader(io.StringIO(resp.text)):
+        if not row or not row[0].strip():
+            continue
+        if row[0].strip().lower().startswith("captured"):
+            captured = next((c.strip() for c in row[1:] if c.strip()), None)
+            continue
+        name = _ORDINAL_RE.sub("", row[0]).strip()
+        teams = []
+        for cell in row[1:]:
+            code = (cell or "").strip()
+            if code.lower() in _NO_PICK:
+                continue
+            try:
+                teams.append(normalize_team(code))
+            except ValueError:
+                continue
+        if name:
+            picks[name] = teams
+    if not any(picks.values()):
+        raise EdgeSheetUnavailable(f"'Week {week} live' tab has no picks yet")
+    return LiveWeekData(captured_at=captured, picks=picks)
