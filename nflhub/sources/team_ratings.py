@@ -98,7 +98,13 @@ TIMEOUT = 30
 FIRST_SEASON = 2007
 FIRST_INJURY_SEASON = 2009  # nflverse's injury reports start here; 2007/2008 return 404
 SKILL_POSITIONS = {"RB", "WR", "TE", "FB"}
-EWMA_ALPHA = 0.2  # ~4-game half-life; reused convention, not independently tuned
+# Tuned 2026-10-15 (research/edge_signal_test_v61_ewma_speed_season_prior.py, v62_*): 0.2 -> 0.08
+# together with EWMA_BIAS_CORRECT and SEASON_PRIOR_GAMES 5 -> 8. Walk-forward (test seasons 2011+,
+# 3984 games, same 9 stats, weights refit per fold at L2 = 0.03): AUC 0.6787 -> 0.6941, log loss
+# 0.6390 -> 0.6304, better in both the <=2018 and >2018 halves (+0.0162 / +0.0150 AUC), 13 of 16
+# test seasons, bootstrap p < 0.001. Per-group speeds (EPA / points / other) and a different L2
+# were tested in v62 and added nothing.
+EWMA_ALPHA = 0.08
 # A new season's rating starts as last season's own ending rating (NOT a multi-generation
 # blend that still carries a sliver of every season back to 2007 forever, which is what the
 # old league-mean-regression carryover did -- a decade-old season should have ZERO path to
@@ -107,7 +113,14 @@ EWMA_ALPHA = 0.2  # ~4-game half-life; reused convention, not independently tune
 # reaching exactly zero weight once SEASON_PRIOR_GAMES have been played -- "the sample size
 # is too small to trust yet" is a real, finite problem (solved by ~5 games), not a reason to
 # keep leaning on history forever.
-SEASON_PRIOR_GAMES = 5
+SEASON_PRIOR_GAMES = 8  # was 5 before the 2026-10-15 retune (see EWMA_ALPHA)
+# False = classic EWMA seeded with the season's first game (a slow alpha stays anchored to game 1:
+# at alpha 0.06 the classic form scored AUC 0.626 vs 0.688 bias-corrected -- v61).
+# True = bias-corrected EWMA: a geometric-weighted AVERAGE of this season's games so far, so the
+# speed (EWMA_ALPHA) only sets how fast older games fade, not how much game 1 is over-weighted.
+EWMA_BIAS_CORRECT = True
+# Optional per-metric speed overrides ({metric: alpha}); a metric not listed uses EWMA_ALPHA.
+EWMA_ALPHA_BY_METRIC: dict[str, float] = {}
 WP_LO, WP_HI = 0.05, 0.95  # garbage-time filter: drop plays outside this win-probability band
 RATING_METRICS = (
     "rush_off_epa", "pass_off_epa", "rush_def_epa_allowed", "pass_def_epa_allowed",
@@ -174,16 +187,19 @@ ORIENTATION = {
 # moved by <2% (streak 7%, within noise), so they were deliberately left unchanged.
 # (L2=0.3 weights, superseded: 0.0858 / 0.1489 / 0.0561 / 0.0619 / 0.1570 / 0.1002 / 0.0207 /
 # 0.0 / 0.0495 in the key order below.)
+# Refit 2026-10-15 (research/edge_signal_test_v62_ship_refit.py) for the slower, bias-corrected
+# ratings above, same L2 = 0.03 recipe, 4991 decided games; the previous (alpha 0.2) weights were
+# 0.1003 / 0.2197 / 0.0540 / 0.0207 / 0.2878 / 0.2094 / 0 / 0 / 0.0769 in this key order.
 POWER_WEIGHTS = {
-    "rush_off_epa": 0.1003,
-    "pass_off_epa": 0.2197,
-    "rush_def_epa_allowed": 0.0540,
-    "pass_def_epa_allowed": 0.0207,
-    "points_off": 0.2878,
-    "points_def_allowed": 0.2094,
+    "rush_off_epa": 0.0945,
+    "pass_off_epa": 0.2190,
+    "rush_def_epa_allowed": 0.0755,
+    "pass_def_epa_allowed": 0.0229,
+    "points_off": 0.3034,
+    "points_def_allowed": 0.2359,
     "turnovers_off": 0.0000,
     "turnovers_def_forced": 0.0000,
-    "pen_presnap_yds": 0.0769,
+    "pen_presnap_yds": 0.0548,
 }
 
 # Calibrates the composite power-ranking delta into "P(the model's favorite wins)" for the
@@ -200,8 +216,11 @@ POWER_WEIGHTS = {
 # 4348 clean games, fav hit 0.6336): was 0.0484 / 1.4497 at L2=0.3. The slope fell because
 # |delta| is ~1.45x wider now (std 0.32 -> 0.47); the probabilities themselves stay on the
 # same empirical curve.
-DELTA_CALIBRATION_INTERCEPT = -0.0841
-DELTA_CALIBRATION_SLOPE = 1.0852
+# Refit 2026-10-15 for the retuned ratings (v62_ship_refit.py, 4348 clean games, fav hit 0.6518):
+# was -0.0841 / 1.0852. The intercept is now slightly positive, so a dead-even delta no longer
+# gives the favorite under 50%.
+DELTA_CALIBRATION_INTERCEPT = 0.0336
+DELTA_CALIBRATION_SLOPE = 0.9921
 DELTA_PROB_MAX = 0.85
 
 
@@ -256,8 +275,10 @@ def delta_win_prob(delta: float) -> float:
 # Refit 2026-10-13 (v57, same joint-fit recipe) for the L2=0.03 composite, whose delta is ~1.45x
 # wider, so every delta-equivalent weight scales up with it: QB -0.8818 -> -1.3268 (z=-3.3),
 # SKILL -0.0363 -> -0.0608 (z=-2.6). Same z-scores as before, i.e. the same information.
-QB_QUALITY_GAP_WEIGHT = -1.3268
-SKILL_EPA_OUT_WEIGHT = -0.0608
+# Refit 2026-10-15 (v62_ship_refit.py) for the retuned ratings: QB -1.3268 -> -1.2518 (z=-3.2),
+# SKILL -0.0608 -> -0.0726 (z=-3.2).
+QB_QUALITY_GAP_WEIGHT = -1.2518
+SKILL_EPA_OUT_WEIGHT = -0.0726
 
 # Home-field advantage: every OTHER signal in this model is venue-blind (a team's own rating
 # reflects its average performance regardless of where it played), so `delta` had NO
@@ -279,7 +300,8 @@ SKILL_EPA_OUT_WEIGHT = -0.0608
 # fetched for everything else) -- never a stale, separately-maintained number.
 HFA_SHRINKAGE_K = 100
 # Refit 2026-10-13 (v57) for the L2=0.03 composite: was 0.9169 (z=2.2 in the joint fit).
-HFA_WEIGHT = 1.0407
+# Refit 2026-10-15 (v62_ship_refit.py): was 1.0407 (z=2.2).
+HFA_WEIGHT = 1.0319
 
 # Neutral-site games get none of the home-field term above -- confirmed as a real,
 # recurring gap, not a one-off: nflverse's games.csv `location` column correctly flags 72
@@ -373,7 +395,7 @@ def home_field_logit_by_season(played_games: list[dict]) -> dict[int, float]:
 # plus a strong calibration signal (confidence reduced 25.8% of misses vs 20.4% of hits,
 # z=4.35, p<0.0001). No new data source: games.csv's own chronological results are already
 # fetched for everything else in this module.
-MOMENTUM_WEIGHT = 0.0256  # refit 2026-10-13 (v57) for the L2=0.03 composite, was 0.0262
+MOMENTUM_WEIGHT = 0.0164  # refit 2026-10-15 (v62_ship_refit.py, z=1.6), was 0.0256 (v57) / 0.0262
 
 
 def team_streak_by_week(played_games: list[dict]) -> dict[tuple[str, int, int], int]:
@@ -683,7 +705,7 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
     return gap_by_team_week, current_primary, current_trailing_epa, league_avg_epa, passer_names, backup_avg_epa, current_streak_n
 
 
-QB_FANTASY_GAP_WEIGHT = -0.0651  # refit 2026-10-13 (v57) for the L2=0.03 composite, was -0.0429; see qb_fantasy_gap_data()'s own docstring. Fit jointly
+QB_FANTASY_GAP_WEIGHT = -0.0598  # refit 2026-10-15 (v62_ship_refit.py) was -0.0651 (v57), -0.0429; see qb_fantasy_gap_data()'s own docstring. Fit jointly
 # with QB_QUALITY_GAP_WEIGHT (research/edge_signal_test_v51_fantasypros_qb_gap_refit.py,
 # z=-3.24) -- a SEPARATE, additive term on top of the EPA-based gap, not a replacement for
 # it. Much smaller in magnitude than QB_QUALITY_GAP_WEIGHT because fantasy_gap_diff's own
@@ -1423,6 +1445,7 @@ def compute_ratings(
     # for the fade-out schedule.
     rating: dict[str, dict] = defaultdict(lambda: {m: None for m in RATING_METRICS})
     season_ewma: dict[str, dict] = defaultdict(lambda: {m: None for m in RATING_METRICS})
+    season_acc: dict[str, dict] = defaultdict(lambda: {m: 0.0 for m in RATING_METRICS})
     season_prior: dict[str, dict] = defaultdict(lambda: {m: None for m in RATING_METRICS})
     sos: dict[str, float | None] = defaultdict(lambda: None)
     sos_ewma: dict[str, float | None] = defaultdict(lambda: None)
@@ -1471,6 +1494,7 @@ def compute_ratings(
             if last_season.get(team) is not None and last_season[team] != season:
                 season_prior[team] = dict(season_ewma[team])
                 season_ewma[team] = {m: None for m in RATING_METRICS}
+                season_acc[team] = {m: 0.0 for m in RATING_METRICS}
                 sos_prior[team] = sos_ewma[team]
                 sos_ewma[team] = None
                 games_played[team] = 0
@@ -1536,7 +1560,12 @@ def compute_ratings(
         for team, raw in ((home, home_raw), (away, away_raw)):
             for m in RATING_METRICS:
                 prev = season_ewma[team][m]
-                season_ewma[team][m] = raw[m] if prev is None else (1 - EWMA_ALPHA) * prev + EWMA_ALPHA * raw[m]
+                a = EWMA_ALPHA_BY_METRIC.get(m, EWMA_ALPHA)
+                if EWMA_BIAS_CORRECT:
+                    season_acc[team][m] = (1 - a) * season_acc[team][m] + a * raw[m]
+                    season_ewma[team][m] = season_acc[team][m] / (1 - (1 - a) ** games_played[team])
+                else:
+                    season_ewma[team][m] = raw[m] if prev is None else (1 - a) * prev + a * raw[m]
                 prior_val = season_prior[team].get(m)
                 rating[team][m] = (
                     prior_w[team] * prior_val + (1 - prior_w[team]) * season_ewma[team][m]
@@ -2608,13 +2637,15 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
 # composite refit changed POWER_WEIGHTS and every delta-scale constant (so every stored
 # power_model.prob and score_distribution moved), and momentum (streak) now actually reaches
 # upcoming/backfilled games -- see upcoming_streaks().
-MATCHUPS_SCHEMA_VERSION = 5
+# v6 (2026-10-15): ratings retuned (slower bias-corrected EWMA, prior 8 games) and every delta-scale
+# constant refit again -- see EWMA_ALPHA.
+MATCHUPS_SCHEMA_VERSION = 6
 
 # Bump whenever POWER_WEIGHTS / the rating pipeline changes, so a frozen week's stored `teams`,
 # `power_rankings` and `parlay_teams` (which MATCHUPS_SCHEMA_VERSION does NOT touch) are rebuilt
 # from scratch with today's constants instead of keeping stale Power Scores from the old
 # weights. Also resets the per-game score_distribution_snapshot (see _freeze_score_distributions).
-RATINGS_SCHEMA_VERSION = 2
+RATINGS_SCHEMA_VERSION = 3
 
 
 def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: int, current_week: int) -> None:

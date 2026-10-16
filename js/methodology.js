@@ -9,7 +9,7 @@
 // and rejected or put on hold -- update BOTH this file and docs/model-methodology.md in the
 // same change. This page is the user-facing mirror of that doc, not a one-time snapshot.
 // Bump LAST_UPDATED below whenever either is touched.
-const METHODOLOGY_LAST_UPDATED = '2026-10-13';
+const METHODOLOGY_LAST_UPDATED = '2026-10-15';
 
 const Methodology = {
   _built: false,
@@ -65,8 +65,9 @@ const Methodology = {
             play with win probability outside [0.05, 0.95] is dropped before averaging.
             Points and penalty yards are NOT filtered this way; a final score and a flag are whole-game facts.</li>
           <li><strong>EWMA + season-prior fade</strong>: each stat is an exponentially-weighted
-            moving average (~4-game half-life) within a season. A new season starts from last
-            season's own ending rating, fading to exactly zero over 5 games -- a decade-old
+            moving average (~8-game half-life, bias-corrected: a geometric-weighted average of the
+            season's games so far) within a season. A new season starts from last
+            season's own ending rating, fading to exactly zero over 8 games -- a decade-old
             season has zero path into this year's rating once last season is behind it.</li>
           <li><strong>Data window</strong>: 2007-present (a project choice; the underlying
             play-by-play actually goes back to 1999 -- see the nflverse data catalog doc).</li>
@@ -90,7 +91,7 @@ const Methodology = {
           unconstrained fit sign-flipped turnovers committed (more turnovers came out
           <em>positively</em> weighted) because the stats overlap heavily -- non-negative
           coefficients can only shrink a redundant stat toward zero, never flip its sign.</p>
-        <p class="lean">Walk-forward AUC 0.6787 vs. 0.7224 for the closing market spread
+        <p class="lean">Walk-forward AUC 0.6941 vs. 0.7224 for the closing market spread
           alone -- <strong>this does not beat the market</strong> at picking winners. Shown as
           descriptive context (Power Rankings tab), not a betting edge.</p>
         <p class="small"><strong>Historical Power Rankings tab</strong> uses the same formula
@@ -105,11 +106,11 @@ const Methodology = {
         <table>
           <thead><tr><th>Correction</th><th>Weight</th><th>Captures</th><th>Moves hit rate?</th></tr></thead>
           <tbody>
-            <tr><td>QB health (EPA)</td><td class="num">-1.3268</td><td>Trailing EPA/dropback gap, current primary (most starts in trailing 5 games) vs. whoever's actually playing, decayed 0.4/game for each straight start by the same backup (live games: a backup-average estimate, not league average). Active only as the FALLBACK when FantasyPros has no data for that week -- never summed with the fantasy gap below</td><td><span class="chip bad">No</span> (calibration)</td></tr>
-            <tr><td>QB health (fantasy)</td><td class="num">-0.0651</td><td>Same gap/decay structure, sourced from FantasyPros' own weekly QB projections instead of EPA. SWITCHES in per game-week whenever that data is available, replacing the EPA gap entirely for that week rather than adding to it</td><td><span class="chip bad">No</span> (calibration)</td></tr>
-            <tr><td>Skill-position health</td><td class="num">-0.0608</td><td>Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB</td><td><span class="chip bad">No</span> (calibration)</td></tr>
-            <tr><td>Home-field advantage</td><td class="num">+1.0407</td><td>Trailing-5-season home win rate, shrunk toward all-time average</td><td><span class="chip good">Yes</span></td></tr>
-            <tr><td>Momentum</td><td class="num">+0.0256</td><td>Signed current win/loss streak, reset at season boundaries/ties</td><td><span class="chip good">Yes</span></td></tr>
+            <tr><td>QB health (EPA)</td><td class="num">-1.2518</td><td>Trailing EPA/dropback gap, current primary (most starts in trailing 5 games) vs. whoever's actually playing, decayed 0.4/game for each straight start by the same backup (live games: a backup-average estimate, not league average). Active only as the FALLBACK when FantasyPros has no data for that week -- never summed with the fantasy gap below</td><td><span class="chip bad">No</span> (calibration)</td></tr>
+            <tr><td>QB health (fantasy)</td><td class="num">-0.0598</td><td>Same gap/decay structure, sourced from FantasyPros' own weekly QB projections instead of EPA. SWITCHES in per game-week whenever that data is available, replacing the EPA gap entirely for that week rather than adding to it</td><td><span class="chip bad">No</span> (calibration)</td></tr>
+            <tr><td>Skill-position health</td><td class="num">-0.0726</td><td>Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB</td><td><span class="chip bad">No</span> (calibration)</td></tr>
+            <tr><td>Home-field advantage</td><td class="num">+1.0319</td><td>Trailing-5-season home win rate, shrunk toward all-time average</td><td><span class="chip good">Yes</span></td></tr>
+            <tr><td>Momentum</td><td class="num">+0.0164</td><td>Signed current win/loss streak, reset at season boundaries/ties</td><td><span class="chip good">Yes</span></td></tr>
           </tbody>
         </table>
         <p class="small" style="font-family:monospace; background:var(--panel2); padding:8px 10px; border-radius:6px;">
@@ -122,7 +123,7 @@ const Methodology = {
         <p class="small"><code>delta_raw</code> is kept alongside <code>delta</code>
           everywhere for comparison. <code>delta_win_prob(delta)</code> converts the
           composite into a calibrated win probability via a curve fit against real
-          backtested accuracy at each confidence level (intercept -0.0841, slope 1.0852,
+          backtested accuracy at each confidence level (intercept 0.0336, slope 0.9921,
           capped at 85%). The Against the Spread tab's spread and total come from the same
           probability: its score distribution is calibrated so the implied chance the home
           team wins equals this one.</p>
@@ -191,9 +192,9 @@ const Methodology = {
           +0.0059 mean AUC, favorable in 69.5% of resamples. Summing barely beats fantasy
           alone, and FantasyPros is a paid third-party API that can lapse or go down;
           EPA/dropback has zero dependency on it. So the shipped mechanism does not sum the
-          two gaps -- it SWITCHES between them per game-week. QB_FANTASY_GAP_WEIGHT (-0.0651 after the 2026-10-13 L2 refit,
+          two gaps -- it SWITCHES between them per game-week. QB_FANTASY_GAP_WEIGHT (-0.0598 after the 2026-10-15 speed-retune refit,
           z=-3.1) applies whenever FantasyPros actually returned data for that season/week;
-          QB_QUALITY_GAP_WEIGHT (first fit jointly in _v51, now -1.3268 after the L2 refit, z=-3.3)
+          QB_QUALITY_GAP_WEIGHT (first fit jointly in _v51, now -1.2518 after the 2026-10-15 speed-retune refit, z=-3.2)
           is the automatic fallback the instant that data is missing -- lapsed key, API
           outage, or an unpublished week. <code>qb_fantasy_gap_data()</code> returns a
           <code>fantasy_available</code> flag per week to drive the switch; the power-model
@@ -289,6 +290,7 @@ const Methodology = {
       ['2026-10-13', 'Pre-snap penalty yards added as the 9th composite stat; weights refit', 'Judged against the market-free model (the market spread is never an input here, so any replicated signal is a real improvement). Walk-forward 2011-2026: AUC 0.6749&rarr;0.6763, log loss 0.6464&rarr;0.6457; better on log loss in 14 of 16 seasons, weight positive in 16 of 16 folds, same direction in both chronological halves (select +0.0016 / confirm +0.0007 AUC), bootstrap log-loss p=0.002. Downstream QB/skill/HFA/momentum/calibration constants re-checked under the new composite (&lt;2% shift) and left unchanged', 'good', 'Shipped (research/edge_signal_test_v52-v54)'],
       ['2026-10-13', 'Every v52 candidate re-run market-free, one at a time vs. the 9-stat baseline', 'v52 had screened partly on correlation with the closing spread, the wrong gate for a model that never uses the spread. Pre-registered SHIP rule (both halves positive on AUC and log loss, bootstrap p&le;0.01, weight positive in &ge;90% of folds, better in &ge;60% of seasons): no candidate qualified. Explosive plays, total penalty yards, penalties drawn, FG over expected, return and kicking EPA, defensive drive-score rate: null or negative. Offensive drive-score had the biggest log-loss gain, but it shrank to near zero (negative confirm half) once the baseline composite was re-judged at lower regularization &mdash; compensating for over-regularization, not new information. Kickoff/punt EPA is consistently positive but fades to noise (p=0.12) at lower L2', 'warn', 'Nothing shipped (research/edge_signal_test_v55-v58)'],
       ['2026-10-13', 'Composite L2 lowered 0.3 to 0.03; every delta-scale constant and the delta-to-probability calibration refit; momentum wired into upcoming games', 'The original L2 grid bottomed out at 0.3, so the optimum sat off its edge. Extended it on the production compute_ratings game_log (9 stats, walk-forward 2011-2026). Pre-registered ADOPT rule (vs. 0.3: AUC and log loss better in BOTH halves, bootstrap p&lt;=0.01, better in &gt;=60% of seasons): L2=0.03 AUC 0.6763&rarr;0.6787, log loss 0.6457&rarr;0.6390, select +0.0033 / confirm +0.0021 AUC, better in 75% of seasons; 0 to 0.01 are indistinguishable, 0.03 is the largest within 0.0005 AUC of the best. Pre-snap penalty yards still earns its place (+0.0012 AUC, p=0.018). Weights roughly double in scale, so delta is ~1.45x wider and every delta-equivalent constant was refit at identical z-scores (QB -0.8818&rarr;-1.3268, fantasy gap -0.0429&rarr;-0.0651, skill -0.0363&rarr;-0.0608, HFA 0.9169&rarr;1.0407, momentum 0.0262&rarr;0.0256; calibration 0.0484/1.4497&rarr;-0.0841/1.0852). Backtest favorite hit rate 63.5%; predicted vs. actual win rate within ~3 points in every |delta| bin. Also fixed: momentum was contributing 0 to every live and backfilled-week matchup (streaks only existed for games already played). Stored weekly snapshots (Power Scores, Moneyline and ATS probabilities) and frozen score distributions were rebuilt under the new model', 'Shipped (research/edge_signal_test_v57, v58)'],
+      ['2026-10-15', 'Rating update speed retuned (EWMA_ALPHA 0.2 to 0.08, bias-corrected EWMA, season prior 5 to 8 games); composite weights, delta constants and calibration refit', 'EWMA_ALPHA 0.2 was a reused convention, never tuned. A first sweep with the classic first-game-seeded EWMA found slower speeds monotonically worse (a slow EWMA seeded with game 1 stays anchored to it); a bias-corrected EWMA (geometric-weighted average of the season&rsquo;s games so far) added as a second estimator reversed that (amendment documented in the v61 script; rule not loosened). Pre-registered ADOPT rule, production compute_ratings game_log, weights refit per walk-forward fold, test seasons 2011-2026 (3,984 games), candidate chosen on &lt;=2018 only: AUC 0.6787&rarr;0.6941, log loss 0.6390&rarr;0.6304, select +0.0162 / confirm +0.0150 AUC, bootstrap p&lt;0.001, better in 13 of 16 seasons. Alpha 0.06-0.12 with a 8-12 game prior is a plateau. No gain from separate speeds per stat group or from a different L2; the points model was re-checked and left alone. Refit: QB -1.3268&rarr;-1.2518, fantasy gap -0.0651&rarr;-0.0598, skill -0.0608&rarr;-0.0726, HFA 1.0407&rarr;1.0319, momentum 0.0256&rarr;0.0164 (z=1.6, kept); calibration -0.0841/1.0852&rarr;0.0336/0.9921. delta sd 0.66&rarr;0.78; full-history hit rate 63.5%&rarr;65.3%', 'good', 'Shipped'],
     ];
     const body = rows.map(([date, change, effect, cls, status]) => `
       <tr>
@@ -314,7 +316,9 @@ const Methodology = {
           decided games -- a <strong>+0.22 point / +11 game</strong> lift from five
           additions, two of which were deliberately shipped for calibration rather than
           accuracy. The model still does not beat the closing market spread at picking
-          straight-up winners; it was never designed to.</p>
+          straight-up winners; it was never designed to. After the 2026-10-15 speed retune the
+          same full-history figure is <strong>65.3%</strong> (3,258 of 4,991 decided games, in-sample
+          weights; the walk-forward numbers in the timeline are the honest out-of-sample ones).</p>
       </div>`;
   },
 
@@ -366,14 +370,14 @@ const Methodology = {
         <table>
           <tbody>
             <tr><td>FIRST_SEASON</td><td class="num">2007</td><td>FIRST_INJURY_SEASON</td><td class="num">2009</td></tr>
-            <tr><td>EWMA_ALPHA</td><td class="num">0.2</td><td>SEASON_PRIOR_GAMES</td><td class="num">5</td></tr>
+            <tr><td>EWMA_ALPHA</td><td class="num">0.08 (bias-corrected)</td><td>SEASON_PRIOR_GAMES</td><td class="num">8</td></tr>
             <tr><td>WP_LO / WP_HI</td><td class="num">0.05 / 0.95</td><td>HFA_SHRINKAGE_K</td><td class="num">100</td></tr>
-            <tr><td>DELTA_CALIBRATION_INTERCEPT / SLOPE</td><td class="num">-0.0841 / 1.0852</td><td class="muted small">P(favorite wins) = sigmoid(a + b&times;|delta|), capped at 0.85 (DELTA_PROB_MAX)</td><td></td></tr>
-            <tr><td>QB_QUALITY_GAP_WEIGHT</td><td class="num">-1.3268</td><td class="muted small">calibration only, fallback when FantasyPros has no data that week</td><td></td></tr>
-            <tr><td>QB_FANTASY_GAP_WEIGHT</td><td class="num">-0.0651</td><td class="muted small">calibration only, switches in per week INSTEAD of the EPA gap, never summed with it</td><td></td></tr>
-            <tr><td>SKILL_EPA_OUT_WEIGHT</td><td class="num">-0.0608</td><td class="muted small">calibration only</td><td></td></tr>
-            <tr><td>HFA_WEIGHT</td><td class="num">+1.0407</td><td class="muted small">moves hit rate</td><td></td></tr>
-            <tr><td>MOMENTUM_WEIGHT</td><td class="num">+0.0256</td><td class="muted small">moves hit rate</td><td></td></tr>
+            <tr><td>DELTA_CALIBRATION_INTERCEPT / SLOPE</td><td class="num">0.0336 / 0.9921</td><td class="muted small">P(favorite wins) = sigmoid(a + b&times;|delta|), capped at 0.85 (DELTA_PROB_MAX)</td><td></td></tr>
+            <tr><td>QB_QUALITY_GAP_WEIGHT</td><td class="num">-1.2518</td><td class="muted small">calibration only, fallback when FantasyPros has no data that week</td><td></td></tr>
+            <tr><td>QB_FANTASY_GAP_WEIGHT</td><td class="num">-0.0598</td><td class="muted small">calibration only, switches in per week INSTEAD of the EPA gap, never summed with it</td><td></td></tr>
+            <tr><td>SKILL_EPA_OUT_WEIGHT</td><td class="num">-0.0726</td><td class="muted small">calibration only</td><td></td></tr>
+            <tr><td>HFA_WEIGHT</td><td class="num">+1.0319</td><td class="muted small">moves hit rate</td><td></td></tr>
+            <tr><td>MOMENTUM_WEIGHT</td><td class="num">+0.0164</td><td class="muted small">moves hit rate</td><td></td></tr>
             <tr><td>PRIMARY_WINDOW</td><td class="num">5 games</td><td class="muted small">trailing-window plurality, ties -> more recent start</td><td></td></tr>
             <tr><td>QB_GAP_DECAY_RATE</td><td class="num">0.4</td><td class="muted small">shrinks the gap each straight game a backup keeps starting</td><td></td></tr>
             <tr><td>SCORE_HIST_FIRST_SEASON</td><td class="num">2015</td><td>MAX_TEAM_SCORE</td><td class="num">60</td></tr>
