@@ -22,7 +22,8 @@ season's starting prior, gone entirely (not just diluted) by SEASON_PRIOR_GAMES 
 the new season. Purely descriptive, not folded into the composite score itself.
 
 Power ranking: a single composite score per team, `POWER_WEIGHTS[m] * ORIENTATION[m] *
-z-score(team, m)` summed across all 9 stats. Weights come from ONE joint model across all 9
+z-score(team, m)` summed across all 9 stats PLUS a 10th, Elo (elo_ratings(): a margin-aware
+game-by-game rating, added 2026-10-16, not an EWMA of a raw stat). Weights come from ONE joint model across all 10
 stats at once (not 8 independent single-stat fits, which is what an earlier version did) --
 specifically an L2-regularized logistic regression against historical home_win, with
 coefficients constrained >= 0 after each stat is oriented so higher-is-always-better
@@ -127,6 +128,13 @@ RATING_METRICS = (
     "points_off", "points_def_allowed", "turnovers_off", "turnovers_def_forced",
     "pen_presnap_yds",
 )
+# Elo is the 10th composite stat: a margin-aware team rating updated game by game (538's
+# constants, not tuned here -- research/edge_signal_test_v63_elo_tenth_stat.py). It is not an EWMA
+# of a raw per-game stat, so it stays outside RATING_METRICS (every EWMA loop keeps iterating
+# those 9) and is computed by elo_ratings() below. POWER_METRICS is what the composite sums over.
+POWER_METRICS = RATING_METRICS + ("elo",)
+ELO_START, ELO_MEAN, ELO_REGRESS = 1500.0, 1505.0, 1 / 3
+ELO_K, ELO_HFA = 20.0, 48.0
 # EPA metrics get a 0-100 display scale anchored to the best/worst ever recorded across the
 # whole dataset (see compute_ratings' historical_bounds). Points/turnovers are "definitively
 # countable" -- displayed as their own raw per-game average, no rescaling at all.
@@ -155,7 +163,7 @@ MISMATCH_Z_THRESHOLD = 1.5  # combined (offense z + opposing defense-allowed z) 
 ORIENTATION = {
     "rush_off_epa": 1, "pass_off_epa": 1, "rush_def_epa_allowed": -1, "pass_def_epa_allowed": -1,
     "points_off": 1, "points_def_allowed": -1, "turnovers_off": -1, "turnovers_def_forced": 1,
-    "pen_presnap_yds": -1,
+    "pen_presnap_yds": -1, "elo": 1,
 }
 
 # Non-negative joint logistic-regression weights vs. historical home_win, L2=0.03, walk-forward
@@ -190,16 +198,22 @@ ORIENTATION = {
 # Refit 2026-10-15 (research/edge_signal_test_v62_ship_refit.py) for the slower, bias-corrected
 # ratings above, same L2 = 0.03 recipe, 4991 decided games; the previous (alpha 0.2) weights were
 # 0.1003 / 0.2197 / 0.0540 / 0.0207 / 0.2878 / 0.2094 / 0 / 0 / 0.0769 in this key order.
+# Refit again 2026-10-16 (research/edge_signal_test_v63_ship_refit.py) with Elo as the 10th stat
+# (v63: walk-forward AUC 0.6941 -> 0.6983, log loss 0.6304 -> 0.6270, both halves, p=0.001, 13 of
+# 16 seasons): Elo takes ~30% of the weight, mostly from the points/EPA stats it overlaps (corr
+# 0.88 with the 9-stat composite); the 9-stat weights before it were 0.0945 / 0.2190 / 0.0755 /
+# 0.0229 / 0.3034 / 0.2359 / 0 / 0 / 0.0548.
 POWER_WEIGHTS = {
-    "rush_off_epa": 0.0945,
-    "pass_off_epa": 0.2190,
-    "rush_def_epa_allowed": 0.0755,
-    "pass_def_epa_allowed": 0.0229,
-    "points_off": 0.3034,
-    "points_def_allowed": 0.2359,
+    "rush_off_epa": 0.0765,
+    "pass_off_epa": 0.1609,
+    "rush_def_epa_allowed": 0.0590,
+    "pass_def_epa_allowed": 0.0000,
+    "points_off": 0.1913,
+    "points_def_allowed": 0.1418,
     "turnovers_off": 0.0000,
     "turnovers_def_forced": 0.0000,
-    "pen_presnap_yds": 0.0548,
+    "pen_presnap_yds": 0.0401,
+    "elo": 0.2931,
 }
 
 # Calibrates the composite power-ranking delta into "P(the model's favorite wins)" for the
@@ -219,8 +233,10 @@ POWER_WEIGHTS = {
 # Refit 2026-10-15 for the retuned ratings (v62_ship_refit.py, 4348 clean games, fav hit 0.6518):
 # was -0.0841 / 1.0852. The intercept is now slightly positive, so a dead-even delta no longer
 # gives the favorite under 50%.
-DELTA_CALIBRATION_INTERCEPT = 0.0336
-DELTA_CALIBRATION_SLOPE = 0.9921
+# Refit again 2026-10-16 with Elo in the composite (v63_ship_refit.py, same 4348 clean games, fav hit
+# 0.6534): was 0.0336 / 0.9921.
+DELTA_CALIBRATION_INTERCEPT = 0.0017
+DELTA_CALIBRATION_SLOPE = 1.0505
 DELTA_PROB_MAX = 0.85
 
 
@@ -277,8 +293,9 @@ def delta_win_prob(delta: float) -> float:
 # SKILL -0.0363 -> -0.0608 (z=-2.6). Same z-scores as before, i.e. the same information.
 # Refit 2026-10-15 (v62_ship_refit.py) for the retuned ratings: QB -1.3268 -> -1.2518 (z=-3.2),
 # SKILL -0.0608 -> -0.0726 (z=-3.2).
-QB_QUALITY_GAP_WEIGHT = -1.2518
-SKILL_EPA_OUT_WEIGHT = -0.0726
+# Refit 2026-10-16 (v63_ship_refit.py, with Elo): QB -1.2518 -> -1.2399 (z=-3.2), SKILL -0.0726 -> -0.0767 (z=-3.3).
+QB_QUALITY_GAP_WEIGHT = -1.2399
+SKILL_EPA_OUT_WEIGHT = -0.0767
 
 # Home-field advantage: every OTHER signal in this model is venue-blind (a team's own rating
 # reflects its average performance regardless of where it played), so `delta` had NO
@@ -301,7 +318,8 @@ SKILL_EPA_OUT_WEIGHT = -0.0726
 HFA_SHRINKAGE_K = 100
 # Refit 2026-10-13 (v57) for the L2=0.03 composite: was 0.9169 (z=2.2 in the joint fit).
 # Refit 2026-10-15 (v62_ship_refit.py): was 1.0407 (z=2.2).
-HFA_WEIGHT = 1.0319
+# Refit 2026-10-16 (v63_ship_refit.py, with Elo): was 1.0319.
+HFA_WEIGHT = 1.0079
 
 # Neutral-site games get none of the home-field term above -- confirmed as a real,
 # recurring gap, not a one-off: nflverse's games.csv `location` column correctly flags 72
@@ -395,7 +413,7 @@ def home_field_logit_by_season(played_games: list[dict]) -> dict[int, float]:
 # plus a strong calibration signal (confidence reduced 25.8% of misses vs 20.4% of hits,
 # z=4.35, p<0.0001). No new data source: games.csv's own chronological results are already
 # fetched for everything else in this module.
-MOMENTUM_WEIGHT = 0.0164  # refit 2026-10-15 (v62_ship_refit.py, z=1.6), was 0.0256 (v57) / 0.0262
+MOMENTUM_WEIGHT = 0.0071  # refit 2026-10-16 (v63_ship_refit.py, with Elo in the composite; z=0.7, i.e. noise -- Elo's margin-aware results already carry most of the streak signal), was 0.0164; earlier: refit 2026-10-15 (v62_ship_refit.py, z=1.6), was 0.0256 (v57) / 0.0262
 
 
 def team_streak_by_week(played_games: list[dict]) -> dict[tuple[str, int, int], int]:
@@ -705,7 +723,7 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
     return gap_by_team_week, current_primary, current_trailing_epa, league_avg_epa, passer_names, backup_avg_epa, current_streak_n
 
 
-QB_FANTASY_GAP_WEIGHT = -0.0598  # refit 2026-10-15 (v62_ship_refit.py) was -0.0651 (v57), -0.0429; see qb_fantasy_gap_data()'s own docstring. Fit jointly
+QB_FANTASY_GAP_WEIGHT = -0.0618  # refit 2026-10-16 (v63_ship_refit.py, with Elo), was -0.0598; earlier: refit 2026-10-15 (v62_ship_refit.py) was -0.0651 (v57), -0.0429; see qb_fantasy_gap_data()'s own docstring. Fit jointly
 # with QB_QUALITY_GAP_WEIGHT (research/edge_signal_test_v51_fantasypros_qb_gap_refit.py,
 # z=-3.24) -- a SEPARATE, additive term on top of the EPA-based gap, not a replacement for
 # it. Much smaller in magnitude than QB_QUALITY_GAP_WEIGHT because fantasy_gap_diff's own
@@ -1398,6 +1416,44 @@ def _phase_stats_for_season(season: int, current_season: int) -> pd.DataFrame:
     return out.dropna(subset=["rush_off_epa", "pass_off_epa"])
 
 
+def elo_ratings(played_games: list[dict]) -> tuple[dict[str, tuple[float, float, float, float]], dict[str, float]]:
+    """FiveThirtyEight-style Elo over `played_games` in date order. Returns
+    ({game_id: (home_pre, away_pre, home_post, away_post)}, {team: rating after its last game}).
+    `pre` already includes the one-third regression to ELO_MEAN applied at a team's first game of
+    a new season. The home-field bonus (ELO_HFA, none at neutral sites) only shapes the UPDATE; the
+    feature the composite uses is the plain home-minus-away rating difference, since `delta` adds
+    its own HFA term and including it here would double count. Teams are normalized the same way
+    compute_ratings() does, so a relocated franchise keeps one continuous rating."""
+    rows = []
+    for g in played_games:
+        try:
+            hs, as_ = float(g["home_score"]), float(g["away_score"])
+            home, away = normalize_team(g["home_team"]), normalize_team(g["away_team"])
+        except (ValueError, TypeError, KeyError, UnknownTeamError):
+            continue
+        rows.append((g.get("gameday", ""), g["game_id"], int(g["season"]), home, away, hs - as_, is_neutral_site(g)))
+    rows.sort(key=lambda r: (r[0], r[1]))
+    rating: dict[str, float] = {}
+    last: dict[str, int] = {}
+    out: dict[str, tuple[float, float, float, float]] = {}
+    for _gd, gid, season, home, away, margin, neutral in rows:
+        for t in (home, away):
+            rating.setdefault(t, ELO_START)
+            if last.get(t, season) != season:
+                rating[t] = rating[t] * (1 - ELO_REGRESS) + ELO_MEAN * ELO_REGRESS
+            last[t] = season
+        h_pre, a_pre = rating[home], rating[away]
+        d = h_pre - a_pre + (0.0 if neutral else ELO_HFA)
+        expected = 1.0 / (1.0 + 10 ** (-d / 400.0))
+        score = 1.0 if margin > 0 else (0.0 if margin < 0 else 0.5)
+        mov = float(np.log(abs(margin) + 1.0)) * 2.2 / ((d if margin > 0 else -d) * 0.001 + 2.2)
+        shift = ELO_K * mov * (score - expected)
+        rating[home] = h_pre + shift
+        rating[away] = a_pre - shift
+        out[gid] = (h_pre, a_pre, rating[home], rating[away])
+    return out, rating
+
+
 def compute_ratings(
     played_games: list[dict], current_season: int, game_log: list[dict] | None = None
 ) -> tuple[dict[str, dict[str, float]], dict[str, tuple[float, float]]]:
@@ -1436,6 +1492,7 @@ def compute_ratings(
             by_game[row["game_id"]][team_key] = row
 
     games_by_id = {g["game_id"]: g for g in played_games}
+    elo_by_game, _elo_final = elo_ratings(played_games)
 
     # `rating`/`sos` are the BLENDED values everything else reads (bounds tracking, SOS
     # opponent lookups, the final return value) -- a mix of last season's own ending value
@@ -1443,7 +1500,7 @@ def compute_ratings(
     # own EWMA so far (season_ewma/sos_ewma, reset to None at every season boundary, so it
     # NEVER carries anything from two or more seasons back). See SEASON_PRIOR_GAMES above
     # for the fade-out schedule.
-    rating: dict[str, dict] = defaultdict(lambda: {m: None for m in RATING_METRICS})
+    rating: dict[str, dict] = defaultdict(lambda: {m: None for m in POWER_METRICS})
     season_ewma: dict[str, dict] = defaultdict(lambda: {m: None for m in RATING_METRICS})
     season_acc: dict[str, dict] = defaultdict(lambda: {m: 0.0 for m in RATING_METRICS})
     season_prior: dict[str, dict] = defaultdict(lambda: {m: None for m in RATING_METRICS})
@@ -1507,15 +1564,18 @@ def compute_ratings(
         # team's strength-of-schedule average with its opponent's strength AT THE TIME they
         # played, with no lookahead, and (b) track the most extreme composite score ever
         # observed, for the fixed historical display scale (see module docstring).
-        complete = {t: r for t, r in rating.items() if all(r[m] is not None for m in RATING_METRICS)}
+        if gid in elo_by_game:
+            rating[home]["elo"], rating[away]["elo"] = elo_by_game[gid][0], elo_by_game[gid][1]
+
+        complete = {t: r for t, r in rating.items() if all(r[m] is not None for m in POWER_METRICS)}
         pre_home_score = pre_away_score = None
         if len(complete) >= MIN_TEAMS_FOR_HISTORICAL_SNAPSHOT:
             z_snap: dict[str, dict[str, float]] = defaultdict(dict)
-            for m in RATING_METRICS:
+            for m in POWER_METRICS:
                 zm, _ = _rank_and_z({t: r[m] for t, r in complete.items()})
                 for t, v in zm.items():
                     z_snap[t][m] = v
-            composite_snap = {t: sum(POWER_WEIGHTS[m] * ORIENTATION[m] * zt.get(m, 0.0) for m in RATING_METRICS)
+            composite_snap = {t: sum(POWER_WEIGHTS[m] * ORIENTATION[m] * zt.get(m, 0.0) for m in POWER_METRICS)
                                for t, zt in z_snap.items()}
             for score in composite_snap.values():
                 if score < composite_bounds[0]: composite_bounds[0] = score
@@ -1546,7 +1606,7 @@ def compute_ratings(
                     "gameday": g.get("gameday", ""), "home": home, "away": away,
                     "home_score": int(home_pts), "away_score": int(away_pts),
                     "spread_line": spread_line, "neutral": is_neutral_site(g),
-                    "diffs": {m: ORIENTATION[m] * (rating[home][m] - rating[away][m]) for m in RATING_METRICS},
+                    "diffs": {m: ORIENTATION[m] * (rating[home][m] - rating[away][m]) for m in POWER_METRICS},
                     # same pregame rating[home]/rating[away] snapshot the diffs above use --
                     # reuses predict_points() directly instead of a second, parallel rating
                     # walk (unlike the research scripts, which deliberately stay
@@ -1557,6 +1617,8 @@ def compute_ratings(
                     "away_pred_points": predict_points(rating[away], rating[home]),
                 })
 
+        if gid in elo_by_game:
+            rating[home]["elo"], rating[away]["elo"] = elo_by_game[gid][2], elo_by_game[gid][3]
         for team, raw in ((home, home_raw), (away, away_raw)):
             for m in RATING_METRICS:
                 prev = season_ewma[team][m]
@@ -1636,6 +1698,8 @@ def display_ratings(ratings: dict[str, dict[str, float]], historical_bounds: dic
                 out[t][m] = _normalize_fixed(ORIENTATION[m] * v, lo, hi)
             else:
                 out[t][m] = round(v, 2)
+        if r.get("elo") is not None:
+            out[t]["elo"] = round(r["elo"])
     return out
 
 
@@ -1755,13 +1819,13 @@ def matchup_callouts(
 
         power_model = None
         if diff_mu is not None and diff_sd is not None and all(
-            ratings[home].get(m) is not None and ratings[away].get(m) is not None for m in RATING_METRICS
+            ratings[home].get(m) is not None and ratings[away].get(m) is not None for m in POWER_METRICS
         ):
-            diffs = {m: ORIENTATION[m] * (ratings[home][m] - ratings[away][m]) for m in RATING_METRICS}
+            diffs = {m: ORIENTATION[m] * (ratings[home][m] - ratings[away][m]) for m in POWER_METRICS}
             # Each of the 9 stats' own standardized, weighted contribution to delta_raw --
             # same sum as before, just captured per-term instead of only the total, so the
             # frontend can show "how much of delta came from pass offense EPA" etc.
-            rating_terms = {m: POWER_WEIGHTS[m] * ((diffs[m] - diff_mu[m]) / diff_sd[m]) for m in RATING_METRICS}
+            rating_terms = {m: POWER_WEIGHTS[m] * ((diffs[m] - diff_mu[m]) / diff_sd[m]) for m in POWER_METRICS}
             delta_raw = sum(rating_terms.values())
             home_qb_gap = (qb_gap_upcoming or {}).get((home, week), 0.0)
             away_qb_gap = (qb_gap_upcoming or {}).get((away, week), 0.0)
@@ -1886,13 +1950,13 @@ def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict
     if len(ratings) < 4:
         return {}
     z: dict[str, dict[str, float]] = defaultdict(dict)
-    for m in RATING_METRICS:
+    for m in POWER_METRICS:
         vals = {t: r[m] for t, r in ratings.items() if r.get(m) is not None}
         zm, _ = _rank_and_z(vals)
         for t, v in zm.items():
             z[t][m] = v
 
-    scores = {t: sum(POWER_WEIGHTS[m] * ORIENTATION[m] * zt.get(m, 0.0) for m in RATING_METRICS) for t, zt in z.items()}
+    scores = {t: sum(POWER_WEIGHTS[m] * ORIENTATION[m] * zt.get(m, 0.0) for m in POWER_METRICS) for t, zt in z.items()}
     composite_lo, composite_hi = historical_bounds["composite"]
     scores_display = {t: _normalize_fixed(s, composite_lo, composite_hi) for t, s in scores.items()}
     ratings_display = display_ratings(ratings, historical_bounds)
@@ -1997,6 +2061,7 @@ def compute_historical_season_averages(
             by_game[row["game_id"]][team_key] = row
 
     games_by_id = {g["game_id"]: g for g in played_games}
+    elo_by_game, _elo_final = elo_ratings(played_games)
     sums: dict[tuple[str, int], dict[str, float]] = defaultdict(lambda: defaultdict(float))
     counts: dict[tuple[str, int], int] = defaultdict(int)
     opponents: dict[tuple[str, int], list[str]] = defaultdict(list)
@@ -2034,15 +2099,17 @@ def compute_historical_season_averages(
 
         home_team = _historical_team_code(home_raw_code)
         away_team = _historical_team_code(away_raw_code)
-        for team, opp, raw in ((home_team, away_team, home_raw), (away_team, home_team, away_raw)):
+        h_pre, a_pre = (elo_by_game[gid][0], elo_by_game[gid][1]) if gid in elo_by_game else (None, None)
+        for team, opp, raw, elo_pre in ((home_team, away_team, home_raw, h_pre), (away_team, home_team, away_raw, a_pre)):
             key = (team, season)
             counts[key] += 1
             opponents[key].append(opp)
             for m in RATING_METRICS:
                 sums[key][m] += raw[m]
+            sums[key]["elo"] += elo_pre if elo_pre is not None else ELO_START
 
     averages = {
-        key: {m: round(sums[key][m] / n, 4) for m in RATING_METRICS}
+        key: {m: round(sums[key][m] / n, 4) for m in POWER_METRICS}
         for key, n in counts.items()
     }
     return averages, opponents
@@ -2077,13 +2144,13 @@ def historical_power_rankings(
     if len(team_season_avgs) < 4:
         return []
     z: dict[tuple, dict[str, float]] = defaultdict(dict)
-    for m in RATING_METRICS:
+    for m in POWER_METRICS:
         vals = {k: r[m] for k, r in team_season_avgs.items() if r.get(m) is not None}
         zm, _ = _rank_and_z(vals)
         for k, v in zm.items():
             z[k][m] = v
 
-    scores = {k: sum(POWER_WEIGHTS[m] * ORIENTATION[m] * z[k].get(m, 0.0) for m in RATING_METRICS) for k in team_season_avgs}
+    scores = {k: sum(POWER_WEIGHTS[m] * ORIENTATION[m] * z[k].get(m, 0.0) for m in POWER_METRICS) for k in team_season_avgs}
     composite_lo, composite_hi = min(scores.values()), max(scores.values())
 
     epa_bounds: dict[str, tuple[float, float]] = {}
@@ -2326,12 +2393,12 @@ def compute_backtest_scatter(
     hfa_by_season = hfa_by_season or {}
     midgame_qb_injury = midgame_qb_injury or {}
     streak = streak or {}
-    mu = {m: float(np.mean([r["diffs"][m] for r in game_log])) for m in RATING_METRICS}
-    sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in RATING_METRICS}
+    mu = {m: float(np.mean([r["diffs"][m] for r in game_log])) for m in POWER_METRICS}
+    sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in POWER_METRICS}
 
     out = []
     for r in game_log:
-        delta_raw = sum(POWER_WEIGHTS[m] * ((r["diffs"][m] - mu[m]) / sd[m]) for m in RATING_METRICS)
+        delta_raw = sum(POWER_WEIGHTS[m] * ((r["diffs"][m] - mu[m]) / sd[m]) for m in POWER_METRICS)
         # EITHER the fantasy gap OR the EPA gap, never both -- see matchup_callouts()'s own
         # comment for why (fantasy_healthy's live-path meaning here is "was real FantasyPros
         # data actually available for this historical season/week," same derivation).
@@ -2566,8 +2633,8 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
 
     diff_mu = diff_sd = None
     if game_log_cutoff:
-        diff_mu = {m: float(np.mean([r["diffs"][m] for r in game_log_cutoff])) for m in RATING_METRICS}
-        diff_sd = {m: float(np.std([r["diffs"][m] for r in game_log_cutoff])) or 1.0 for m in RATING_METRICS}
+        diff_mu = {m: float(np.mean([r["diffs"][m] for r in game_log_cutoff])) for m in POWER_METRICS}
+        diff_sd = {m: float(np.std([r["diffs"][m] for r in game_log_cutoff])) or 1.0 for m in POWER_METRICS}
 
     week_games_raw = [
         r for r in all_rows
@@ -2639,13 +2706,14 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
 # upcoming/backfilled games -- see upcoming_streaks().
 # v6 (2026-10-15): ratings retuned (slower bias-corrected EWMA, prior 8 games) and every delta-scale
 # constant refit again -- see EWMA_ALPHA.
-MATCHUPS_SCHEMA_VERSION = 6
+# v7 (2026-10-16): Elo added as the 10th composite stat -- `rating_terms` gains an `elo` term.
+MATCHUPS_SCHEMA_VERSION = 7
 
 # Bump whenever POWER_WEIGHTS / the rating pipeline changes, so a frozen week's stored `teams`,
 # `power_rankings` and `parlay_teams` (which MATCHUPS_SCHEMA_VERSION does NOT touch) are rebuilt
 # from scratch with today's constants instead of keeping stale Power Scores from the old
 # weights. Also resets the per-game score_distribution_snapshot (see _freeze_score_distributions).
-RATINGS_SCHEMA_VERSION = 3
+RATINGS_SCHEMA_VERSION = 4
 
 
 def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: int, current_week: int) -> None:
@@ -2833,8 +2901,8 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
     raw_ratings, historical_bounds = compute_ratings(played, current_season, game_log=game_log)
     diff_mu = diff_sd = None
     if game_log:
-        diff_mu = {m: float(np.mean([r["diffs"][m] for r in game_log])) for m in RATING_METRICS}
-        diff_sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in RATING_METRICS}
+        diff_mu = {m: float(np.mean([r["diffs"][m] for r in game_log])) for m in POWER_METRICS}
+        diff_sd = {m: float(np.std([r["diffs"][m] for r in game_log])) or 1.0 for m in POWER_METRICS}
 
     # nflverse spells some current teams differently than nfl-hub's own canonical codes
     # (e.g. "LA" for the Rams, "WAS" for Washington) -- normalize so the frontend can look
@@ -2957,7 +3025,7 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
                       "prior-fade windowing (not the old forever-decaying one). Walk-forward "
                       "AUC 0.6746 vs. 0.7224 for the closing market spread alone -- does not "
                       "beat the market at predicting winners; shown as descriptive context only.",
-            "weights": {m: round(POWER_WEIGHTS[m] * ORIENTATION[m], 4) for m in RATING_METRICS},
+            "weights": {m: round(POWER_WEIGHTS[m] * ORIENTATION[m], 4) for m in POWER_METRICS},
         },
     }))
 

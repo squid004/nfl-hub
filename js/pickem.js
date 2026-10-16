@@ -317,10 +317,10 @@ function forecastHtml(matchup, home, away) {
   return (forecast + proj) || '<div class="muted small">No forecast data yet.</div>';
 }
 
-// Every term that moved delta this matchup -- the 9-stat composite rating (power_model.
+// Every term that moved delta this matchup -- the 10-stat composite rating (power_model.
 // rating_terms, minus turnovers_def_forced, which has never once had a nonzero weighted
 // contribution in any matchup frozen this season -- dead weight) plus the 4 additive
-// corrections. The pre-snap penalty row only appears for matchups computed after it
+// corrections. The pre-snap penalty and Elo rows only appear for matchups computed after they
 // shipped (older frozen weeks have no such rating term). Oriented to whichever team is the actual FAVORITE, not home/away: +/green
 // always means "helped the favorite win," -/red always means "worked against them" -- so
 // e.g. home-field advantage shows red whenever the AWAY team is favored, since that edge is
@@ -388,6 +388,7 @@ function powerModelBreakdownHtml(matchup, home, away) {
       ${row('Points Allowed/G', rt.points_def_allowed, vs('points_def_allowed', 1))}
       ${row('Turnovers/G', rt.turnovers_off, vs('turnovers_off', 2))}
       ${rt.pen_presnap_yds != null ? row('Pre-snap Pen Yds/G', rt.pen_presnap_yds, vs('pen_presnap_yds', 1)) : ''}
+      ${rt.elo != null ? row('Elo rating', rt.elo, vs('elo', 0)) : ''}
       ${row('Home-field advantage', pm.hfa_term, hfaDetail)}
       ${row('QB health', pm.qb_term, qbDetail)}
       ${row('Flex Health', pm.skill_term, skillDetail)}
@@ -585,7 +586,7 @@ const Pickem = {
             ${epaMatchupVizHtml(matchup, g.home, g.away)}
           </div>
           <div class="game-card-matchup">
-            <div class="stat-label" title="Every term that moved delta for this matchup -- the 9-stat composite rating plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
+            <div class="stat-label" title="Every term that moved delta for this matchup -- the 10-stat composite rating (9 rolling stats plus Elo) plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
             ${powerModelBreakdownHtml(matchup, g.home, g.away)}
           </div>
           ${hasLine && pm && pm.delta != null ? Agreement.similarHtml(
@@ -900,7 +901,7 @@ const Pickem = {
             ${epaMatchupVizHtml(matchup, g.home, g.away)}
           </div>` : ''}
           ${matchup ? `<div class="game-card-matchup">
-            <div class="stat-label" title="Every term that moved delta for this matchup -- the 9-stat composite rating plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
+            <div class="stat-label" title="Every term that moved delta for this matchup -- the 10-stat composite rating (9 rolling stats plus Elo) plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
             ${powerModelBreakdownHtml(matchup, g.home, g.away)}
           </div>` : ''}
           ${matchup ? `<div class="game-card-matchup">
