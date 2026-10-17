@@ -1,0 +1,119 @@
+query FootballPickemManagerWeeklyStandingsContent($poolId: ID!, $poolPeriodId: ID) {
+    commonPool(id: $poolId) {
+      id
+      name
+      ... on FootballPickemManagerPool {
+        isUsingSpread
+        areGamesAvailable
+        hasEnded
+        poolPeriod(poolPeriodId: $poolPeriodId) {
+          id
+          poolEvents {
+            id
+            cbsEventId
+            awayTeamScore
+            awayTeam {
+              id
+              cbsTeamId
+              abbrev
+            }
+            homeTeamId
+            homeTeamScore
+            homeTeamSpread(input: { poolId: $poolId })
+            homeTeam {
+              id
+              cbsTeamId
+              abbrev
+            }
+            cbsEventId
+            gameStatusDesc
+            isLocked
+            possession
+            tiebreakerOrder
+            tvInfoName
+            timeRemaining
+            startsAt
+            gamePeriod
+            sportType
+            gametrackerLink
+          }
+          entryTiebreakerAnswers {
+            id
+            tiebreakerQuestionId
+            value
+          }
+        }
+        standings {
+          weekly(input: { poolPeriodId: $poolPeriodId }) {
+            rankedEntries {
+              id
+              entry {
+                id
+                isMine
+                name
+                member {
+                  id
+                  name
+                }
+              }
+              rank {
+                formattedValue
+                value
+              }
+              periodScore
+              score
+              trendingScore
+              picks {
+                cbsSlotId
+                entryId
+                id
+                poolId
+                poolPeriodId
+                slotId
+                displayStatus
+                pickInfo {
+                  cbsItemId
+                  itemId
+                  pickStatus
+                  trendingStatus
+                  weight
+                }
+              }
+              tiebreakerAnswers {
+                id
+                poolPeriodId
+                displayStatus
+                tiebreakerQuestionId
+                tiebreakerAnswerInfo {
+                  value
+                }
+              }
+            }
+          }
+        }
+        poolPeriods(returnUpToCurrent: true) {
+          id
+          description
+          isCurrent
+          order
+        }
+        entryTiebreakerQuestions {
+          id
+          key
+        }
+        poolSettings {
+          id
+          sportTypes
+          gamesPerPeriod
+        }
+        myEntries {
+          id
+          entryTiebreakersAnswers(input: { poolPeriodId: $poolPeriodId }) {
+            id
+            tiebreakerQuestionId
+            value
+          }
+        }
+      }
+    }
+  }

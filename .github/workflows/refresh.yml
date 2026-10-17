@@ -57,6 +57,8 @@ jobs:
           QUIET_END: ${{ vars.QUIET_END }}
           EDGE_SHEET_ID: ${{ vars.EDGE_SHEET_ID }}
           EDGE_MY_NAME: ${{ vars.EDGE_MY_NAME }}
+          CBS_COOKIE: ${{ secrets.CBS_COOKIE }}
+          CBS_POOL_ID: ${{ vars.CBS_POOL_ID }}
           ELWAY_SHEET_ID: ${{ vars.ELWAY_SHEET_ID }}
         run: |
           python -m nflhub refresh

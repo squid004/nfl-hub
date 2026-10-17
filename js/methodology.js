@@ -267,7 +267,7 @@ const Methodology = {
             tiebreaker guess. Each game shows its pick and what that pick is worth in dollars versus the other side.
             Once a game day locks, saved picks and results are fixed and only the open games and tiebreaker are
             re-optimized. The field's revealed picks and your own official picks come from an optional "Week N live" tab in the
-            pool sheet (written after each game day's first kickoff); CBS is the official record, so any pick that differs
+            pool sheet (written after each game day's first kickoff; further sources are merged and de-duplicated, see docs/pool-live-picks.md), with ntfy reminders when a lock window opens and a last call before it; CBS is the official record, so any pick that differs
             between this app and CBS is flagged. Operates on market odds and this pool's dynamics -- doesn't feed into or draw from delta.</p>
         </details>
       </div>`;

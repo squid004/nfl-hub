@@ -91,6 +91,8 @@ class EdgeCfg:
     sheet_id: str      # Google Sheet id holding "Week N" tabs of opponent picks
     my_name: str        # how your own name appears in the sheet, for standing auto-sync
     weekly_pot: float = 270.0  # dollars: $10 per entrant per week x 27 entrants -- the unit the pool optimizer reports in
+    cbs_cookie: str = ""       # the `cookie` request header from a logged-in CBS pick'em browser request (secret CBS_COOKIE)
+    cbs_pool_id: str = "kbxw63b2ge3dknryg44ts==="  # CBS pool id from the pool URL
 
 
 @dataclass
@@ -170,6 +172,8 @@ def get_config() -> Config:
             sheet_id=os.environ.get("EDGE_SHEET_ID", "").strip(),
             my_name=os.environ.get("EDGE_MY_NAME", "").strip(),
             weekly_pot=float(os.environ.get("EDGE_WEEKLY_POT", "") or 270.0),
+            cbs_cookie=os.environ.get("CBS_COOKIE", "").strip(),
+            cbs_pool_id=os.environ.get("CBS_POOL_ID", "").strip() or "kbxw63b2ge3dknryg44ts===",
         ),
         elway=ElwayCfg(
             sheet_id=os.environ.get("ELWAY_SHEET_ID", "").strip(),

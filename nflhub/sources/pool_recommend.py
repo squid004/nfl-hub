@@ -15,8 +15,8 @@ Recomputed at most every RECOMPUTE_MINUTES (the simulation takes a few seconds).
 Sunday's games at the first Sunday kickoff), so once a day's games have kicked off they are LOCKED: the user's
 own pick on them is fixed (from the app's saved picks), finished games enter as known results, and only the
 still-open games and the tiebreaker are re-optimized -- the sequential mode, minus the field's revealed picks
-the field's revealed picks come from the optional "Week N live" sheet tab (edge_sheet.fetch_live_week) when a
-Cowork/scraper run has written one after the day's first kickoff; without it they are predicted). Stored in kv
+the field's revealed picks come from pool_live (the merged live-picks store: the optional "Week N live" sheet tab
+and, later, a direct CBS fetch) when a scrape captured them after the day's first kickoff; without it they are predicted). Stored in kv
 `pool_recommendation`; stops updating once every game of the week is final.
 
 The user's own picks: the CBS pool is the official record, so the user's pick on a locked game is read from the
@@ -27,13 +27,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
 
 from .. import store
-from . import edge_core, edge_sheet, pool_mc
+from . import edge_core, edge_sheet, pool_live, pool_mc
 from .edge_teams import UnknownTeamError, normalize_team
 
 log = logging.getLogger(__name__)
@@ -55,13 +56,6 @@ def _load_stored() -> dict | None:
     try:
         return json.loads(raw) if raw else None
     except (TypeError, ValueError):
-        return None
-
-
-def _fetch_live(sheet_id: str, week: int):
-    try:
-        return edge_sheet.fetch_live_week(sheet_id, week, normalize_team)
-    except edge_sheet.EdgeSheetUnavailable:
         return None
 
 
@@ -161,15 +155,12 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
         if k and (day not in first_by_day or k < first_by_day[day]):
             first_by_day[day] = k
     my_saved = store.get_pickem_picks(week)
-    live = _fetch_live(cfg.edge.sheet_id, week)
-    captured = None
-    if live and live.captured_at:
-        try:
-            captured = datetime.fromisoformat(live.captured_at.replace("Z", "+00:00"))
-            captured = captured if captured.tzinfo else captured.replace(tzinfo=timezone.utc)
-        except ValueError:
-            captured = None
-    live_me = next((v for n, v in (live.picks.items() if live else []) if n == me_name), None)
+    live = pool_live.load(season, week)
+    # entrant names can differ in case/spacing between the sheet and CBS: match on a normalized key
+    _norm = lambda s: re.sub(r"\s+", " ", str(s)).strip().lower()  # noqa: E731
+    live_by_key = {_norm(n): teams for n, teams in (live.picks.items() if live else [])}
+    live_tb_by_key = {_norm(n): v for n, v in (live.tiebreaks.items() if live else [])}
+    live_me = live_by_key.get(_norm(me_name)) if live else None
     me_locked_picks: dict[str, str | None] = {}
     pick_info: dict[str, dict[str, Any]] = {}
     revealed_for_game: dict[str, dict[str, str | None]] = {}   # game_id -> {opponent name: team or None}
@@ -190,7 +181,7 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
             pg.home_won = g["home_score"] > g["away_score"]
         # ---- official (CBS) picks from the live tab, when one was captured after this game day locked ----
         day_first = first_by_day.get(lock_key)
-        cbs_fresh = bool(live and captured and day_first and captured >= day_first)
+        cbs_fresh = bool(live and live.fresh(day_first))
         teams_in_game = {pg.home, pg.away}
         app_pick = (my_saved.get(g["game_id"]) or {}).get("pick")
         cbs_pick = next((t for t in (live_me or []) if t in teams_in_game), None) if live_me is not None else None
@@ -212,7 +203,7 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
             else:
                 me_locked_picks[g["game_id"]] = app_pick       # unverified fallback (None = no pick known)
             if cbs_fresh:
-                revealed_for_game[g["game_id"]] = {n: next((t for t in teams if t in teams_in_game), None) for n, teams in live.picks.items()}
+                revealed_for_game[g["game_id"]] = {k: next((t for t in teams if t in teams_in_game), None) for k, teams in live_by_key.items()}
         pg.national_fav_pct = store.edge_get_national_pct(season, week, normalize_team(pg.fav))
         if pg.national_fav_pct is None:
             national_missing += 1
@@ -225,8 +216,8 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
     me.picks = me_locked_picks
     for gid, by_name in revealed_for_game.items():
         for opp in opponents:
-            if opp.name in by_name:
-                opp.picks[gid] = by_name[opp.name]
+            if _norm(opp.name) in by_name:
+                opp.picks[gid] = by_name[_norm(opp.name)]
     weeks_left = max(0, pool_mc.SEASON_WEEKS - week)
     res = pool_mc.optimize(pgs, opponents, me, weeks_left=weeks_left, pool_mean_weekly=pool_mean, n=n_sims, my_skill=skills[me_name])
     allfav = {g.game_id: g.fav for g in pgs}
@@ -255,8 +246,12 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
                           "expected_correct": round(base["expected_correct"], 2)},
         "contrarian_picks": sum(1 for v in out_games.values() if v["contrarian"] and not v["locked"]),
         "open_games": sum(1 for v in out_games.values() if not v["locked"]),
-        "cbs": {"available": live is not None, "captured_at": live.captured_at if live else None,
+        "my_tiebreak": live_tb_by_key.get(_norm(me_name)),
+        "cbs": {"available": live is not None, "captured_at": live.captured_at.isoformat() if live and live.captured_at else None,
+                "sources": live.sources if live else {}, "conflicts": len(live.conflicts) if live else 0,
                 "opponents_revealed": sorted(revealed_for_game),
+                "entrants_matched": (sum(1 for o in opponents if _norm(o.name) in live_by_key) + (1 if live_me is not None else 0)) if live else 0,
+                "entrants": len(opponents) + 1,
                 "pick_flags": sum(1 for v in out_games.values() if v.get("flag")),
                 "unverified_locked": sum(1 for v in out_games.values() if v["locked"] and v.get("source") != "cbs")},
         "games": out_games,
@@ -269,8 +264,10 @@ def refresh(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: d
             fetch_rows, force: bool = False) -> str:
     """Gate + run + store. `fetch_rows()` returns nflverse games.csv rows (only called when a run is due)."""
     stored = _load_stored()
+    live_now = pool_live.load(season, week)
+    sig = {"finals": sum(1 for g in games if g.get("state") == "post"), "live_updated": live_now.updated if live_now else None}
     same_week = stored and stored.get("season") == season and stored.get("week") == week and stored.get("schema") == SCHEMA_VERSION
-    if same_week and not force:
+    if same_week and not force and stored.get("sig") == sig:
         try:
             if datetime.now(timezone.utc) - datetime.fromisoformat(stored["generated"]) < timedelta(minutes=RECOMPUTE_MINUTES):
                 return "cached"
@@ -282,6 +279,7 @@ def refresh(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: d
         rec = build(cfg, season, week, games, wk_odds, fetch_rows())
     except RuntimeError as exc:
         return f"skipped ({exc})"
+    rec["sig"] = sig
     store.kv_set(POOL_REC_KEY, json.dumps(rec))
     return (f"built (P(win) {rec['p_win']:.1%} vs {rec['all_favorites']['p_win']:.1%} all-favorites, "
             f"{rec['contrarian_picks']} contrarian, ${rec['ev_dollars']:.2f})")

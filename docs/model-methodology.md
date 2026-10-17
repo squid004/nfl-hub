@@ -293,13 +293,17 @@ side with the rest of the card fixed.
 **Sequential use.** Picks lock by game day. Once a day's games have kicked off, the user's saved pick and
 the game's result are fixed and only the open games and the tiebreaker are re-optimized (recomputed every
 45 minutes; stops when the week is final). The field's revealed picks and the user's own official picks
-come from an optional **"Week N live" tab** in the pool sheet, written by a scraper/Cowork run after each game day's
+come from the merged live-picks store (`pool_live.py`; sources and the CBS-fetch plan in `docs/pool-live-picks.md`;
+agreeing sources are deduplicated and disagreements are logged), currently fed by an optional **"Week N live" tab** in the pool sheet, written by a scraper/Cowork run after each game day's
 first kickoff: same row layout as the final "Week N" tab (name, weekly, season, then pick cells), but only the picks
 visible at that moment are filled, plus one row whose first cell is `Captured` and whose second cell is an ISO
 timestamp. The CBS pool is the official record, so the user's locked picks are read from it (the in-app pick is only an
 unverified, labelled fallback when no live tab exists, and a locked game with no pick anywhere counts as no pick). Each
 game is flagged when the app and CBS disagree, when CBS has a pick the app doesn't, or when CBS shows no pick after
-lock. Without the tab, the field's locked picks are predicted. The final "Week N" tab, once it exists, supersedes it.
+lock. Without live picks, the field's locked picks are predicted. ntfy reminders (`pool_notify.py`) fire when a lock window opens
+(every earlier game day final, lock within 40 hours) and once more as a last call within 3 hours if picks still differ
+from the recommendation or the app and CBS disagree; they list the recommended changes against the user's current picks
+and the tiebreaker guess, and never submit anything. The final "Week N" tab, once it exists, supersedes it.
 
 ---
 

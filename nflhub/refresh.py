@@ -21,6 +21,8 @@ from .sources import (
     history,
     nfl_schedule,
     odds,
+    pool_live,
+    pool_notify,
     pool_recommend,
     team_ratings,
     yahoo_fantasy,
@@ -324,8 +326,25 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     # 4d2. pool Monte Carlo: expected-dollar pick recommendation per game (replaces the FADE/CHALK/
     # NO_PLAY tags on the Moneyline tab). Reads the pool sheet + market odds; soft-fails on its own.
     try:
+        game_of_team: dict[str, str] = {}
+        for g in games:
+            for t in (g["home"], g["away"]):
+                try:
+                    game_of_team[normalize_team(t)] = g["game_id"]
+                except UnknownTeamError:
+                    pass
+        live = pool_live.collect(cfg, season, week, game_of_team) if cfg.edge.sheet_id else None
+        summary["pool_live"] = (
+            "no live picks yet" if live is None else
+            f"{len(live['picks'])} entrants, sources {sorted(k for k, v in live['sources'].items() if v['ok'])}"
+            + (f", {len(live['conflicts'])} conflict(s)" if live["conflicts"] else ""))
+    except Exception as exc:  # noqa: BLE001
+        log.exception("pool live picks failed")
+        summary["pool_live"] = f"error ({exc})"
+    try:
         summary["pool_recommendation"] = pool_recommend.refresh(
             cfg, season, week, games, wk_odds, _week_first_kickoff(games), history.fetch_games)
+        summary["pool_notify"] = pool_notify.maybe_notify(cfg, pool_recommend._load_stored(), games)
     except Exception as exc:  # noqa: BLE001 - best-effort; never block the rest of refresh
         log.exception("pool recommendation failed")
         summary["pool_recommendation"] = f"error ({exc})"
