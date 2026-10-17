@@ -70,7 +70,7 @@ def maybe_notify(cfg, rec: dict | None, games: list[dict], now: datetime | None 
     for gid, v in open_games.items():
         cur = v.get("cbs_pick") or v.get("app_pick")
         if cur != v["pick"]:
-            changes.append((v["gain_dollars"], gid, v, cur))
+            changes.append((v["impact_pts"], gid, v, cur))
     changes.sort(key=lambda t: -t[0])
     flags = [(gid, v) for gid, v in rec["games"].items() if v.get("flag")]
 
@@ -85,7 +85,7 @@ def maybe_notify(cfg, rec: dict | None, games: list[dict], now: datetime | None 
             for gain, gid, v, cur in changes[:8]:
                 g = by_id[gid]
                 lines.append(f"{g['away']}@{g['home']}: take {v['pick']}" + (f" (you: {cur})" if cur else " (no pick yet)")
-                             + f", +${gain:.2f}")
+                             + f", +{gain:.1f} pts")
             if len(changes) > 8:
                 lines.append(f"...and {len(changes) - 8} smaller")
         else:

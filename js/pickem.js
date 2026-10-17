@@ -400,9 +400,7 @@ function powerModelBreakdownHtml(matchup, home, away) {
 // Summary line for the pool optimizer (nflhub/sources/pool_recommend.py): win chance, dollars, tiebreaker.
 function poolOptimizerSummaryHtml(rec) {
   const pct = v => (100 * v).toFixed(1) + '%';
-  const d = v => '$' + (Math.abs(v) < 10 ? v.toFixed(2) : Math.round(v));
   const af = rec.all_favorites || {};
-  const weeklyEv = rec.p_win * rec.weekly_prize;
   const ups = Object.values(rec.games || {}).filter(g => g.contrarian && !g.locked);
   const nLocked = Object.values(rec.games || {}).filter(g => g.locked).length;
   const cbs = rec.cbs || {};
@@ -413,15 +411,12 @@ function poolOptimizerSummaryHtml(rec) {
   const gen = rec.generated ? new Date(rec.generated).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
   return `<div class="pool-optimizer" style="margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);">
     <div><strong>Pool optimizer</strong> &mdash; ${nLocked ? `with ${nLocked} game${nLocked === 1 ? '' : 's'} already locked, the` : 'the'} recommended card wins the week
-      <strong>${pct(rec.p_win)}</strong> of the time (always taking the favorite: ${pct(af.p_win || 0)}) &mdash;
-      ${d(weeklyEv)} expected from the ${d(rec.weekly_prize)} weekly prize, and about
-      <strong>${d(rec.ev_dollars - (af.ev_dollars || 0))}</strong> more total expected winnings than all favorites once each
-      correct pick's value toward the season pot is counted.
+      <strong>${pct(rec.p_win)}</strong> of the time (always taking the favorite: ${pct(af.p_win || 0)}).
       ${ups.length ? `${ups.length} upset pick${ups.length === 1 ? '' : 's'}: ${ups.map(g => g.pick).join(', ')}.` : 'No upset picks this week.'}
       Tiebreaker guess: <strong>${rec.tiebreak_guess}</strong>.</div>
     <div class="muted small" style="margin-top:4px;">20,000 simulated weeks from the market odds and this pool's pick tendencies
-      (${rec.inputs.entrants} entrants, ${rec.inputs.history_weeks.length} weeks of history). One more season win is worth about
-      ${d(rec.season_win_value_dollars)}. Updated ${gen}. ${cbsNote}${nLocked ? ' Locked games keep your saved pick and their result; only the open games and the tiebreaker are re-optimized.' : ''}</div>
+      (${rec.inputs.entrants} entrants, ${rec.inputs.history_weeks.length} weeks of history). Optimizes this week's win chance only; the
+      season pot is not considered. Each game's impact is how much the win chance drops if only that pick is switched. Updated ${gen}. ${cbsNote}${nLocked ? ' Locked games keep your saved pick and their result; only the open games and the tiebreaker are re-optimized.' : ''}</div>
   </div>`;
 }
 
@@ -553,17 +548,17 @@ const Pickem = {
         data-team="${team}" data-spread="${hasLine ? effSpread : ''}"
         class="${mine === team ? 'primary' : ''}">${team}</button>`;
 
-      const money = v => '$' + (Math.abs(v) < 10 ? v.toFixed(2) : Math.round(v));
+      const pts = v => (v < 10 ? v.toFixed(1) : Math.round(v)) + ' pts';
       const edgeChip = (mc && mc.locked)
         ? `<span class="muted small">locked${mc.final ? ' &middot; final' : ''}</span>`
         : mc
-        ? `<span class="chip ${mc.contrarian ? 'good' : ''}"
-             title="Take ${mc.pick} over ${mc.other}: worth about ${money(mc.gain_dollars)} in expected winnings with the rest of the card held fixed. The market gives the favorite ${(mc.p_favorite * 100).toFixed(0)}%; the pool is expected to take the favorite ${(mc.pool_favorite_share * 100).toFixed(0)}% of the time. Weekly win chance with this pick ${(poolRec.p_win * 100).toFixed(1)}%, if flipped ${(mc.p_win_if_flipped * 100).toFixed(1)}%.">
-             ${mc.pick}${mc.contrarian ? ' (upset)' : ''} +${money(mc.gain_dollars)}</span>
+        ? `<span class="chip ${mc.contrarian ? 'good' : ''}" style="white-space:nowrap;"
+             title="Take ${mc.pick} over ${mc.other}. Impact: the simulated weekly win chance is ${pts(mc.impact_pts)} lower if only this pick is switched and every other pick stays optimized. The market gives the favorite ${(mc.p_favorite * 100).toFixed(0)}%; the pool is expected to take the favorite ${(mc.pool_favorite_share * 100).toFixed(0)}% of the time. Weekly win chance with this pick ${(poolRec.p_win * 100).toFixed(1)}%, if flipped ${(mc.p_win_if_flipped * 100).toFixed(1)}%.">
+             ${mc.pick}${mc.contrarian ? ' (upset)' : ''} +${pts(mc.impact_pts)}</span>
            <div class="muted small">pool takes ${mc.favorite} ${(mc.pool_favorite_share * 100).toFixed(0)}%</div>`
         : '<span class="muted">&mdash;</span>';
       const mcMineNote = (mc && !mc.locked && mine && mine !== mc.pick)
-        ? ` <span class="muted small">(optimizer: ${mc.pick}, +${money(mc.gain_dollars)} vs your side)</span>` : '';
+        ? ` <span class="muted small">(optimizer: ${mc.pick}, +${pts(mc.impact_pts)} win chance vs your side)</span>` : '';
       // CBS is the official record: flag any pick that differs between this app and CBS
       const cbsFlag = !mc || !mc.flag ? '' : ({
         differs: `<span class="chip bad" title="This app has ${esc(mc.app_pick)} but the CBS pool shows ${esc(mc.cbs_pick)}. CBS is the official pick.">CBS has ${esc(mc.cbs_pick)} (app: ${esc(mc.app_pick)})</span>`,
@@ -611,7 +606,7 @@ const Pickem = {
             <div class="muted">${pm ? `&Delta; ${pm.delta >= 0 ? '+' : ''}${pm.delta.toFixed(2)}` : ' '}</div>
           </div>
           <div class="stat-block">
-            <div class="stat-label" title="The pool Monte Carlo: 20,000 simulated weeks of the market odds and this pool's picks, searching for the card that maximizes expected dollars (weekly prize plus the value of each correct pick toward the season pot).">Pool optimizer</div>
+            <div class="stat-label" title="The pool Monte Carlo: 20,000 simulated weeks of the market odds and this pool's picks, searching for the card that maximizes your chance of winning this week's prize. The season pot is not considered.">Pool optimizer</div>
             <div>${edgeChip}</div>
           </div>
         </div>

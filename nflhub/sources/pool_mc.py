@@ -1,11 +1,13 @@
-"""Expected-dollar optimizer for the straight pick'em pool (replaces the deviation-budget heuristic in
+"""Weekly win-probability optimizer for the straight pick'em pool (replaces the deviation-budget heuristic in
 edge_core.py as the *recommendation* engine; edge_core's devig/bias helpers are still its inputs).
 
 Pool rules (docs/improvement-plan-2026-10-15.md A6): each week 80% of that week's pot goes to the
 weekly winner (most correct picks; ties go to the closest Monday-night total guess, exact ties split);
 the other 20% of every week's pot builds a season pot paid 60/30/10 to the top three in season wins.
-All dollar figures are in units of ONE week's pot (P = 1): the weekly prize is 0.8 and the whole season
-pot is 0.2 * SEASON_WEEKS. Multiply by the real weekly pot to get dollars.
+THIS ENGINE OPTIMIZES THE WEEK ONLY: it maximizes the chance of winning the weekly prize and ignores the season pot
+(an earlier version added a rest-of-season term; removed 2026-10-17 so the two goals stay separate). The metric is
+simulated win percentage, not dollars: each game's impact rating is the card's win chance minus the win chance with just that
+game on the other side and every other pick re-optimized.
 
 The model is market-based on purpose -- it never uses the Power Rankings model. It needs only:
 the de-vigged market win probability per game, each opponent's pick tendencies, and the standings.
@@ -19,7 +21,7 @@ the de-vigged market win probability per game, each opponent's pick tendencies, 
     off, picks lock by game day) are used as-is; only open games are sampled.
   * Monday-night tiebreaker: opponents' guesses ~ Normal(posted total + TB_MEAN_OFFSET, TB_SD) rounded;
     the actual total ~ Normal(posted total, TOTAL_SD).
-  * Season term: lambda = the marginal value of one more season win, from a rest-of-season simulation.
+  * Objective: P(win the week) -- the weekly prize EV is 0.8 * P * pot. Correct picks matter only through that probability.
 
 `optimize()` re-solves for only the still-open picks and the tiebreaker given the state of the week,
 which is what makes the sequential, per-game-day use work: finished games and revealed picks are
@@ -32,16 +34,13 @@ from dataclasses import dataclass, field
 import numpy as np
 
 N_SIMS = 20000
-WEEKLY_SHARE, SEASON_SHARE = 0.8, 0.2
-SEASON_PRIZES = (0.6, 0.3, 0.1)
-SEASON_WEEKS = 18
+WEEKLY_SHARE = 0.8
 
 # Pick-share model (v66 all-data fit on 2026 weeks 1-5, see research/edge_signal_test_v66_*.py).
 PICK_A, PICK_B, PICK_C = 0.02, 0.33, 0.76
 OFFSET_TAU = 0.36          # sd of entrants' persistent chalk offset, logit scale (v65 method of moments)
 TB_MEAN_OFFSET, TB_SD = -1.5, 4.5   # opponents' tiebreaker guess vs the posted total (v65)
 TOTAL_SD = 13.3            # actual game total vs the posted total (nflverse history)
-WEEKLY_SD = 1.9            # sd of one entrant's weekly correct count around their own mean (rest-of-season draws)
 
 
 def _sig(x):
@@ -77,9 +76,7 @@ class PoolGame:
 @dataclass
 class Entrant:
     name: str
-    season_before: int = 0            # season correct BEFORE this week
     offset: float = 0.0               # persistent chalk tendency (logit)
-    skill: float | None = None        # expected weekly correct (None -> pool average)
     picks: dict[str, str | None] = field(default_factory=dict)   # game_id -> team, revealed picks only
     tiebreak: float | None = None     # revealed only after Monday kickoff
 
@@ -115,8 +112,7 @@ class Result:
     guess: int | None                 # recommended tiebreaker
     p_win: float
     expected_correct: float
-    lam: float
-    ev: float                         # in weekly-pot units: 0.8*p_win + lam*E[correct]
+    ev: float                         # in weekly-pot units: 0.8 * p_win
     steps: list[dict]                 # flips applied, in order
     per_game: dict[str, dict]
 
@@ -193,37 +189,12 @@ class Sim:
     def guess_grid(self) -> np.ndarray:
         return np.arange(self.line - 14, self.line + 15, 1.0)
 
-    # -- season term ----------------------------------------------------------------------------------
-    def season_lambda(self, c_me: np.ndarray, weeks_left: int, pool_mean_weekly: float, my_skill: float | None = None) -> float:
-        n, J = self.n, len(self.opponents)
-        if J == 0:
-            return 0.0
-        rng = np.random.default_rng(12345)
-        sk = np.array([e.skill if e.skill is not None else pool_mean_weekly for e in self.opponents])
-        opp_before = np.array([e.season_before for e in self.opponents], float)
-        fut = weeks_left * sk[None, :] + WEEKLY_SD * np.sqrt(max(weeks_left, 0)) * rng.standard_normal((n, J))
-        opp_tot = opp_before[None, :] + self.opp_correct + fut
-        my_sk = my_skill if my_skill is not None else pool_mean_weekly
-        my_fut = weeks_left * my_sk + WEEKLY_SD * np.sqrt(max(weeks_left, 0)) * rng.standard_normal(n)
-        my_tot = self.me.season_before + c_me + my_fut
-        prizes = np.zeros(J + 1)
-        prizes[:len(SEASON_PRIZES)] = SEASON_PRIZES
 
-        def payout(t):
-            above = (opp_tot > t[:, None]).sum(1)
-            equal = (np.abs(opp_tot - t[:, None]) < 1e-9).sum(1)
-            cum = np.concatenate([[0.0], np.cumsum(prizes)])
-            return (cum[np.minimum(above + equal + 1, J + 1)] - cum[above]) / (equal + 1)
-
-        return float(np.mean(payout(my_tot + 1) - payout(my_tot)) * SEASON_SHARE * SEASON_WEEKS)
-
-
-def optimize(games: list[PoolGame], opponents: list[Entrant], me: Entrant, *, weeks_left: int, pool_mean_weekly: float = 10.0,
-             n: int = N_SIMS, seed: int = 0, my_skill: float | None = None, params=(PICK_A, PICK_B, PICK_C),
-             start: dict[str, str] | None = None, actual_total: float | None = None, use_season_term: bool = True) -> Result:
+def optimize(games: list[PoolGame], opponents: list[Entrant], me: Entrant, *, n: int = N_SIMS, seed: int = 0,
+             params=(PICK_A, PICK_B, PICK_C), start: dict[str, str] | None = None, actual_total: float | None = None) -> Result:
     """Greedy single-flip search over the OPEN games (locked games keep my revealed pick), jointly with the
     tiebreaker guess. Start = my given card for open games if provided else the market favorite.
-    Objective = WEEKLY_SHARE * P(win week) + lambda * E[correct], lambda from the season simulation."""
+    Objective = WEEKLY_SHARE * P(win week)."""
     sim = Sim(games, opponents, me, n, seed, params, actual_total=actual_total)
     G = len(games)
     side = np.zeros(G, bool)
@@ -232,35 +203,31 @@ def optimize(games: list[PoolGame], opponents: list[Entrant], me: Entrant, *, we
         side[i] = (pick == g.home) if pick is not None else (g.fav == g.home)  # no pick on a locked game: masked in Sim.correct
     open_idx = [i for i, g in enumerate(games) if not g.locked]
     grid = sim.guess_grid()
-    lam = 0.0
 
     def objective(s):
         c = sim.correct(s)
         pw = sim.p_win_grid(c, grid)
         k = int(np.argmax(pw))
-        return WEEKLY_SHARE * pw[k] + lam * c.mean(), pw[k], c.mean(), grid[k]
+        return WEEKLY_SHARE * pw[k], pw[k], c.mean(), grid[k]
 
     steps = []
-    for _round in range(2 if use_season_term else 1):
-        if use_season_term:
-            lam = sim.season_lambda(sim.correct(side), weeks_left, pool_mean_weekly, my_skill)
-        best = objective(side)
-        improved = True
-        while improved:
-            improved = False
-            cand = None
-            for i in open_idx:
-                side[i] = not side[i]
-                val = objective(side)
-                side[i] = not side[i]
-                if val[0] > best[0] + 1e-5 and (cand is None or val[0] > cand[1][0]):
-                    cand = (i, val)
-            if cand is not None:
-                i, val = cand
-                side[i] = not side[i]
-                steps.append({"game_id": games[i].game_id, "to": games[i].home if side[i] else games[i].away, "ev": float(val[0])})
-                best = val
-                improved = True
+    best = objective(side)
+    improved = True
+    while improved:
+        improved = False
+        cand = None
+        for i in open_idx:
+            side[i] = not side[i]
+            val = objective(side)
+            side[i] = not side[i]
+            if val[0] > best[0] + 1e-5 and (cand is None or val[0] > cand[1][0]):
+                cand = (i, val)
+        if cand is not None:
+            i, val = cand
+            side[i] = not side[i]
+            steps.append({"game_id": games[i].game_id, "to": games[i].home if side[i] else games[i].away, "ev": float(val[0])})
+            best = val
+            improved = True
     ev, pw, ec, guess = best
     per_game = {}
     for i, g in enumerate(games):
@@ -274,7 +241,7 @@ def optimize(games: list[PoolGame], opponents: list[Entrant], me: Entrant, *, we
                                "ev_if_flipped": float(v[0]), "p_win_if_flipped": float(v[1]), "locked": g.locked,
                                "contrarian": bool((g.home if side[i] else g.away) != g.fav)}
     return Result(card={g.game_id: (g.home if side[i] else g.away) for i, g in enumerate(games)}, guess=int(guess), p_win=float(pw),
-                  expected_correct=float(ec), lam=float(lam), ev=float(ev), steps=steps, per_game=per_game)
+                  expected_correct=float(ec), ev=float(ev), steps=steps, per_game=per_game)
 
 
 def evaluate_card(games: list[PoolGame], opponents: list[Entrant], me: Entrant, card: dict[str, str], guess: float, *,

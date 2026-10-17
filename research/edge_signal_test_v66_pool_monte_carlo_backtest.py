@@ -168,10 +168,10 @@ def main():
             for e in opps_rows:
                 pd_ = picks_dict(e, games)
                 revealed = {gid: t for gid, t in pd_.items() if day_cut is not None and next(x for x in games if x.game_id == gid).lock_key <= day_cut}
-                opps.append(pm.Entrant(e["name"], (e["season_correct"] or 0) - (e["weekly_correct"] or 0), offsets[e["name"]], skill[e["name"]], revealed))
+                opps.append(pm.Entrant(e["name"], offset=offsets[e["name"]], picks=revealed))
             me_pd = picks_dict(me_row, games)
             me_rev = {gid: t for gid, t in me_pd.items() if day_cut is not None and next(x for x in games if x.game_id == gid).lock_key <= day_cut}
-            return gs, opps, pm.Entrant(me_row["name"], mine_before, 0.0, my_skill, me_rev)
+            return gs, opps, pm.Entrant(me_row["name"], picks=me_rev)
 
         # ---- static (pre-week) ----
         gs, opps, me = mk_state(None)
@@ -179,7 +179,7 @@ def main():
         act_cor = np.array([e["weekly_correct"] for e in opps_rows])
         calib_rows.append((w, sim_chk.opp_correct.mean(), act_cor.mean(), sim_chk.max_opp.mean(), act_cor.max(),
                            float(np.mean(sim_chk.max_opp >= act_cor.max())), sim_chk.opp_correct.std(1).mean(), act_cor.std()))
-        res = pm.optimize(gs, opps, me, weeks_left=18 - w, pool_mean_weekly=pool_mean, n=N, seed=w, my_skill=my_skill, params=params)
+        res = pm.optimize(gs, opps, me, n=N, seed=w, params=params)
         actual_card = {gid: t for gid, t in picks_dict(me_row, games).items() if t is not None}
         allfav = {g.game_id: g.fav for g in games}
         rec_by_team = {}
@@ -200,7 +200,7 @@ def main():
         for k, (c, gu) in r.items():
             cc = card_correct(games, c)
             out[k] = (cc, realized_share(games, opps_rows, cc, gu, total))
-        print(f"=== Week {w}: {len(games)} games, {len(opps_rows)} opponents, lambda {res.lam:.3f}, optimizer flips {len(res.steps)} ===")
+        print(f"=== Week {w}: {len(games)} games, {len(opps_rows)} opponents, optimizer flips {len(res.steps)} ===")
         print(f"  {'card':10s} {'model P(win)':>12} {'model E[corr]':>13} | {'realized correct':>16} {'realized win share':>18}")
         for k, e in (("actual", e_act), ("allfav", e_all), ("app", e_app), ("opt", {"p_win": res.p_win, "expected_correct": res.expected_correct})):
             print(f"  {k:10s} {e['p_win']:12.3f} {e['expected_correct']:13.2f} | {out[k][0]:16d} {out[k][1]:18.3f}")
@@ -215,8 +215,7 @@ def main():
             if not [g for g in gs2 if not g.locked]:
                 continue
             nxt = days[di + 1]
-            res2 = pm.optimize(gs2, opps2, me2, weeks_left=18 - w, pool_mean_weekly=pool_mean, n=N, seed=100 + w, my_skill=my_skill,
-                               params=params, start=None)
+            res2 = pm.optimize(gs2, opps2, me2, n=N, seed=100 + w, params=params, start=None)
             # user's actual card, evaluated by the model from the same state
             cur = {g.game_id: actual_card.get(g.game_id, g.fav) for g in gs2}
             e_cur = pm.evaluate_card(gs2, opps2, me2, cur, my_guess, n=N, seed=100 + w, params=params)

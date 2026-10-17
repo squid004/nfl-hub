@@ -1,7 +1,7 @@
 """Builds the pool Monte Carlo's inputs from the app's own data and stores the recommendation.
 
-Replaces the FADE / CHALK / NO_PLAY tags: every game now gets the engine's pick plus the dollar value of
-that pick over the other side (nflhub/sources/pool_mc.py has the model and the pool's payout rules).
+Replaces the FADE / CHALK / NO_PLAY tags: every game now gets the engine's pick plus its impact rating -- the drop in
+simulated weekly win chance if that one game were on the other side while every other pick stays optimized (nflhub/sources/pool_mc.py has the model and the pool's payout rules).
 
 Inputs, all market-side (never the Power Rankings model):
   * market win probability per game -- de-vigged moneyline from the odds table;
@@ -31,7 +31,6 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import numpy as np
 
 from .. import store
 from . import edge_core, edge_sheet, pool_live, pool_mc
@@ -42,7 +41,6 @@ log = logging.getLogger(__name__)
 POOL_REC_KEY = "pool_recommendation"
 SCHEMA_VERSION = 1
 RECOMPUTE_MINUTES = 45
-DEFAULT_WEEKLY_POT = 270.0   # $10 per entrant per week x 27 entrants
 
 
 def _american_devig_home(ml_home: float, ml_away: float) -> float:
@@ -78,7 +76,6 @@ def _fetch_history(sheet_id: str, week: int) -> dict[int, dict[str, Any]]:
 def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dict[str, Any], nfl_rows: list[dict[str, str]],
           n_sims: int = pool_mc.N_SIMS) -> dict | None:
     """Returns the recommendation dict, or None (with a reason via the second return of `reason`) if it can't run."""
-    pot = float(getattr(cfg.edge, "weekly_pot", DEFAULT_WEEKLY_POT) or DEFAULT_WEEKLY_POT)
     history = _fetch_history(cfg.edge.sheet_id, week)
     if not history:
         raise RuntimeError("no completed pool tabs yet")
@@ -125,14 +122,8 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
     names = [n for n in standings if n != me_name]
     offsets = pool_mc.estimate_offsets(hist_games, names)
 
-    skills: dict[str, float] = {}
-    for n in standings:
-        vals = [h["standings"][n][0] for h in history.values() if n in h["standings"]]
-        skills[n] = float(np.mean(vals)) if vals else 10.0
-    pool_mean = float(np.mean([skills[n] for n in names])) if names else 10.0
-
-    opponents = [pool_mc.Entrant(n, standings[n][1], offsets.get(n, 0.0), skills[n]) for n in names]
-    me = pool_mc.Entrant(me_name, standings[me_name][1], 0.0, skills[me_name])
+    opponents = [pool_mc.Entrant(n, offset=offsets.get(n, 0.0)) for n in names]
+    me = pool_mc.Entrant(me_name)
 
     # ---- this week's games ----
     pgs: list[pool_mc.PoolGame] = []
@@ -222,31 +213,29 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
         for opp in opponents:
             if _norm(opp.name) in by_name:
                 opp.picks[gid] = by_name[_norm(opp.name)]
-    weeks_left = max(0, pool_mc.SEASON_WEEKS - week)
-    res = pool_mc.optimize(pgs, opponents, me, weeks_left=weeks_left, pool_mean_weekly=pool_mean, n=n_sims, my_skill=skills[me_name])
+    res = pool_mc.optimize(pgs, opponents, me, n=n_sims)
     allfav = {g.game_id: g.fav for g in pgs}
     base = pool_mc.evaluate_card(pgs, opponents, me, allfav, round(res.guess), n=n_sims)
-    ev = lambda p_win, ec: pot * (pool_mc.WEEKLY_SHARE * p_win + res.lam * ec)  # noqa: E731
 
     out_games: dict[str, dict[str, Any]] = {}
     for g in pgs:
         d = res.per_game[g.game_id]
-        gain = (res.ev - d["ev_if_flipped"]) * pot
+        # impact rating: win chance with every other game optimized, minus win chance with just this game on the other side
+        impact = (res.p_win - d["p_win_if_flipped"]) * 100
         other = g.home if d["pick"] == g.away else g.away
         out_games[g.game_id] = {
             "pick": d["pick"], "other": other, "favorite": g.fav, "contrarian": d["contrarian"],
             "p_favorite": round(g.p_fav, 4), "pool_favorite_share": round(d["pool_fav_share"], 4),
-            "gain_dollars": round(gain, 2), "p_win_if_flipped": round(d["p_win_if_flipped"], 4),
+            "impact_pts": round(impact, 2), "p_win_if_flipped": round(d["p_win_if_flipped"], 4),
             "national_pct": g.national_fav_pct, "locked": g.locked, "final": g.home_won is not None,
             **pick_info.get(g.game_id, {}),
         }
     return {
         "schema": SCHEMA_VERSION, "season": season, "week": week, "generated": datetime.now(timezone.utc).isoformat(),
-        "pot": pot, "weekly_prize": round(pot * pool_mc.WEEKLY_SHARE, 2), "n_sims": n_sims,
-        "p_win": round(res.p_win, 4), "ev_dollars": round(ev(res.p_win, res.expected_correct), 2),
+        "n_sims": n_sims,
+        "p_win": round(res.p_win, 4),
         "expected_correct": round(res.expected_correct, 2), "tiebreak_guess": int(round(res.guess)),
-        "season_win_value_dollars": round(res.lam * pot, 2),
-        "all_favorites": {"p_win": round(base["p_win"], 4), "ev_dollars": round(ev(base["p_win"], base["expected_correct"]), 2),
+        "all_favorites": {"p_win": round(base["p_win"], 4),
                           "expected_correct": round(base["expected_correct"], 2)},
         "contrarian_picks": sum(1 for v in out_games.values() if v["contrarian"] and not v["locked"]),
         "open_games": sum(1 for v in out_games.values() if not v["locked"]),
@@ -259,8 +248,7 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
                 "pick_flags": sum(1 for v in out_games.values() if v.get("flag")),
                 "unverified_locked": sum(1 for v in out_games.values() if v["locked"] and v.get("source") != "cbs")},
         "games": out_games,
-        "inputs": {"entrants": len(opponents) + 1, "history_weeks": sorted(history), "national_missing": national_missing,
-                   "pool_mean_weekly": round(pool_mean, 2), "weeks_left": weeks_left},
+        "inputs": {"entrants": len(opponents) + 1, "history_weeks": sorted(history), "national_missing": national_missing},
     }
 
 
@@ -286,4 +274,4 @@ def refresh(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: d
     rec["sig"] = sig
     store.kv_set(POOL_REC_KEY, json.dumps(rec))
     return (f"built (P(win) {rec['p_win']:.1%} vs {rec['all_favorites']['p_win']:.1%} all-favorites, "
-            f"{rec['contrarian_picks']} contrarian, ${rec['ev_dollars']:.2f})")
+            f"{rec['contrarian_picks']} contrarian)")
