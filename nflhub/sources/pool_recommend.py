@@ -146,6 +146,7 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
         except (TypeError, ValueError):
             return None
 
+    games_not_started = sum(1 for g in games if (kickoff_dt(g) or now) > now)
     # a game day locks when its first game kicks off
     first_by_day: dict[str, datetime] = {}
     for g in games:
@@ -184,7 +185,7 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
             pg.home_won = g["home_score"] > g["away_score"]
         # ---- official (CBS) picks from the live tab, when one was captured after this game day locked ----
         day_first = first_by_day.get(lock_key)
-        cbs_fresh = bool(live and live.fresh(day_first))
+        cbs_fresh = bool(live and (live.fresh(day_first) or live.consistent_with(games_not_started)))
         teams_in_game = {pg.home, pg.away}
         app_pick = (my_saved.get(g["game_id"]) or {}).get("pick")
         cbs_pick = next((t for t in (live_me or []) if t in teams_in_game), None) if live_me is not None else None

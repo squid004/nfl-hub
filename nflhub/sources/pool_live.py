@@ -37,6 +37,7 @@ class Snapshot:
     captured_at: datetime | None
     picks: dict[str, list[str]]       # entrant -> teams visible at capture time
     tiebreaks: dict[str, float] = field(default_factory=dict)   # entrant -> Monday-night total guess, where visible
+    hidden: dict[str, int] = field(default_factory=dict)        # entrant -> picks still hidden (placeholder "locked") at capture
 
 
 def _parse_ts(s: str | None) -> datetime | None:
@@ -51,7 +52,7 @@ def _parse_ts(s: str | None) -> datetime | None:
 
 def _sheet_source(cfg, week: int) -> Snapshot:
     data = edge_sheet.fetch_live_week(cfg.edge.sheet_id, week, normalize_team)
-    return Snapshot("sheet", _parse_ts(data.captured_at), data.picks)
+    return Snapshot("sheet", _parse_ts(data.captured_at), data.picks, hidden=data.hidden)
 
 
 CBS_MIN_MINUTES = 20
@@ -128,7 +129,7 @@ def collect(cfg, season: int, week: int, game_of_team: dict[str, str]) -> dict[s
         "captured_at": max(stamps).isoformat() if stamps else None,
         "sources": status, "picks": merged, "tiebreaks": tiebreaks, "conflicts": conflicts,
         "snapshots": [{"source": s.source, "captured_at": s.captured_at.isoformat() if s.captured_at else None,
-                       "picks": s.picks, "tiebreaks": s.tiebreaks} for s in snaps],
+                       "picks": s.picks, "tiebreaks": s.tiebreaks, "hidden": s.hidden} for s in snaps],
     }
     prev = _raw()
     if not prev or {k: v for k, v in prev.items() if k != "updated"} != blob:
@@ -165,12 +166,24 @@ class Live:
         """True if some source captured AFTER this game day's first kickoff, i.e. the day's picks were visible."""
         return bool(day_first and self.captured_at and self.captured_at >= day_first)
 
+    def consistent_with(self, games_not_started: int) -> bool:
+        """For tabs with no capture timestamp: CBS hides a pick until its game kicks off and the scraper writes the placeholder
+        "locked" there. If (nearly) every entrant's placeholder count equals the number of games that have NOT started yet,
+        the tab reflects the current lock state, so a started game with no pick shown really has no pick."""
+        for s in self.snapshots:
+            if s.hidden:
+                # +1: the Monday-night tiebreaker guess is hidden too, until Monday's kickoff
+                ok = sum(1 for n in s.hidden.values() if n in (games_not_started, games_not_started + 1))
+                if ok >= 0.9 * len(s.hidden):
+                    return True
+        return False
+
 
 def load(season: int, week: int) -> Live | None:
     b = _raw()
     if not b or b.get("season") != season or b.get("week") != week:
         return None
-    snaps = [Snapshot(s["source"], _parse_ts(s.get("captured_at")), s.get("picks", {}), s.get("tiebreaks", {}))
+    snaps = [Snapshot(s["source"], _parse_ts(s.get("captured_at")), s.get("picks", {}), s.get("tiebreaks", {}), s.get("hidden", {}))
              for s in b.get("snapshots", [])]
     return Live(picks=b.get("picks", {}), snapshots=snaps, conflicts=b.get("conflicts", []),
                 sources=b.get("sources", {}), updated=b.get("updated"), tiebreaks=b.get("tiebreaks", {}))

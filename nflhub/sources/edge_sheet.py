@@ -23,7 +23,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import quote
 
 import requests
@@ -140,6 +140,7 @@ def fetch_week(sheet_id: str, week: int, normalize_team) -> SheetWeekData:
 class LiveWeekData:
     captured_at: str | None            # ISO timestamp from the tab's "Captured" row, if present
     picks: dict[str, list[str]]        # entrant -> team codes visible so far (locked picks; the user's own may include open games)
+    hidden: dict[str, int] = field(default_factory=dict)   # entrant -> number of cells holding the placeholder "locked" (pick still hidden)
 
 
 def fetch_live_week(sheet_id: str, week: int, normalize_team) -> LiveWeekData:
@@ -158,6 +159,7 @@ def fetch_live_week(sheet_id: str, week: int, normalize_team) -> LiveWeekData:
         raise EdgeSheetUnavailable(f"live tab request failed: {exc}") from exc
     captured = None
     picks: dict[str, list[str]] = {}
+    hidden: dict[str, int] = {}
     for row in csv.reader(io.StringIO(resp.text)):
         if not row or not row[0].strip():
             continue
@@ -166,8 +168,12 @@ def fetch_live_week(sheet_id: str, week: int, normalize_team) -> LiveWeekData:
             continue
         name = _ORDINAL_RE.sub("", row[0]).strip()
         teams = []
+        n_hidden = 0
         for cell in row[1:]:
             code = (cell or "").strip()
+            if code.lower() == "locked":
+                n_hidden += 1       # CBS hides a pick until its game kicks off; the scraper writes "locked" there
+                continue
             if code.lower() in _NO_PICK:
                 continue
             try:
@@ -176,6 +182,7 @@ def fetch_live_week(sheet_id: str, week: int, normalize_team) -> LiveWeekData:
                 continue
         if name:
             picks[name] = teams
+            hidden[name] = n_hidden
     if not any(picks.values()):
         raise EdgeSheetUnavailable(f"'Week {week} live' tab has no picks yet")
-    return LiveWeekData(captured_at=captured, picks=picks)
+    return LiveWeekData(captured_at=captured, picks=picks, hidden=hidden)
