@@ -35,6 +35,8 @@ def _kick(g) -> datetime | None:
 def maybe_notify(cfg, rec: dict | None, games: list[dict], now: datetime | None = None) -> str:
     if not rec or rec.get("week") is None:
         return "no recommendation"
+    if not cfg.ntfy.topic or cfg.ntfy.topic.startswith("CHANGE-ME"):
+        return "ntfy not configured (set the NTFY_TOPIC secret to get pool reminders)"
     now = now or datetime.now(timezone.utc)
     tz = ZoneInfo(cfg.timezone)
     by_id = {g["game_id"]: g for g in games}

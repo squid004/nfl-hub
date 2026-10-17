@@ -166,15 +166,18 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
     revealed_for_game: dict[str, dict[str, str | None]] = {}   # game_id -> {opponent name: team or None}
     for g in games:
         o = wk_odds.get(g["game_id"]) or {}
-        if o.get("ml_home") is None or o.get("ml_away") is None:
-            continue
         try:
             home, away = normalize_team(g["home"]), normalize_team(g["away"])
         except UnknownTeamError:
             continue
         r = rows_by_pair.get((week, home, away), {})
+        # the live odds row loses its moneylines once a game is final; nflverse keeps the closing ones
+        ml_home = o.get("ml_home") if o.get("ml_home") is not None else num(r, "home_moneyline")
+        ml_away = o.get("ml_away") if o.get("ml_away") is not None else num(r, "away_moneyline")
+        if ml_home is None or ml_away is None:
+            continue
         lock_key = r.get("gameday") or str(g.get("kickoff", ""))[:10]
-        pg = pool_mc.PoolGame(g["game_id"], g["home"], g["away"], _american_devig_home(o["ml_home"], o["ml_away"]), lock_key, num(r, "total_line"))
+        pg = pool_mc.PoolGame(g["game_id"], g["home"], g["away"], _american_devig_home(ml_home, ml_away), lock_key, num(r, "total_line"))
         pg.locked = lock_key in first_by_day and first_by_day[lock_key] <= now
         if g.get("state") == "post" and g.get("home_score") is not None and g.get("away_score") is not None \
                 and g["home_score"] != g["away_score"]:
