@@ -32,6 +32,12 @@ def _floats(name: str, default: list[float]) -> list[float]:
 class Supabase:
     url: str
     anon_key: str
+    secret_key: str = ""   # server-side key that bypasses RLS (SUPABASE_SECRET_KEY); never goes in js/. Falls back to anon_key when unset.
+
+    @property
+    def server_key(self) -> str:
+        """The key every server-side call uses: the secret key once it exists, else the anon key (today's behavior)."""
+        return self.secret_key or self.anon_key
 
     @property
     def rest(self) -> str:
@@ -128,6 +134,7 @@ def get_config() -> Config:
         supabase=Supabase(
             url=os.environ.get("SUPABASE_URL", ""),
             anon_key=os.environ.get("SUPABASE_ANON_KEY", ""),
+            secret_key=os.environ.get("SUPABASE_SECRET_KEY", "").strip(),
         ),
         yahoo=YahooCfg(
             league_id=yahoo_league,

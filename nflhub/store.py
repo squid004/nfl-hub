@@ -12,11 +12,26 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from .config import get_config
 
 log = logging.getLogger(__name__)
 TIMEOUT = 20
+
+# Supabase occasionally stalls for >20s (run #2427 on 2026-10-16: two read timeouts failed
+# the whole refresh). Retry transient failures with backoff instead of erroring out.
+# Every write here is an upsert/patch/delete keyed on a PK, so retrying POST is safe.
+_RETRY = Retry(
+    total=3, connect=3, read=3, status=3,
+    backoff_factor=1.5,                      # ~0s, 3s, 6s between attempts
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=frozenset({"GET", "POST", "PATCH", "DELETE"}),
+    raise_on_status=False,                   # let raise_for_status() report the final status
+)
+_session = requests.Session()
+_session.mount("https://", HTTPAdapter(max_retries=_RETRY))
 
 
 def _now() -> str:
@@ -25,11 +40,12 @@ def _now() -> str:
 
 def _headers(prefer: str | None = None) -> dict[str, str]:
     cfg = get_config()
-    if not cfg.supabase.url or not cfg.supabase.anon_key:
-        raise RuntimeError("SUPABASE_URL / SUPABASE_ANON_KEY not set")
+    key = cfg.supabase.server_key
+    if not cfg.supabase.url or not key:
+        raise RuntimeError("SUPABASE_URL / SUPABASE_SECRET_KEY (or SUPABASE_ANON_KEY) not set")
     h = {
-        "apikey": cfg.supabase.anon_key,
-        "Authorization": f"Bearer {cfg.supabase.anon_key}",
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
     if prefer:
@@ -42,14 +58,14 @@ def _url(table: str) -> str:
 
 
 def _get(table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-    r = requests.get(_url(table), headers=_headers(), params=params, timeout=TIMEOUT)
+    r = _session.get(_url(table), headers=_headers(), params=params, timeout=TIMEOUT)
     r.raise_for_status()
     return r.json()
 
 
 def _upsert(table: str, rows: list[dict[str, Any]] | dict[str, Any], on_conflict: str | None = None) -> None:
     params = {"on_conflict": on_conflict} if on_conflict else {}
-    r = requests.post(
+    r = _session.post(
         _url(table),
         headers=_headers("resolution=merge-duplicates,return=minimal"),
         params=params,
@@ -60,20 +76,20 @@ def _upsert(table: str, rows: list[dict[str, Any]] | dict[str, Any], on_conflict
 
 
 def _patch(table: str, params: dict[str, Any], body: dict[str, Any]) -> None:
-    r = requests.patch(
+    r = _session.patch(
         _url(table), headers=_headers("return=minimal"), params=params, json=body, timeout=TIMEOUT
     )
     r.raise_for_status()
 
 
 def _delete(table: str, params: dict[str, Any]) -> None:
-    r = requests.delete(_url(table), headers=_headers("return=minimal"), params=params, timeout=TIMEOUT)
+    r = _session.delete(_url(table), headers=_headers("return=minimal"), params=params, timeout=TIMEOUT)
     r.raise_for_status()
 
 
 def init_db() -> None:
     """Connectivity check; schema itself is applied via supabase/schema.sql."""
-    requests.get(_url("kv"), headers=_headers(), params={"limit": 1}, timeout=TIMEOUT).raise_for_status()
+    _session.get(_url("kv"), headers=_headers(), params={"limit": 1}, timeout=TIMEOUT).raise_for_status()
 
 
 # --- key/value -------------------------------------------------------------
