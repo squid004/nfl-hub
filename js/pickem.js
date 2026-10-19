@@ -1013,7 +1013,7 @@ const Pickem = {
 
   async pick(week, gameId, team, spread) {
     try { await DB.setPickemPick(+week, gameId, team, spread === '' ? null : spread); App.reload(); }
-    catch (e) { alert('Could not save pick: ' + e.message); }
+    catch (e) { Toast.show('Could not save pick: ' + e.message, 'bad'); }
   },
 
   // First click on a locked Moneyline card: record the gut pick (write-once) AND save the
@@ -1023,11 +1023,11 @@ const Pickem = {
       await DB.recordGutPick(gameId, { pick: team, week: +week, season: App._ctx ? App._ctx.season : null, home, away });
       await DB.setPickemPick(+week, gameId, team, spread === '' ? null : spread);
       App.reload();
-    } catch (e) { alert('Could not save pick: ' + e.message); }
+    } catch (e) { Toast.show('Could not save pick: ' + e.message, 'bad'); }
   },
 
   async atspick(week, gameId, team, spread) {
     try { await DB.setAtsPick(+week, gameId, team, spread === '' ? null : spread); App.reload(); }
-    catch (e) { alert('Could not save pick: ' + e.message); }
+    catch (e) { Toast.show('Could not save pick: ' + e.message, 'bad'); }
   },
 };

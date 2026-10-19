@@ -263,3 +263,14 @@ summary { cursor:pointer; }
   #backtest-weekyear { height:340px; }
   .js-plotly-plot .draglayer .drag { touch-action:pan-x pan-y !important; }
 }
+
+/* auth: header control, read-only mode, toasts */
+#auth-box { display:inline-flex; align-items:center; gap:6px; }
+body.read-only button[data-act="pick"],
+body.read-only button[data-act="gutpick"],
+body.read-only button[data-act="atspick"],
+body.read-only button[data-act="refresh"] { opacity:.45; cursor:not-allowed; }
+#toast-host { position:fixed; right:14px; bottom:14px; display:flex; flex-direction:column; gap:8px; z-index:1000; max-width:min(92vw,360px); }
+.toast { padding:9px 12px; border-radius:6px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font-size:.85rem; box-shadow:0 4px 14px rgba(0,0,0,.35); }
+.toast.bad { border-color:var(--bad); }
+.toast.warn { border-color:var(--warn); }

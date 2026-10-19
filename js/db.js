@@ -260,13 +260,19 @@ const DB = {
   },
 
   // --- writes ---
+  // Under row-level security a blocked UPDATE/UPSERT can quietly touch 0 rows with no error, so every
+  // write asks for its rows back (.select()) and treats an empty result as "not allowed".
+  _written({ data, error }, what) {
+    if (error) throw error;
+    if (!data || !data.length) throw new Error(`${what} was not saved -- sign in as the owner`);
+  },
+
   async setPickemPick(week, gameId, team, spread) {
-    const { error } = await this._c().from('pickem_pick')
+    this._written(await this._c().from('pickem_pick')
       .upsert({ week, game_id: gameId, pick: team,
                 spread_at_pick: (spread == null || spread === '') ? null : Number(spread),
                 created_at: new Date().toISOString() },
-              { onConflict: 'week,game_id' });
-    if (error) throw error;
+              { onConflict: 'week,game_id' }).select(), 'Your pick');
   },
 
   // Gut picks: the FIRST team clicked on a Moneyline card while it was still locked (nothing
@@ -283,10 +289,9 @@ const DB = {
     const cur = await this.gutPicks();
     if (cur[gameId]) return;
     cur[gameId] = { ...entry, at: new Date().toISOString() };
-    const { error } = await this._c().from('kv')
+    this._written(await this._c().from('kv')
       .upsert({ key: 'gut_picks', value: JSON.stringify(cur), updated_at: new Date().toISOString() },
-              { onConflict: 'key' });
-    if (error) throw error;
+              { onConflict: 'key' }).select(), 'Your gut pick');
   },
 
   async budgetSnapshot(week) {
@@ -295,24 +300,21 @@ const DB = {
   },
 
   async setAtsPick(week, gameId, team, spread) {
-    const { error } = await this._c().from('ats_pick')
+    this._written(await this._c().from('ats_pick')
       .upsert({ week, game_id: gameId, pick: team,
                 spread_at_pick: spread == null ? null : Number(spread),
                 created_at: new Date().toISOString() },
-              { onConflict: 'week,game_id' });
-    if (error) throw error;
+              { onConflict: 'week,game_id' }).select(), 'Your ATS pick');
   },
 
   async requestRefresh() {
-    const { error } = await this._c().from('refresh_request')
-      .update({ requested_at: new Date().toISOString(), handled_at: null }).eq('id', 1);
-    if (error) throw error;
+    this._written(await this._c().from('refresh_request')
+      .update({ requested_at: new Date().toISOString(), handled_at: null }).eq('id', 1).select(), 'The refresh request');
   },
 
   async edgeSetNationalPct(season, week, team, pct) {
-    const { error } = await this._c().from('edge_national_pct').upsert({
+    this._written(await this._c().from('edge_national_pct').upsert({
       season, week, team, pct, source: 'manual', fetched_at: new Date().toISOString(), is_stale: false,
-    }, { onConflict: 'season,week,team,source' });
-    if (error) throw error;
+    }, { onConflict: 'season,week,team,source' }).select(), 'The national pick %');
   },
 };

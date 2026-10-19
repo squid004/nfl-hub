@@ -46,11 +46,14 @@ const App = {
 
   async init() {
     DB.init();
+    Auth.init();
     Tabs.init();
     KeepDetailsOpen.init();
     document.body.addEventListener('click', e => {
       const b = e.target.closest('button[data-act]');
       if (!b) return;
+      // every click that writes goes through the owner guard (a cosmetic layer; the database enforces it)
+      if (['pick', 'gutpick', 'atspick', 'refresh'].includes(b.dataset.act) && !Auth.guard()) return;
       if (b.dataset.act === 'pick') Pickem.pick(b.dataset.week, b.dataset.game, b.dataset.team, b.dataset.spread);
       if (b.dataset.act === 'gutpick') Pickem.gutpick(b.dataset.week, b.dataset.game, b.dataset.team, b.dataset.spread, b.dataset.home, b.dataset.away);
       if (b.dataset.act === 'atspick') Pickem.atspick(b.dataset.week, b.dataset.game, b.dataset.team, b.dataset.spread);
@@ -258,7 +261,7 @@ const App = {
       document.getElementById('status').textContent =
         'Refresh queued — the updater runs within ~10 min. This page auto-updates.';
     } catch (e) {
-      alert('Could not queue refresh: ' + e.message);
+      Toast.show('Could not queue refresh: ' + e.message, 'bad');
     }
   },
 };
