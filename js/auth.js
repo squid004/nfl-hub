@@ -10,7 +10,7 @@
 // from the owner. Flip it to true (and bump the ?v= stamp) once you can sign in, BEFORE running
 // supabase/auth.sql.
 const Auth = {
-  ENFORCE: false,
+  ENFORCE: true,
   session: null,
   isOwner: false,
 
