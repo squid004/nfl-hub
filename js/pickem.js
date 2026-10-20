@@ -646,8 +646,8 @@ const Pickem = {
           <p class="tablefoot muted"><span class="pick-fav">Green</span> in the matchup =
             the favorite is the suggested pick; <span class="pick-dog">yellow</span> = the
             dog is — the pool optimizer's pick when it has run this week, otherwise
-            the upset-budget flag. The <strong>Pool optimizer</strong> chip shows its pick and what
-            that pick is worth in dollars versus the other side (rest of the card held fixed). ELWAY is Nate Silver's Silver Bulletin NFL forecasting
+            the upset-budget flag. The <strong>Pool optimizer</strong> chip shows its pick and its
+            impact: how much the simulated weekly win chance drops if only that pick is switched. ELWAY is Nate Silver's Silver Bulletin NFL forecasting
             model, transcribed weekly into a Google Sheet — not a personal formula.
             <span class="chip warn">ELWAY underdog</span> = ELWAY's model favors the OTHER
             team entirely, not just by a smaller or larger margin than the market;
