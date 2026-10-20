@@ -2653,6 +2653,28 @@ def compute_calibration_stats(scatter: list[dict]) -> dict | None:
     }
 
 
+def _nflverse_unchanged(store, date_key: str, played_key: str, checked_key: str, today: str, force: bool) -> bool:
+    """True if this daily rebuild can be skipped: it already ran today AND nflverse has no new completed games since.
+    A plain once-per-UTC-day gate (which flips at 8pm ET) used to lock in ratings built before Monday night's play-by-play
+    was published, leaving next week's ratings a game stale for a day. games.csv is re-checked at most every 20 minutes."""
+    if force or store.kv_get(date_key) != today:
+        return False
+    last = store.kv_get(checked_key)
+    now = datetime.now(timezone.utc)
+    if last:
+        try:
+            if (now - datetime.fromisoformat(last)).total_seconds() < 20 * 60:
+                return True
+        except ValueError:
+            pass
+    resp = requests.get(GAMES_URL, timeout=TIMEOUT)
+    resp.raise_for_status()
+    n = sum(1 for r in csv.DictReader(io.StringIO(resp.text))
+            if r["game_type"] == "REG" and r.get("result") not in ("", "NA", None) and int(r["season"]) >= FIRST_SEASON)
+    store.kv_set(checked_key, now.isoformat())
+    return str(n) == store.kv_get(played_key)
+
+
 def refresh_historical(store, force: bool = False) -> str:
     """Rebuild the full historical (every completed season, pooled) power rankings dataset.
     Cheap after the first run -- every completed season's play-by-play (and passer-game
@@ -2663,7 +2685,7 @@ def refresh_historical(store, force: bool = False) -> str:
     cadence as refresh() above), since completed seasons' data never changes except once a
     year at season end."""
     today = date.today().isoformat()
-    if not force and store.kv_get("historical_power_date") == today:
+    if _nflverse_unchanged(store, "historical_power_date", "historical_power_played_n", "historical_power_checked_at", today, force):
         return "cached"
 
     from . import nfl_schedule  # local import: avoid a hard dependency for callers that don't need it
@@ -2709,6 +2731,7 @@ def refresh_historical(store, force: bool = False) -> str:
         "walkforward": walkforward_summary,
     }))
     store.kv_set("historical_power_date", today)
+    store.kv_set("historical_power_played_n", str(len(played)))
     return (
         f"built ({len(rankings)} team-seasons, "
         f"{seasons_covered[0] if seasons_covered else '?'}-{seasons_covered[-1] if seasons_covered else '?'}, "
@@ -3077,7 +3100,7 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
     for the game-card QB chip earlier in the same run -- re-fetched here only for a
     standalone/test call that doesn't have it."""
     today = date.today().isoformat()
-    if not force and store.kv_get("team_ratings_date") == today:
+    if _nflverse_unchanged(store, "team_ratings_date", "team_ratings_played_n", "team_ratings_checked_at", today, force):
         return "cached"
 
     from . import nfl_schedule  # local import: avoid a hard dependency for callers that don't need it
@@ -3243,4 +3266,5 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
         "healthy": fantasy_healthy_week,
     }))
     store.kv_set("team_ratings_date", today)
+    store.kv_set("team_ratings_played_n", str(len(played)))
     return f"built ({len(ratings)} teams, {len(matchups)} upcoming matchups, through {current_season} wk {current_week})"

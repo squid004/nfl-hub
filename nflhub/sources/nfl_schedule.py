@@ -29,11 +29,20 @@ def _iso_utc(s: str) -> str:
     return dt.astimezone(timezone.utc).isoformat()
 
 
+REG_SEASON_WEEKS = 18
+
+
 def current_week() -> tuple[int, int]:
     """Return (season_year, week_number) for the current NFL week."""
     data = _get("scoreboard")
     season = int(data.get("season", {}).get("year") or datetime.now().year)
     week = int(data.get("week", {}).get("number") or 1)
+    # ESPN keeps reporting the old week until Wednesday-ish. Roll forward ourselves the moment every game of the
+    # current week is final (Monday night over), so next week's schedule, odds and pool can be looked at right away.
+    events = data.get("events") or []
+    if (events and week < REG_SEASON_WEEKS
+            and all(((e.get("status") or {}).get("type") or {}).get("state") == "post" for e in events)):
+        week += 1
     return season, week
 
 

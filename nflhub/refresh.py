@@ -574,18 +574,24 @@ def _apply_edge_leaderboard(season: int) -> str:
     """Rebuild edge_core.pool_leaderboard_summary from this season's opponent picks +
     nflverse's own closing spreads/results (not the live `odds` table, which nulls out a
     game's spread once it's final -- same reason history.py/team_ratings.py use nflverse for
-    anything historical). At most once/day, like hist_distribution."""
-    today = date.today().isoformat()
-    # A blob from an older pool_leaderboard_summary() shape is rebuilt now, not tomorrow, or the
-    # frontend reminder renders nothing until the date gate rolls over.
+    anything historical). Rebuilt at most hourly, or immediately when the stored picks change (a new week's
+    tab arrived) -- a once-a-day gate left the chart a day behind whenever the picks landed after that day's
+    build or nflverse published results later."""
     cached = store.kv_get("edge_pool_leaderboard")
-    if (store.kv_get("edge_leaderboard_date") == today and cached
-            and json.loads(cached).get("schema_version") == edge_core.LEADERBOARD_SCHEMA_VERSION):
-        return "cached"
-
     picks = [p for p in store.edge_all_opponent_picks() if p.get("season") == season]
     if not picks:
         return "no picks yet"
+    fresh = False
+    try:
+        built_at = datetime.fromisoformat(store.kv_get("edge_leaderboard_at") or "")
+        fresh = (datetime.now(timezone.utc) - built_at).total_seconds() < 3600
+    except ValueError:
+        pass
+    # A blob from an older pool_leaderboard_summary() shape is rebuilt now, not later, or the
+    # frontend reminder renders nothing until the gate rolls over.
+    if (fresh and store.kv_get("edge_leaderboard_picks_n") == str(len(picks)) and cached
+            and json.loads(cached).get("schema_version") == edge_core.LEADERBOARD_SCHEMA_VERSION):
+        return "cached"
 
     rows = history.fetch_games()
     results: dict[tuple[int, str], dict[str, bool]] = {}
@@ -611,7 +617,8 @@ def _apply_edge_leaderboard(season: int) -> str:
 
     summary = edge_core.pool_leaderboard_summary(picks, results)
     store.kv_set("edge_pool_leaderboard", json.dumps(summary))
-    store.kv_set("edge_leaderboard_date", today)
+    store.kv_set("edge_leaderboard_at", datetime.now(timezone.utc).isoformat())
+    store.kv_set("edge_leaderboard_picks_n", str(len(picks)))
     leaders = summary.get("season_leaders") or {}
     return f"built ({len(picks)} picks, leader(s) {leaders.get('names')} at {leaders.get('correct')})"
 
