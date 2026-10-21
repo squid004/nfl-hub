@@ -397,17 +397,70 @@ function powerModelBreakdownHtml(matchup, home, away) {
   </table>`;
 }
 
+// Scores any selection against the week's stored simulation (kv pool_sim), live in the page, with the same rule the engine
+// uses: more correct than the best opponent wins; tied at the top is decided by the closest tiebreak guess (split if equal).
+const PoolSim = {
+  _decoded: null,
+  _bytes(b64) { const s = atob(b64); const a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; },
+  decode(sim) {
+    if (!sim) return null;
+    if (this._decoded && this._decoded.generated === sim.generated) return this._decoded;
+    const d = { generated: sim.generated, n: sim.n, games: sim.games, home: sim.home, fav: sim.fav, locked: sim.locked,
+      bpr: sim.bytes_per_row, out: this._bytes(sim.outcomes), maxOpp: this._bytes(sim.max_opp), dmin: this._bytes(sim.dmin),
+      kmin: this._bytes(sim.kmin), total: this._bytes(sim.total) };
+    this._decoded = d;
+    return d;
+  },
+  // picks = {game_id: {pick}} (in-app picks). Open games without a pick count as the favorite (and are counted in `unpicked`);
+  // a locked game without a pick scores nothing. Returns { pWin, unpicked } or null if the simulation isn't available.
+  winChance(sim, picks, guess) {
+    const d = this.decode(sim);
+    if (!d) return null;
+    const G = d.games.length;
+    const homePick = new Int8Array(G);          // 1 = picked home, 0 = picked away, -1 = no pick (scores nothing)
+    let unpicked = 0;
+    for (let g = 0; g < G; g++) {
+      const p = (picks[d.games[g]] || {}).pick;
+      if (p) homePick[g] = p === d.home[g] ? 1 : 0;
+      else if (d.locked[g]) homePick[g] = -1;
+      else { homePick[g] = d.fav[g] === d.home[g] ? 1 : 0; unpicked++; }
+    }
+    let win = 0;
+    for (let i = 0; i < d.n; i++) {
+      let c = 0;
+      const base = i * d.bpr;
+      for (let g = 0; g < G; g++) {
+        if (homePick[g] < 0) continue;
+        const homeWon = (d.out[base + (g >> 3)] >> (7 - (g & 7))) & 1;
+        if (homeWon === homePick[g]) c++;
+      }
+      const mx = d.maxOpp[i];
+      if (c > mx) win += 1;
+      else if (c === mx) {
+        const dist = Math.abs(guess - d.total[i]);
+        if (dist < d.dmin[i]) win += 1;
+        else if (dist === d.dmin[i]) win += 1 / (d.kmin[i] + 1);
+      }
+    }
+    return { pWin: win / d.n, unpicked };
+  },
+};
+
 // Summary line for the pool optimizer (nflhub/sources/pool_recommend.py): win chance, dollars, tiebreaker.
-function poolOptimizerSummaryHtml(rec) {
+function poolOptimizerSummaryHtml(rec, picks, simPayload) {
   const pct = v => (100 * v).toFixed(1) + '%';
   const af = rec.all_favorites || {};
   const ups = Object.values(rec.games || {}).filter(g => g.contrarian && !g.locked);
   const nLocked = Object.values(rec.games || {}).filter(g => g.locked).length;
-  const cbs = rec.cbs || {};
-  const flags = Object.values(rec.games || {}).filter(g => g.flag).length;
-  const cbsNote = !cbs.available
-    ? `<span class="result-bad">CBS picks not loaded</span> (no "Week ${rec.week} live" tab) &mdash; your picks are from this app, unverified.`
-    : `${cbs.entrants_matched != null && cbs.entrants_matched < cbs.entrants ? `<span class="result-bad">Only ${cbs.entrants_matched} of ${cbs.entrants} entrants matched by name between the sheet and CBS.</span> ` : ''}CBS picks as of ${cbs.captured_at ? new Date(cbs.captured_at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'an unknown time'}${flags ? `; <span class="result-bad">${flags} pick${flags === 1 ? '' : 's'} differ between this app and CBS</span>` : '; no differences with this app'}.`;
+  // CBS status: compare the CBS picks (from the last live-tab/CBS read) with the picks currently saved in this app.
+  const recGames = Object.entries(rec.games || {});
+  const cbsCount = recGames.filter(([, g]) => g.cbs_pick).length;
+  const mismatched = recGames.filter(([gid, g]) => ((picks[gid] || {}).pick || null) !== (g.cbs_pick || null)).length;
+  const cbsNote = cbsCount === 0
+    ? '<span class="result-bad"><strong>CBS Picks Empty</strong></span>'
+    : mismatched
+    ? '<span class="chip warn" style="padding:1px 8px;"><strong>CBS Picks do not match</strong></span>'
+    : '<span class="result-good"><strong>CBS Picks Match</strong></span>';
   const gen = rec.generated ? new Date(rec.generated).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
   // Who can reach the top score, how often they'd be tied with you there, and their Monday-night tiebreak habits.
   const cont = rec.contenders || [];
@@ -420,22 +473,25 @@ function poolOptimizerSummaryHtml(rec) {
           <td>${c.tiebreak_revealed != null ? `guessed <strong>${c.tiebreak_revealed}</strong>` : esc(c.tiebreak_habit)}</td></tr>`).join('')}
       </tbody></table>
       <div class="muted small">An entrant who repeats the same number most weeks is simulated repeating it. Names are shortened.</div></details>` : '';
-  const sel = rec.selection;
+  const guess = (rec.selection && rec.selection.tiebreak_used != null) ? rec.selection.tiebreak_used : rec.tiebreak_guess;
+  const live = PoolSim.winChance(simPayload, picks, guess);
+  const sel = live ? { p_win: live.pWin, unpicked: live.unpicked } : rec.selection;
   const gain = 100 * (rec.p_win - (af.p_win || 0));
   const info = `20,000 simulated weeks from the market odds and this pool's pick tendencies (${rec.inputs.entrants} entrants, ${rec.inputs.history_weeks.length} weeks of history). Optimizes this week's win chance only; the season pot is not considered. Each game's impact is how much the win chance drops if only that pick is switched.${nLocked ? ' Locked games keep your saved pick and their result; only the open games and the tiebreaker are re-optimized.' : ''}`;
   return `<div class="pool-optimizer" style="margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);">
     <div title="${esc(info)}"><strong>Pool optimizer</strong> &mdash; recommended card wins the week <strong>${pct(rec.p_win)}</strong> of the time
       <span title="Gain over always taking the favorite (${pct(af.p_win || 0)})">(${gain >= 0 ? '+' : ''}${gain.toFixed(1)}%)</span>.</div>
     <div style="margin-top:8px;">${ups.length ? `${ups.length} upset pick${ups.length === 1 ? '' : 's'}: ${ups.map(g => {
-        // green = you've selected this team; red = you've selected the opponent; plain = no selection yet
-        const mine = g.cbs_pick || g.app_pick;
+        // green = you've selected this team; red = you've selected the opponent; plain = no selection yet (in-app picks, live)
+        const gid = Object.keys(rec.games).find(k => rec.games[k] === g);
+        const mine = (picks[gid] || {}).pick;
         const cls = !mine ? '' : (mine === g.pick ? 'result-good' : 'result-bad');
         return `<span class="${cls}" title="${mine ? (mine === g.pick ? 'You have this pick' : 'You have ' + esc(mine) + ' instead') : 'No selection yet'}"><strong>${esc(g.pick)}</strong></span>`;
       }).join(', ')}.` : 'No upset picks.'}
       Tiebreaker guess: <strong>${rec.tiebreak_guess}</strong>.</div>
     ${sel ? `<div style="margin-top:8px;">Current selection provides <strong>${pct(sel.p_win)}</strong> win.${sel.unpicked ? ` <span class="muted small">(${sel.unpicked} unpicked game${sel.unpicked === 1 ? '' : 's'} counted as the favorite)</span>` : ''}</div>` : ''}
     ${contHtml}
-    <div class="muted small" style="margin-top:8px;">Updated ${gen}. ${cbsNote}</div>
+    <div style="margin-top:8px;" title="Updated ${esc(gen)}">${cbsNote}</div>
   </div>`;
 }
 
@@ -670,7 +726,7 @@ const Pickem = {
       <div class="panel">
         <h2>${M.title} &mdash; ${made}/${games.length} made
           &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
-        ${poolRecWeek ? poolOptimizerSummaryHtml(poolRecWeek) : ''}
+        ${poolRecWeek ? poolOptimizerSummaryHtml(poolRecWeek, picks, ctx.poolSim) : ''}
         <div class="game-card-grid">${cards}</div>
         <details>
           <summary class="muted small">Chip legend</summary>
@@ -1044,8 +1100,16 @@ const Pickem = {
   },
 
   async pick(week, gameId, team, spread) {
-    try { await DB.setPickemPick(+week, gameId, team, spread === '' ? null : spread); App.reload(); }
-    catch (e) { Toast.show('Could not save pick: ' + e.message, 'bad'); }
+    try {
+      await DB.setPickemPick(+week, gameId, team, spread === '' ? null : spread);
+      // show the new selection (card colours, win chance, CBS status) right away; the reload then confirms it from the database
+      const ctx = App._ctx;
+      if (ctx && ctx.week === +week) {
+        ctx.pPicks = { ...(ctx.pPicks || {}), [gameId]: { ...((ctx.pPicks || {})[gameId] || {}), week: +week, game_id: gameId, pick: team } };
+        Pickem.render(ctx, 'ml');
+      }
+      App.reload(true);
+    } catch (e) { Toast.show('Could not save pick: ' + e.message, 'bad'); }
   },
 
   // First click on a locked Moneyline card: record the gut pick (write-once) AND save the
@@ -1054,7 +1118,12 @@ const Pickem = {
     try {
       await DB.recordGutPick(gameId, { pick: team, week: +week, season: App._ctx ? App._ctx.season : null, home, away });
       await DB.setPickemPick(+week, gameId, team, spread === '' ? null : spread);
-      App.reload();
+      const ctx = App._ctx;
+      if (ctx && ctx.week === +week) {
+        ctx.pPicks = { ...(ctx.pPicks || {}), [gameId]: { ...((ctx.pPicks || {})[gameId] || {}), week: +week, game_id: gameId, pick: team } };
+        Pickem.render(ctx, 'ml');
+      }
+      App.reload(true);
     } catch (e) { Toast.show('Could not save pick: ' + e.message, 'bad'); }
   },
 

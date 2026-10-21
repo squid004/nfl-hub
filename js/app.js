@@ -105,7 +105,7 @@ const App = {
       const [games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks, refreshReq, lastRefresh, hist, bSnap,
              edgeLog, edgeBias, edgeLeaderboard, injuries, spreadHist, elwayQb1,
              teamRatingsLive, qbDepthChart, parlaySnapshotLive, historicalPower, weeklyPowerRankings, liveGames, elwayScoreHistory,
-             pipelineHealth, gutPicks, prospectiveLog, poolRec] =
+             pipelineHealth, gutPicks, prospectiveLog, poolRec, poolSim] =
         await Promise.all([
           DB.weekGames(viewWeek), DB.weekOdds(viewWeek), DB.bestPriceOdds(viewWeek), DB.bookOdds(viewWeek), DB.elwayOdds(viewWeek),
           DB.latestRoster('yahoo'), DB.latestRoster('espn'),
@@ -115,7 +115,7 @@ const App = {
           DB.injuries(), DB.spreadHistory(viewWeek), DB.elwayQb1(),
           DB.teamRatings(), DB.qbDepthChart(), DB.parlayRatingsSnapshot(), DB.historicalPower(),
           DB.weeklyPowerRankings(), isPast ? DB.weekGames(liveWeek) : Promise.resolve(null), DB.elwayScoreHistory(),
-          DB.pipelineHealth(), DB.gutPicks(), DB.prospectiveLog(), DB.poolRecommendation(),
+          DB.pipelineHealth(), DB.gutPicks(), DB.prospectiveLog(), DB.poolRecommendation(), DB.poolSim(),
         ]);
 
       // Power Rankings/Parlays: a browsed PAST week reads its own permanently-frozen
@@ -150,7 +150,7 @@ const App = {
                     refreshReq, lastRefresh, hist, bSnap,
                     edgeLog, edgeBias, edgeLeaderboard,
                     injuries, spreadHist, elwayQb1, teamRatings, qbDepthChart, parlaySnapshot, historicalPower, elwayScoreHistory,
-                    pipelineHealth, gutPicks, prospectiveLog, poolRec };
+                    pipelineHealth, gutPicks, prospectiveLog, poolRec, poolSim };
       this._ctx = ctx;
       this._renderWeekSelect(liveWeek, viewWeek);
       // Deadlines always reflects the REAL current week/games, never the browsed one -- a

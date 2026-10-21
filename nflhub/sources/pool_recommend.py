@@ -74,6 +74,25 @@ def _fetch_history(sheet_id: str, week: int) -> dict[int, dict[str, Any]]:
     return out
 
 
+def _sim_payload(sim, pgs) -> dict:
+    """The week's simulation in a compact form (base64 byte arrays) so the page can score ANY card against it live: per simulated
+    week, which side won each game (bit-packed), the best opponent score, and who would win a tie at the top (closest tiebreak
+    distance among the tied opponents and how many are tied at that distance). The page applies the same rule the engine does."""
+    import base64
+    import numpy as np
+    b64 = lambda a: base64.b64encode(np.ascontiguousarray(a).tobytes()).decode()  # noqa: E731
+    return {
+        "n": int(sim.n), "games": [g.game_id for g in pgs], "home": [g.home for g in pgs], "fav": [g.fav for g in pgs],
+        "locked": [bool(g.locked) for g in pgs],
+        "bytes_per_row": int(np.packbits(sim.out_home[:1].astype(np.uint8), axis=1).shape[1]),
+        "outcomes": b64(np.packbits(sim.out_home.astype(np.uint8), axis=1)),
+        "max_opp": b64(np.minimum(sim.max_opp, 255).astype(np.uint8)),
+        "dmin": b64(np.minimum(np.nan_to_num(sim.dmin, posinf=255), 255).astype(np.uint8)),
+        "kmin": b64(np.minimum(sim.kmin, 255).astype(np.uint8)),
+        "total": b64(np.clip(sim.total, 0, 255).astype(np.uint8)),
+    }
+
+
 def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dict[str, Any], nfl_rows: list[dict[str, str]],
           n_sims: int = pool_mc.N_SIMS) -> dict | None:
     """Returns the recommendation dict, or None (with a reason via the second return of `reason`) if it can't run."""
@@ -254,15 +273,16 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
     allfav = {g.game_id: g.fav for g in pgs}
     base = pool_mc.evaluate_card(pgs, opponents, me, allfav, round(res.guess), n=n_sims)
 
-    # Win chance of the user's CURRENT selection (the CBS pick when known, else the in-app pick). Open games with no pick yet
-    # are counted as the market favorite, and said so; locked games use the user's actual (or no) pick. Same simulation as above.
+    # Win chance of the user's CURRENT selection = the IN-APP picks only (CBS picks are never used for this; the page compares the two
+    # separately). Open games with no pick yet are counted as the market favorite, and said so. The page recomputes this live as picks
+    # change, from the simulation shipped in kv `pool_sim`; this stored value is the fallback.
     sel_card: dict[str, str | None] = {}
     unpicked = 0
     for g in pgs:
         info = pick_info.get(g.game_id, {})
-        pick = info.get("cbs_pick") or info.get("app_pick")
+        pick = info.get("app_pick")
         if g.locked:
-            sel_card[g.game_id] = me.picks.get(g.game_id)
+            sel_card[g.game_id] = pick
         elif pick:
             sel_card[g.game_id] = pick
         else:
@@ -308,7 +328,9 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
             "tiebreak_habit": habit_text(habits.get(opp.name) or {}), "favorite_number": (habits.get(opp.name) or {}).get("mode"),
             "tiebreak_revealed": opp.tiebreak,
         })
+    simulation = _sim_payload(res.sim, pgs) if res.sim is not None else None
     return {
+        "_sim": simulation,
         "schema": SCHEMA_VERSION, "contenders": contenders, "season": season, "week": week, "generated": datetime.now(timezone.utc).isoformat(),
         "n_sims": n_sims,
         "p_win": round(res.p_win, 4),
@@ -355,6 +377,9 @@ def refresh(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: d
     except RuntimeError as exc:
         return f"skipped ({exc})"
     rec["sig"] = sig
+    simulation = rec.pop("_sim", None)
+    if simulation is not None:
+        store.kv_set("pool_sim", json.dumps({"season": season, "week": week, "generated": rec["generated"], **simulation}))
     # Freeze what was displayed before each game locked: the first run that finds a game locked keeps the previous run's
     # (pre-kickoff) pick and impact for it, so the card can show it and grade it red/green like ELWAY/History/Power Model.
     frozen: dict[str, Any] = dict(stored.get("frozen", {})) if same_week else {}

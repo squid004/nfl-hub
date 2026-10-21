@@ -143,6 +143,7 @@ class Result:
     steps: list[dict]                 # flips applied, in order
     per_game: dict[str, dict]
     contenders: list[dict] = field(default_factory=list)   # opponents with a real chance at the top score: {j, p_top, p_tie_me}
+    sim: object = None                # the Sim behind these numbers (the page re-uses it to score any card live)
 
 
 class Sim:
@@ -280,7 +281,7 @@ def optimize(games: list[PoolGame], opponents: list[Entrant], me: Entrant, *, n:
     contenders = [{"j": int(j), "p_top": float(p_top[j]), "p_tie_me": float(p_tie[j])}
                   for j in np.argsort(-p_top)[:8] if p_top[j] >= 0.02]
     return Result(card={g.game_id: (g.home if side[i] else g.away) for i, g in enumerate(games)}, guess=int(guess), p_win=float(pw),
-                  expected_correct=float(ec), ev=float(ev), steps=steps, per_game=per_game, contenders=contenders)
+                  expected_correct=float(ec), ev=float(ev), steps=steps, per_game=per_game, contenders=contenders, sim=sim)
 
 
 def evaluate_card(games: list[PoolGame], opponents: list[Entrant], me: Entrant, card: dict[str, str], guess: float, *,

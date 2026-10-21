@@ -231,6 +231,14 @@ const DB = {
     try { return JSON.parse(raw); } catch { return null; }
   },
 
+  // The week's pool simulation in compact form (nflhub/sources/pool_recommend._sim_payload): the page re-uses it to score any
+  // selection live. Cached by updated_at like the other big blobs.
+  async poolSim() {
+    const row = await this._kvRow('pool_sim');
+    if (!row || !row.value) return null;
+    try { return JSON.parse(row.value); } catch { return null; }
+  },
+
   // {game_id: {season, week, home, away, gameday, delta, p_home, spread_line, ml_home, ml_away}} --
   // the model's pre-kickoff prediction and the market line at that moment, append-only (never
   // rebuilt on a model refit; written by team_ratings._log_prospective). The 2026 holdout.
