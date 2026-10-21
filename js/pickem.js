@@ -461,6 +461,8 @@ function poolOptimizerSummaryHtml(rec, picks, simPayload) {
     : mismatched
     ? '<span class="chip warn" style="padding:1px 8px;"><strong>CBS Picks do not match</strong></span>'
     : '<span class="result-good"><strong>CBS Picks Match</strong></span>';
+  // Open games where the saved pick differs from the optimizer's: the teams taken instead of the recommendation.
+  const instead = recGames.filter(([gid, g]) => !g.locked && (picks[gid] || {}).pick && picks[gid].pick !== g.pick).map(([gid]) => esc(picks[gid].pick));
   const gen = rec.generated ? new Date(rec.generated).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
   // Who can reach the top score, how often they'd be tied with you there, and their Monday-night tiebreak habits.
   const cont = rec.contenders || [];
@@ -489,7 +491,7 @@ function poolOptimizerSummaryHtml(rec, picks, simPayload) {
         return `<span class="${cls}" title="${mine ? (mine === g.pick ? 'You have this pick' : 'You have ' + esc(mine) + ' instead') : 'No selection yet'}"><strong>${esc(g.pick)}</strong></span>`;
       }).join(', ')}.` : 'No upset picks.'}
       Tiebreaker guess: <strong>${rec.tiebreak_guess}</strong>.</div>
-    ${sel ? `<div style="margin-top:8px;">Current selection provides <strong>${pct(sel.p_win)}</strong> win.${sel.unpicked ? ` <span class="muted small">(${sel.unpicked} unpicked game${sel.unpicked === 1 ? '' : 's'} counted as the favorite)</span>` : ''}</div>` : ''}
+    ${sel ? `<div style="margin-top:8px;">Current selection provides <strong>${pct(sel.p_win)}</strong> win${instead.length ? ` (${instead.join(', ')})` : ''}.${sel.unpicked ? ` <span class="muted small">(${sel.unpicked} unpicked game${sel.unpicked === 1 ? '' : 's'} counted as the favorite)</span>` : ''}</div>` : ''}
     ${contHtml}
     <div style="margin-top:8px;" title="Updated ${esc(gen)}">${cbsNote}</div>
   </div>`;
