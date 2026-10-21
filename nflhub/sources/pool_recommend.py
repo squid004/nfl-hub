@@ -254,6 +254,23 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
     allfav = {g.game_id: g.fav for g in pgs}
     base = pool_mc.evaluate_card(pgs, opponents, me, allfav, round(res.guess), n=n_sims)
 
+    # Win chance of the user's CURRENT selection (the CBS pick when known, else the in-app pick). Open games with no pick yet
+    # are counted as the market favorite, and said so; locked games use the user's actual (or no) pick. Same simulation as above.
+    sel_card: dict[str, str | None] = {}
+    unpicked = 0
+    for g in pgs:
+        info = pick_info.get(g.game_id, {})
+        pick = info.get("cbs_pick") or info.get("app_pick")
+        if g.locked:
+            sel_card[g.game_id] = me.picks.get(g.game_id)
+        elif pick:
+            sel_card[g.game_id] = pick
+        else:
+            sel_card[g.game_id] = g.fav
+            unpicked += 1
+    my_tb = live_tb_by_key.get(_norm(me_name))
+    sel = pool_mc.evaluate_card(pgs, opponents, me, sel_card, my_tb if my_tb is not None else round(res.guess), n=n_sims)
+
     # the pool's tiebreaker game: the last game of the week with a posted total (the rule the simulation uses)
     tb_idx = max(((g.lock_key, i) for i, g in enumerate(pgs) if g.total_line is not None), default=None)
     tb_game = pgs[tb_idx[1]] if tb_idx else None
@@ -298,6 +315,8 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
         "expected_correct": round(res.expected_correct, 2), "tiebreak_guess": int(round(res.guess)),
         "tiebreak_game_id": tb_game.game_id if tb_game else None,
         "tiebreak_posted_total": tb_game.total_line if tb_game else None,
+        "selection": {"p_win": round(sel["p_win"], 4), "unpicked": unpicked,
+                      "tiebreak_used": my_tb if my_tb is not None else int(round(res.guess))},
         "all_favorites": {"p_win": round(base["p_win"], 4),
                           "expected_correct": round(base["expected_correct"], 2)},
         "contrarian_picks": sum(1 for v in out_games.values() if v["contrarian"] and not v["locked"]),

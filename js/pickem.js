@@ -406,7 +406,7 @@ function poolOptimizerSummaryHtml(rec) {
   const cbs = rec.cbs || {};
   const flags = Object.values(rec.games || {}).filter(g => g.flag).length;
   const cbsNote = !cbs.available
-    ? `<span class="result-bad">CBS picks not loaded</span> (no "Week ${rec.week} live" tab) &mdash; ${nLocked ? `your ${cbs.unverified_locked || nLocked} locked pick${(cbs.unverified_locked || nLocked) === 1 ? '' : 's'} are taken from this app, unverified, and the field's picks are predicted` : 'your picks are from this app, unverified'}.`
+    ? `<span class="result-bad">CBS picks not loaded</span> (no "Week ${rec.week} live" tab) &mdash; your picks are from this app, unverified.`
     : `${cbs.entrants_matched != null && cbs.entrants_matched < cbs.entrants ? `<span class="result-bad">Only ${cbs.entrants_matched} of ${cbs.entrants} entrants matched by name between the sheet and CBS.</span> ` : ''}CBS picks as of ${cbs.captured_at ? new Date(cbs.captured_at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'an unknown time'}${flags ? `; <span class="result-bad">${flags} pick${flags === 1 ? '' : 's'} differ between this app and CBS</span>` : '; no differences with this app'}.`;
   const gen = rec.generated ? new Date(rec.generated).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
   // Who can reach the top score, how often they'd be tied with you there, and their Monday-night tiebreak habits.
@@ -420,15 +420,17 @@ function poolOptimizerSummaryHtml(rec) {
           <td>${c.tiebreak_revealed != null ? `guessed <strong>${c.tiebreak_revealed}</strong>` : esc(c.tiebreak_habit)}</td></tr>`).join('')}
       </tbody></table>
       <div class="muted small">An entrant who repeats the same number most weeks is simulated repeating it. Names are shortened.</div></details>` : '';
+  const sel = rec.selection;
+  const gain = 100 * (rec.p_win - (af.p_win || 0));
+  const info = `20,000 simulated weeks from the market odds and this pool's pick tendencies (${rec.inputs.entrants} entrants, ${rec.inputs.history_weeks.length} weeks of history). Optimizes this week's win chance only; the season pot is not considered. Each game's impact is how much the win chance drops if only that pick is switched.${nLocked ? ' Locked games keep your saved pick and their result; only the open games and the tiebreaker are re-optimized.' : ''}`;
   return `<div class="pool-optimizer" style="margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);">
-    <div><strong>Pool optimizer</strong> &mdash; ${nLocked ? `with ${nLocked} game${nLocked === 1 ? '' : 's'} already locked, the` : 'the'} recommended card wins the week
-      <strong>${pct(rec.p_win)}</strong> of the time (always taking the favorite: ${pct(af.p_win || 0)}).
-      ${ups.length ? `${ups.length} upset pick${ups.length === 1 ? '' : 's'}: ${ups.map(g => g.pick).join(', ')}.` : 'No upset picks this week.'}
+    <div title="${esc(info)}"><strong>Pool optimizer</strong> &mdash; recommended card wins the week <strong>${pct(rec.p_win)}</strong> of the time
+      <span title="Gain over always taking the favorite (${pct(af.p_win || 0)})">(${gain >= 0 ? '+' : ''}${gain.toFixed(1)}%)</span>.</div>
+    <div style="margin-top:8px;">${ups.length ? `${ups.length} upset pick${ups.length === 1 ? '' : 's'}: ${ups.map(g => esc(g.pick)).join(', ')}.` : 'No upset picks.'}
       Tiebreaker guess: <strong>${rec.tiebreak_guess}</strong>.</div>
+    ${sel ? `<div style="margin-top:8px;">Current selection provides <strong>${pct(sel.p_win)}</strong> win.${sel.unpicked ? ` <span class="muted small">(${sel.unpicked} unpicked game${sel.unpicked === 1 ? '' : 's'} counted as the favorite)</span>` : ''}</div>` : ''}
     ${contHtml}
-    <div class="muted small" style="margin-top:4px;">20,000 simulated weeks from the market odds and this pool's pick tendencies
-      (${rec.inputs.entrants} entrants, ${rec.inputs.history_weeks.length} weeks of history). Optimizes this week's win chance only; the
-      season pot is not considered. Each game's impact is how much the win chance drops if only that pick is switched. Updated ${gen}. ${cbsNote}${nLocked ? ' Locked games keep your saved pick and their result; only the open games and the tiebreaker are re-optimized.' : ''}</div>
+    <div class="muted small" style="margin-top:8px;">Updated ${gen}. ${cbsNote}</div>
   </div>`;
 }
 
@@ -591,6 +593,7 @@ const Pickem = {
           ${stateChip}
           ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY underdog</span>` : ''}
           ${squidFlip ? `<span class="chip warn" title="The Power Model favors the OTHER team entirely, not just by a smaller or larger margin">Squid Underdog</span>` : ''}
+          ${shown && shown.contrarian ? `<span class="chip warn" title="The pool optimizer's pick is the underdog here: ${esc(shown.pick)} over ${esc(shown.other)}${mc && mc.locked ? ' (frozen from before kickoff)' : ''}. A calculated upset pick for the pool, not a market or model underdog flag.">Pool Pick</span>` : ''}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
             `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
           ).join('')}
@@ -674,6 +677,7 @@ const Pickem = {
             model, transcribed weekly into a Google Sheet — not a personal formula.
             <span class="chip warn">ELWAY underdog</span> = ELWAY's model favors the OTHER
             team entirely, not just by a smaller or larger margin than the market;
+            <span class="chip warn">Pool Pick</span> = the pool optimizer is recommending the underdog (an upset pick) in this game;
             <span class="chip warn">Squid Underdog</span> is the same full-flip concept for
             our OWN Power Model instead of ELWAY's. A <span class="chip warn">QB</span> chip
             (right-aligned under the venue line, below the header) shows that team's QB

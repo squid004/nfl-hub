@@ -310,7 +310,7 @@ const Power = {
     popup.hidden = false;
 
     const rect = anchorEl.getBoundingClientRect();
-    const width = 260, height = popup.offsetHeight || 300;
+    const width = 320, height = popup.offsetHeight || 330;
     let left = rect.right + 10;
     if (left + width > window.innerWidth - 8) left = rect.left - width - 10;
     if (left < 8) left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left));
@@ -378,7 +378,7 @@ const Power = {
         },
       },
       paper_bgcolor: 'transparent', font: { color: colors.text, size: 10 },
-      margin: { t: 24, b: 8, l: 24, r: 24 }, showlegend: false,
+      margin: { t: 28, b: 30, l: 74, r: 74 }, showlegend: false,
     }, { displayModeBar: false, responsive: true, staticPlot: true });
   },
 
