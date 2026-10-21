@@ -18,48 +18,49 @@ from .edge_core import compute_bias
 from .edge_teams import TEAMS
 
 
-def opponent_pool_pct_by_week(team: str) -> list[tuple[int, int, float]]:
-    """(season, week, pool_pct) for every week this team played AND that week had at
-    least one opponent pick imported. A week with imports but zero picks for this team
-    is a real 0% observation; a week with no imports at all is excluded, not treated as 0%.
-    """
-    games = store.edge_games_for_team(team)
+def recompute_all_bias(force: bool = False) -> str:
+    """Recompute every team's learned bias from one read of the picks, games, national % and existing biases (it used to
+    re-download the whole picks table 32 times and make ~200 single-row requests EVERY 10-minute run -- most of this
+    project's Supabase egress). Skipped entirely unless the picks or national-% row counts changed since the last run."""
+    sig = f"{store.edge_picks_count()}:{store.edge_national_pct_count()}"
+    if not force and store.kv_get("edge_bias_sig") == sig:
+        return "unchanged"
     picks = store.edge_all_opponent_picks()
+    national = store.edge_national_pct_map()
+    games = store.all_games()
+    existing = {r["team"]: r for r in store.edge_bias_all()}
 
+    # per (season, week): which opponents imported picks, and how many took each team
     by_week: dict[tuple[int, int], dict] = {}
     for p in picks:
-        key = (p["season"], p["week"])
-        d = by_week.setdefault(key, {"opponents": set(), "team_count": 0})
+        d = by_week.setdefault((p["season"], p["week"]), {"opponents": set(), "counts": {}})
         d["opponents"].add(p["opponent"])
-        if p["team_picked"] == team:
-            d["team_count"] += 1
-
-    out: list[tuple[int, int, float]] = []
+        d["counts"][p["team_picked"]] = d["counts"].get(p["team_picked"], 0) + 1
+    games_by_team: dict[str, set[tuple[int, int]]] = {}
     for g in games:
-        key = (g["season"], g["week"])
-        d = by_week.get(key)
-        if not d or not d["opponents"]:
-            continue
-        out.append((g["season"], g["week"], d["team_count"] / len(d["opponents"])))
-    return sorted(out)
+        for t in (g.get("home"), g.get("away")):
+            if t:
+                games_by_team.setdefault(t, set()).add((g["season"], g["week"]))
 
-
-def recompute_bias_for_teams(teams: set[str]) -> None:
-    for team in sorted(teams):
-        _, _, overridden = store.edge_get_bias(team)
-        if overridden:
+    changed = []
+    for team in sorted(TEAMS):
+        row = existing.get(team)
+        if row and row.get("overridden"):
             continue
-        weekly = opponent_pool_pct_by_week(team)
         pool_pcts: list[float] = []
         national_pcts: list[float] = []
-        for season, week, pct in weekly:
-            national = store.edge_get_national_pct(season, week, team)
-            if national is not None:
-                pool_pcts.append(pct)
-                national_pcts.append(national)
+        for season, week in sorted(games_by_team.get(team, ())):
+            d = by_week.get((season, week))
+            if not d or not d["opponents"]:
+                continue
+            nat = national.get((season, week, team))
+            if nat is not None:
+                pool_pcts.append(d["counts"].get(team, 0) / len(d["opponents"]))
+                national_pcts.append(nat)
         result = compute_bias(pool_pcts, national_pcts)
-        store.edge_upsert_bias(team, result.bias_value, result.n_observations, overridden=False)
-
-
-def recompute_all_bias() -> None:
-    recompute_bias_for_teams(TEAMS)
+        if (not row or abs((row.get("bias_value") or 0.0) - result.bias_value) > 1e-6
+                or (row.get("n_observations") or 0) != result.n_observations):
+            changed.append({"team": team, "bias_value": result.bias_value, "n_observations": result.n_observations, "overridden": False})
+    store.edge_upsert_bias_many(changed)
+    store.kv_set("edge_bias_sig", sig)
+    return f"recomputed ({len(changed)} changed)"

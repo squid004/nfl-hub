@@ -18,6 +18,27 @@ const DB = {
   },
   _c() { if (!this._sb) throw new Error('Supabase not initialized'); return this._sb; },
 
+  // The big, slow-changing blobs (historical power ~2.5MB, team ratings, weekly power rankings, injuries) used to be
+  // re-downloaded on every 90-second reload. loadKvMeta() reads just each key's updated_at (a couple of KB) and _kvRow()
+  // only downloads a blob again when its updated_at changed.
+  _kvMeta: {},
+  _kvCache: {},
+  async loadKvMeta() {
+    try {
+      const { data } = await this._c().from('kv').select('key,updated_at');
+      const m = {};
+      (data || []).forEach(r => { m[r.key] = r.updated_at; });
+      this._kvMeta = m;
+    } catch (e) { console.warn('kv meta unavailable:', e.message || e); }
+  },
+  async _kvRow(key) {
+    const c = this._kvCache[key];
+    if (c && this._kvMeta[key] && c.updated_at === this._kvMeta[key]) return { value: c.value };
+    const { data } = await this._c().from('kv').select('value,updated_at').eq('key', key).maybeSingle();
+    if (data) this._kvCache[key] = { updated_at: data.updated_at, value: data.value };
+    return data;
+  },
+
   async kv(key) {
     const { data } = await this._c().from('kv').select('value').eq('key', key).maybeSingle();
     return data ? data.value : null;
@@ -124,7 +145,7 @@ const DB = {
   // team abbr -> [{player, position, status, detail}], written by nflhub.refresh (ESPN's
   // league-wide injury report). Only ever read here for the QB flag — see pickem.js.
   async injuries() {
-    const { data } = await this._c().from('kv').select('value').eq('key', 'injuries').maybeSingle();
+    const data = await this._kvRow('injuries');
     if (!data) return {};
     try { return JSON.parse(data.value); } catch { return {}; }
   },
@@ -163,7 +184,7 @@ const DB = {
   //   matchups: {"AWAY@HOME": {home, away, home_ratings, away_ratings, callouts: [...]}} },
   // written by nflhub.refresh (garbage-time-excluded EPA ratings; see nflhub/sources/team_ratings.py).
   async teamRatings() {
-    const { data } = await this._c().from('kv').select('value').eq('key', 'team_ratings').maybeSingle();
+    const data = await this._kvRow('team_ratings');
     if (!data) return null;
     try { return JSON.parse(data.value); } catch { return null; }
   },
@@ -175,7 +196,7 @@ const DB = {
   // before kickoff doesn't quietly stop qualifying once team_ratings' own live numbers move
   // on from incorporating the very game it described.
   async parlayRatingsSnapshot() {
-    const { data } = await this._c().from('kv').select('value').eq('key', 'parlay_ratings_snapshot').maybeSingle();
+    const data = await this._kvRow('parlay_ratings_snapshot');
     if (!data) return null;
     try { return JSON.parse(data.value); } catch { return null; }
   },
@@ -186,7 +207,7 @@ const DB = {
   // rankings()). Powers the week dropdown's Power Rankings/Parlays history -- the CURRENT
   // week has no entry yet (team_ratings() above is its own live pre-kickoff preview).
   async weeklyPowerRankings() {
-    const { data } = await this._c().from('kv').select('value').eq('key', 'power_rankings_by_week').maybeSingle();
+    const data = await this._kvRow('power_rankings_by_week');
     if (!data) return null;
     try { return JSON.parse(data.value); } catch { return null; }
   },
@@ -196,7 +217,7 @@ const DB = {
   // dataset (written by nflhub.refresh; see team_ratings.py's refresh_historical()/
   // historical_power_rankings()). Full-season averages, not the live tab's EWMA rating.
   async historicalPower() {
-    const { data } = await this._c().from('kv').select('value').eq('key', 'historical_power_rankings').maybeSingle();
+    const data = await this._kvRow('historical_power_rankings');
     if (!data) return null;
     try { return JSON.parse(data.value); } catch { return null; }
   },

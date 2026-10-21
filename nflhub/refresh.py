@@ -428,10 +428,7 @@ def _apply_edge(
             # Catch-up for the week that just ended: if the pool's tab for it only appeared
             # after the week rolled over, its picks were never stored and the leaderboard /
             # bias would silently skip that week. insert is idempotent on re-runs.
-            if week > 1 and not any(
-                p.get("week") == week - 1 and p.get("season") == season
-                for p in store.edge_all_opponent_picks()
-            ):
+            if week > 1 and store.edge_picks_count(season, week - 1) == 0:
                 try:
                     prev = edge_sheet.fetch_week(cfg.edge.sheet_id, week - 1, normalize_team)
                     store.edge_insert_opponent_picks([
@@ -511,6 +508,8 @@ def _apply_edge(
     pool_size = standing_row["pool_size"]
     budget_total = edge_core.deviation_budget(standing, pool_size)
 
+    national_map = store.edge_national_pct_map()
+    bias_map = {r["team"]: r["bias_value"] for r in store.edge_bias_all()}
     candidates: list[tuple[dict, str, str, edge_core.DevigResult, float]] = []
     no_data: list[tuple[dict, str, str, edge_core.DevigResult]] = []
     for g in games:
@@ -529,11 +528,11 @@ def _apply_edge(
             fav_norm = normalize_team(fav_team)
         except UnknownTeamError:
             fav_norm = fav_team
-        national = store.edge_get_national_pct(season, week, fav_norm)
+        national = national_map.get((season, week, fav_norm))
         if national is None:
             no_data.append((g, fav_team, dog_team, d))
             continue
-        bias_value, _, _ = store.edge_get_bias(fav_norm)
+        bias_value = bias_map.get(fav_norm, 0.0)
         f = edge_core.pool_popularity(national, bias_value)
         candidates.append((g, fav_team, dog_team, d, f))
 
@@ -578,8 +577,8 @@ def _apply_edge_leaderboard(season: int) -> str:
     tab arrived) -- a once-a-day gate left the chart a day behind whenever the picks landed after that day's
     build or nflverse published results later."""
     cached = store.kv_get("edge_pool_leaderboard")
-    picks = [p for p in store.edge_all_opponent_picks() if p.get("season") == season]
-    if not picks:
+    n_picks = store.edge_picks_count(season)
+    if not n_picks:
         return "no picks yet"
     fresh = False
     try:
@@ -589,9 +588,10 @@ def _apply_edge_leaderboard(season: int) -> str:
         pass
     # A blob from an older pool_leaderboard_summary() shape is rebuilt now, not later, or the
     # frontend reminder renders nothing until the gate rolls over.
-    if (fresh and store.kv_get("edge_leaderboard_picks_n") == str(len(picks)) and cached
+    if (fresh and store.kv_get("edge_leaderboard_picks_n") == str(n_picks) and cached
             and json.loads(cached).get("schema_version") == edge_core.LEADERBOARD_SCHEMA_VERSION):
         return "cached"
+    picks = [p for p in store.edge_all_opponent_picks() if p.get("season") == season]
 
     rows = history.fetch_games()
     results: dict[tuple[int, str], dict[str, bool]] = {}

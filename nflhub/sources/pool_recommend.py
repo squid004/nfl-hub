@@ -101,6 +101,8 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
         except (KeyError, ValueError, TypeError):
             return None
 
+    national_map = store.edge_national_pct_map()   # one read for every lookup below
+
     # ---- past weeks (for each entrant's chalk tendency) ----
     hist_games: list[tuple[list[pool_mc.PoolGame], dict[str, dict[str, str]]]] = []
     for w, h in history.items():
@@ -112,7 +114,7 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
             if mh is None or ma is None:
                 continue
             pg = pool_mc.PoolGame(r["game_id"], home, away, _american_devig_home(mh, ma), r.get("gameday", ""), num(r, "total_line"))
-            pg.national_fav_pct = store.edge_get_national_pct(season, w, pg.fav)
+            pg.national_fav_pct = national_map.get((season, w, pg.fav))
             pgs.append(pg)
         by_team = {}
         for pg in pgs:
@@ -210,7 +212,7 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
                 me_locked_picks[g["game_id"]] = app_pick       # unverified fallback (None = no pick known)
             if cbs_fresh:
                 revealed_for_game[g["game_id"]] = {k: next((t for t in teams if t in teams_in_game), None) for k, teams in live_by_key.items()}
-        pg.national_fav_pct = store.edge_get_national_pct(season, week, normalize_team(pg.fav))
+        pg.national_fav_pct = national_map.get((season, week, normalize_team(pg.fav)))
         if pg.national_fav_pct is None:
             national_missing += 1
         pgs.append(pg)

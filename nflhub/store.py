@@ -87,6 +87,53 @@ def _delete(table: str, params: dict[str, Any]) -> None:
     r.raise_for_status()
 
 
+def _count(table: str, params: dict[str, Any] | None = None) -> int:
+    """Row count without downloading rows (PostgREST Content-Range with Prefer: count=exact)."""
+    h = {**_headers(), "Prefer": "count=exact", "Range-Unit": "items", "Range": "0-0"}
+    r = _session.get(_url(table), headers=h, params={"select": "*", **(params or {})}, timeout=TIMEOUT)
+    r.raise_for_status()
+    total = r.headers.get("Content-Range", "*/0").rsplit("/", 1)[-1]
+    return int(total) if total.isdigit() else 0
+
+
+def edge_picks_count(season: int | None = None, week: int | None = None) -> int:
+    params: dict[str, Any] = {}
+    if season is not None:
+        params["season"] = f"eq.{season}"
+    if week is not None:
+        params["week"] = f"eq.{week}"
+    return _count("edge_opponent_pick", params)
+
+
+def edge_national_pct_count() -> int:
+    return _count("edge_national_pct")
+
+
+def edge_national_pct_map() -> dict[tuple[int, int, str], float]:
+    """{(season, week, team): pct} in ONE paged read; a manual entry beats a scraped one, like edge_get_national_pct."""
+    out: dict[tuple[int, int, str], float] = {}
+    manual: set[tuple[int, int, str]] = set()
+    offset = 0
+    while True:
+        chunk = _get("edge_national_pct", {"select": "season,week,team,pct,source", "order": "season,week,team,source",
+                                           "limit": 1000, "offset": offset})
+        for r in chunk:
+            k = (r["season"], r["week"], r["team"])
+            if r["source"] == "manual":
+                out[k] = r["pct"]
+                manual.add(k)
+            elif k not in manual and k not in out:
+                out[k] = r["pct"]
+        if len(chunk) < 1000:
+            return out
+        offset += 1000
+
+
+def edge_upsert_bias_many(rows: list[dict[str, Any]]) -> None:
+    if rows:
+        _upsert("edge_bias", [{**r, "last_updated": _now()} for r in rows], on_conflict="team")
+
+
 def init_db() -> None:
     """Connectivity check; schema itself is applied via supabase/schema.sql."""
     _session.get(_url("kv"), headers=_headers(), params={"limit": 1}, timeout=TIMEOUT).raise_for_status()

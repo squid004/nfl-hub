@@ -72,7 +72,10 @@ const App = {
     });
     await this.reload();
     // Track the cron without a manual reload.
-    this._timer = setInterval(() => this.reload(true), 90_000);
+    // Skip the poll while the tab is in the background (a forgotten open tab was a steady source of Supabase egress), and catch
+    // up as soon as it is visible again.
+    this._timer = setInterval(() => { if (!document.hidden) this.reload(true); }, 90_000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) this.reload(true); });
   },
 
   // Rebuilt every reload (liveWeek can itself advance, e.g. Tue/Wed's rollover) but never
@@ -89,6 +92,7 @@ const App = {
   async reload(quiet = false) {
     if (!quiet) document.getElementById('status').textContent = 'Loading…';
     try {
+      await DB.loadKvMeta();
       const [weekRaw, seasonRaw] = await Promise.all([DB.kv('week'), DB.kv('season')]);
       const liveWeek = parseInt(weekRaw || '1', 10);
       const season = parseInt(seasonRaw || '2025', 10);
@@ -107,7 +111,7 @@ const App = {
           DB.latestRoster('yahoo'), DB.latestRoster('espn'),
           DB.pickemPicks(viewWeek), DB.atsPicks(viewWeek),
           DB.refreshRequest(), DB.kv('last_refresh'), DB.hist(), DB.budgetSnapshot(viewWeek),
-          DB.edgeRecommendationLog(season, viewWeek), DB.edgeBiasAll(), DB.edgeLeaderboard(),
+          Promise.resolve({}) /* old FADE/CHALK log: no longer shown, no longer fetched */, DB.edgeBiasAll(), DB.edgeLeaderboard(),
           DB.injuries(), DB.spreadHistory(viewWeek), DB.elwayQb1(),
           DB.teamRatings(), DB.qbDepthChart(), DB.parlayRatingsSnapshot(), DB.historicalPower(),
           DB.weeklyPowerRankings(), isPast ? DB.weekGames(liveWeek) : Promise.resolve(null), DB.elwayScoreHistory(),
