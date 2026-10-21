@@ -652,9 +652,9 @@ const Pickem = {
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
           <span class="matchup">${teamSpan(g.away)}${recordLabel(g.away)} @ ${teamSpan(g.home)}${recordLabel(g.home)}</span>
           ${stateChip}
-          ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY underdog</span>` : ''}
-          ${squidFlip ? `<span class="chip warn" title="The Power Model favors the OTHER team entirely, not just by a smaller or larger margin">Squid Underdog</span>` : ''}
-          ${shown && shown.contrarian ? `<span class="chip warn" title="The pool optimizer's pick is the underdog here: ${esc(shown.pick)} over ${esc(shown.other)}${mc && mc.locked ? ' (frozen from before kickoff)' : ''}. A calculated upset pick for the pool, not a market or model underdog flag.">Pool Pick</span>` : ''}
+          ${elwayFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY underdog</span>` : ''}
+          ${squidFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="The Power Model favors the OTHER team entirely, not just by a smaller or larger margin">Squid Underdog</span>` : ''}
+          ${shown && shown.contrarian ? `<span class="chip ${mine && mine === shown.pick ? 'good' : 'warn'}" title="The pool optimizer's pick is the underdog here: ${esc(shown.pick)} over ${esc(shown.other)}${mc && mc.locked ? ' (frozen from before kickoff)' : ''}. A calculated upset pick for the pool, not a market or model underdog flag.">Pool Pick</span>` : ''}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
             `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
           ).join('')}
@@ -980,8 +980,8 @@ const Pickem = {
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
           <span class="matchup">${g.away}${recordLabel(g.away)} @ ${g.home}${recordLabel(g.home)}</span>
           ${stateChip}
-          ${elwayFlip ? `<span class="chip warn" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY underdog</span>` : ''}
-          ${squidFlip ? `<span class="chip warn" title="The Power Ranking favors the OTHER team entirely, not just by a smaller or larger margin">Squid Underdog</span>` : ''}
+          ${elwayFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY underdog</span>` : ''}
+          ${squidFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="The Power Ranking favors the OTHER team entirely, not just by a smaller or larger margin">Squid Underdog</span>` : ''}
           ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
             `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
           ).join('')}
