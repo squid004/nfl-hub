@@ -426,7 +426,12 @@ function poolOptimizerSummaryHtml(rec) {
   return `<div class="pool-optimizer" style="margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);">
     <div title="${esc(info)}"><strong>Pool optimizer</strong> &mdash; recommended card wins the week <strong>${pct(rec.p_win)}</strong> of the time
       <span title="Gain over always taking the favorite (${pct(af.p_win || 0)})">(${gain >= 0 ? '+' : ''}${gain.toFixed(1)}%)</span>.</div>
-    <div style="margin-top:8px;">${ups.length ? `${ups.length} upset pick${ups.length === 1 ? '' : 's'}: ${ups.map(g => esc(g.pick)).join(', ')}.` : 'No upset picks.'}
+    <div style="margin-top:8px;">${ups.length ? `${ups.length} upset pick${ups.length === 1 ? '' : 's'}: ${ups.map(g => {
+        // green = you've selected this team; red = you've selected the opponent; plain = no selection yet
+        const mine = g.cbs_pick || g.app_pick;
+        const cls = !mine ? '' : (mine === g.pick ? 'result-good' : 'result-bad');
+        return `<span class="${cls}" title="${mine ? (mine === g.pick ? 'You have this pick' : 'You have ' + esc(mine) + ' instead') : 'No selection yet'}"><strong>${esc(g.pick)}</strong></span>`;
+      }).join(', ')}.` : 'No upset picks.'}
       Tiebreaker guess: <strong>${rec.tiebreak_guess}</strong>.</div>
     ${sel ? `<div style="margin-top:8px;">Current selection provides <strong>${pct(sel.p_win)}</strong> win.${sel.unpicked ? ` <span class="muted small">(${sel.unpicked} unpicked game${sel.unpicked === 1 ? '' : 's'} counted as the favorite)</span>` : ''}</div>` : ''}
     ${contHtml}
