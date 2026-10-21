@@ -447,7 +447,13 @@ const PoolSim = {
 };
 
 // Summary line for the pool optimizer (nflhub/sources/pool_recommend.py): win chance, dollars, tiebreaker.
-function poolOptimizerSummaryHtml(rec, picks, simPayload) {
+// The tiebreaker total you entered for this recommendation's week (kv pool_tiebreak), or null.
+function tbEntered(rec, tbStore) {
+  const v = tbStore ? tbStore[`${rec.season}-${rec.week}`] : null;
+  return v == null ? null : +v;
+}
+
+function poolOptimizerSummaryHtml(rec, picks, simPayload, tbStore) {
   const pct = v => (100 * v).toFixed(1) + '%';
   const af = rec.all_favorites || {};
   const ups = Object.values(rec.games || {}).filter(g => g.contrarian && !g.locked);
@@ -475,7 +481,8 @@ function poolOptimizerSummaryHtml(rec, picks, simPayload) {
           <td>${c.tiebreak_revealed != null ? `guessed <strong>${c.tiebreak_revealed}</strong>` : esc(c.tiebreak_habit)}</td></tr>`).join('')}
       </tbody></table>
       <div class="muted small">An entrant who repeats the same number most weeks is simulated repeating it. Names are shortened.</div></details>` : '';
-  const guess = (rec.selection && rec.selection.tiebreak_used != null) ? rec.selection.tiebreak_used : rec.tiebreak_guess;
+  const entered = tbEntered(rec, tbStore);
+  const guess = entered != null ? entered : ((rec.selection && rec.selection.tiebreak_used != null) ? rec.selection.tiebreak_used : rec.tiebreak_guess);
   const live = PoolSim.winChance(simPayload, picks, guess);
   const sel = live ? { p_win: live.pWin, unpicked: live.unpicked } : rec.selection;
   const gain = 100 * (rec.p_win - (af.p_win || 0));
@@ -694,9 +701,12 @@ const Pickem = {
             <div>${edgeChip}</div>
           </div>
           ${poolRecWeek && g.game_id === tbGameId ? `<div class="stat-block">
-            <div class="stat-label" title="The pool's tiebreaker: the total points of this game. This is the optimizer's guess -- chosen together with the picks to maximize your chance of winning the week, using the posted total, the likely scoring distribution, and where the other entrants tend to guess.">Tiebreaker: total points</div>
-            <div><strong>${poolRecWeek.tiebreak_guess}</strong></div>
-            <div class="muted small">${poolRecWeek.tiebreak_posted_total != null ? `posted total ${poolRecWeek.tiebreak_posted_total}` : (o.total != null ? `posted total ${o.total}` : ' ')}${poolRecWeek.my_tiebreak != null ? ` &middot; yours on CBS: ${poolRecWeek.my_tiebreak}` : ''}${postGame ? ` &middot; final ${(+g.home_score || 0) + (+g.away_score || 0)}` : ''}</div>
+            <div class="stat-label" title="The pool's tiebreaker: the total points of this game. This is the optimizer's guess -- chosen together with the picks to maximize your chance of winning the week, using the posted total, the likely scoring distribution, and where the other entrants tend to guess.">Your tiebreaker: total points</div>
+            <div><input type="number" min="0" max="200" step="1" inputmode="numeric" data-act="tb-input" data-week="${week}"
+                  value="${tbEntered(poolRecWeek, ctx.poolTb) ?? ''}" placeholder="enter total" style="width:6.5em;"
+                  title="Your tiebreaker guess. The win chance above uses this number; blank uses the optimizer's recommendation."></div>
+            <div class="muted small">Optimizer recommends <strong>${poolRecWeek.tiebreak_guess}</strong></div>
+            <div class="muted small">${poolRecWeek.tiebreak_posted_total != null ? `O/U ${poolRecWeek.tiebreak_posted_total}` : (o.total != null ? `O/U ${o.total}` : ' ')}${poolRecWeek.my_tiebreak != null ? ` &middot; yours on CBS: ${poolRecWeek.my_tiebreak}` : ''}${postGame ? ` &middot; final ${(+g.home_score || 0) + (+g.away_score || 0)}` : ''}</div>
           </div>` : ''}
         </div>
         <div class="game-card-pick">
@@ -728,7 +738,7 @@ const Pickem = {
       <div class="panel">
         <h2>${M.title} &mdash; ${made}/${games.length} made
           &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
-        ${poolRecWeek ? poolOptimizerSummaryHtml(poolRecWeek, picks, ctx.poolSim) : ''}
+        ${poolRecWeek ? poolOptimizerSummaryHtml(poolRecWeek, picks, ctx.poolSim, ctx.poolTb) : ''}
         <div class="game-card-grid">${cards}</div>
         <details>
           <summary class="muted small">Chip legend</summary>
@@ -1127,6 +1137,19 @@ const Pickem = {
       }
       App.reload(true);
     } catch (e) { Toast.show('Could not save pick: ' + e.message, 'bad'); }
+  },
+
+  // Save the tiebreaker total you typed on the Monday card (blank clears it), then show the new win chance at once.
+  async setTiebreak(week, raw) {
+    const ctx = App._ctx;
+    const v = String(raw).trim() === '' ? null : Math.round(+raw);
+    if (v != null && !(v >= 0 && v <= 200)) { Toast.show('Enter a total between 0 and 200', 'bad'); return; }
+    try {
+      await DB.setPoolTiebreak(ctx.season, +week, v);
+      ctx.poolTb = { ...(ctx.poolTb || {}) };
+      if (v == null) delete ctx.poolTb[`${ctx.season}-${week}`]; else ctx.poolTb[`${ctx.season}-${week}`] = v;
+      Pickem.render(ctx, 'ml');
+    } catch (err) { Toast.show('Could not save tiebreaker: ' + err.message, 'bad'); }
   },
 
   async atspick(week, gameId, team, spread) {

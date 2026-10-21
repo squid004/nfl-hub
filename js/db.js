@@ -323,6 +323,23 @@ const DB = {
               { onConflict: 'key' }).select(), 'Your gut pick');
   },
 
+  // Your own tiebreaker (total points of the week's last game) entered on the Monday card, as one kv blob
+  // { "<season>-<week>": total } so no schema change is needed.
+  async poolTiebreaks() {
+    const { data } = await this._c().from('kv').select('value').eq('key', 'pool_tiebreak').maybeSingle();
+    if (!data || !data.value) return {};
+    try { return JSON.parse(data.value) || {}; } catch { return {}; }
+  },
+
+  async setPoolTiebreak(season, week, total) {
+    const cur = await this.poolTiebreaks();
+    const k = `${season}-${week}`;
+    if (total == null) delete cur[k]; else cur[k] = total;
+    this._written(await this._c().from('kv')
+      .upsert({ key: 'pool_tiebreak', value: JSON.stringify(cur), updated_at: new Date().toISOString() },
+              { onConflict: 'key' }).select(), 'Your tiebreaker');
+  },
+
   async budgetSnapshot(week) {
     const { data } = await this._c().from('budget_snapshot').select('*').eq('week', week);
     return data || [];
