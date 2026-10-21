@@ -409,11 +409,23 @@ function poolOptimizerSummaryHtml(rec) {
     ? `<span class="result-bad">CBS picks not loaded</span> (no "Week ${rec.week} live" tab) &mdash; ${nLocked ? `your ${cbs.unverified_locked || nLocked} locked pick${(cbs.unverified_locked || nLocked) === 1 ? '' : 's'} are taken from this app, unverified, and the field's picks are predicted` : 'your picks are from this app, unverified'}.`
     : `${cbs.entrants_matched != null && cbs.entrants_matched < cbs.entrants ? `<span class="result-bad">Only ${cbs.entrants_matched} of ${cbs.entrants} entrants matched by name between the sheet and CBS.</span> ` : ''}CBS picks as of ${cbs.captured_at ? new Date(cbs.captured_at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : 'an unknown time'}${flags ? `; <span class="result-bad">${flags} pick${flags === 1 ? '' : 's'} differ between this app and CBS</span>` : '; no differences with this app'}.`;
   const gen = rec.generated ? new Date(rec.generated).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+  // Who can reach the top score, how often they'd be tied with you there, and their Monday-night tiebreak habits.
+  const cont = rec.contenders || [];
+  const contHtml = cont.length ? `<details class="small" style="margin-top:8px;" open>
+      <summary><strong>Contenders</strong> &mdash; you are within one pick of the lead going into the last game day; who else can reach the top score, and how they guess the tiebreaker</summary>
+      <table class="small" style="margin-top:4px;"><thead><tr><th>Entrant</th><th class="num">Correct so far</th><th class="num">Chance at the top</th>
+        <th class="num">Chance tied with you</th><th>Tiebreaker habit</th></tr></thead><tbody>
+        ${cont.map(c => `<tr><td>${esc(c.name)}</td><td class="num">${c.correct_so_far != null ? c.correct_so_far : '&mdash;'}</td>
+          <td class="num">${pct(c.p_top)}</td><td class="num">${pct(c.p_tie_me)}</td>
+          <td>${c.tiebreak_revealed != null ? `guessed <strong>${c.tiebreak_revealed}</strong>` : esc(c.tiebreak_habit)}</td></tr>`).join('')}
+      </tbody></table>
+      <div class="muted small">An entrant who repeats the same number most weeks is simulated repeating it. Names are shortened.</div></details>` : '';
   return `<div class="pool-optimizer" style="margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);">
     <div><strong>Pool optimizer</strong> &mdash; ${nLocked ? `with ${nLocked} game${nLocked === 1 ? '' : 's'} already locked, the` : 'the'} recommended card wins the week
       <strong>${pct(rec.p_win)}</strong> of the time (always taking the favorite: ${pct(af.p_win || 0)}).
       ${ups.length ? `${ups.length} upset pick${ups.length === 1 ? '' : 's'}: ${ups.map(g => g.pick).join(', ')}.` : 'No upset picks this week.'}
       Tiebreaker guess: <strong>${rec.tiebreak_guess}</strong>.</div>
+    ${contHtml}
     <div class="muted small" style="margin-top:4px;">20,000 simulated weeks from the market odds and this pool's pick tendencies
       (${rec.inputs.entrants} entrants, ${rec.inputs.history_weeks.length} weeks of history). Optimizes this week's win chance only; the
       season pot is not considered. Each game's impact is how much the win chance drops if only that pick is switched. Updated ${gen}. ${cbsNote}${nLocked ? ' Locked games keep your saved pick and their result; only the open games and the tiebreaker are re-optimized.' : ''}</div>
@@ -443,6 +455,9 @@ const Pickem = {
 
     const gutPicks = ctx.gutPicks || {};
 
+    // The pool's tiebreaker is the total points of the week's last game (Monday night). The optimizer's guess for it
+    // is shown as an extra box on that card, mirroring the CBS tiebreaker field.
+    const tbGameId = poolRecWeek ? (poolRecWeek.tiebreak_game_id || (games.length ? games[games.length - 1].game_id : null)) : null;
     const cards = games.map(g => {
       const o = odds[g.game_id] || {};
       const matchup = matchupFor(teamRatings, g.home, g.away);
@@ -549,13 +564,16 @@ const Pickem = {
         class="${mine === team ? 'primary' : ''}">${team}</button>`;
 
       const pts = v => (v < 10 ? v.toFixed(1) : Math.round(v)) + ' pts';
-      const edgeChip = (mc && mc.locked)
-        ? `<span class="muted small">locked${mc.final ? ' &middot; final' : ''}</span>`
-        : mc
-        ? `<span class="chip ${mc.contrarian ? 'good' : ''}" style="white-space:nowrap;"
-             title="Take ${mc.pick} over ${mc.other}. Impact: the simulated weekly win chance is ${pts(mc.impact_pts)} lower if only this pick is switched and every other pick stays optimized. The market gives the favorite ${(mc.p_favorite * 100).toFixed(0)}%; the pool is expected to take the favorite ${(mc.pool_favorite_share * 100).toFixed(0)}% of the time. Weekly win chance with this pick ${(poolRec.p_win * 100).toFixed(1)}%, if flipped ${(mc.p_win_if_flipped * 100).toFixed(1)}%.">
-             ${mc.pick}${mc.contrarian ? ' (upset)' : ''} +${pts(mc.impact_pts)}</span>
-           <div class="muted small">pool takes ${mc.favorite} ${(mc.pool_favorite_share * 100).toFixed(0)}%</div>`
+      // Open game: the live recommendation. Once the game has locked: the recommendation frozen from before kickoff,
+      // coloured red/green once the game is under way, the same rule as ELWAY / History / Power Model.
+      const frozenRec = poolRec && poolRec.frozen ? poolRec.frozen[g.game_id] : null;
+      const shown = (mc && mc.locked) ? frozenRec : mc;
+      const poolHit = (postGame || live) && shown && result !== 'TIE' ? shown.pick === result : null;
+      const edgeChip = shown
+        ? `<div class="${resultClass(poolHit)}" style="white-space:nowrap;"
+             title="Take ${shown.pick} over ${shown.other}${mc && mc.locked ? ' (frozen from before kickoff)' : ''}. Impact: the simulated weekly win chance is ${pts(shown.impact_pts)} lower if only this pick is switched and every other pick stays optimized. The market gives the favorite ${(shown.p_favorite * 100).toFixed(0)}%; the pool is expected to take the favorite ${(shown.pool_favorite_share * 100).toFixed(0)}% of the time.">
+             ${shown.pick}${shown.contrarian ? ' (upset)' : ''} +${pts(shown.impact_pts)}</div>
+           <div class="muted small">pool takes ${shown.favorite} ${(shown.pool_favorite_share * 100).toFixed(0)}%</div>`
         : '<span class="muted">&mdash;</span>';
       const mcMineNote = (mc && !mc.locked && mine && mine !== mc.pick)
         ? ` <span class="muted small">(optimizer: ${mc.pick}, +${pts(mc.impact_pts)} win chance vs your side)</span>` : '';
@@ -609,6 +627,11 @@ const Pickem = {
             <div class="stat-label" title="The pool Monte Carlo: 20,000 simulated weeks of the market odds and this pool's picks, searching for the card that maximizes your chance of winning this week's prize. The season pot is not considered.">Pool optimizer</div>
             <div>${edgeChip}</div>
           </div>
+          ${poolRecWeek && g.game_id === tbGameId ? `<div class="stat-block">
+            <div class="stat-label" title="The pool's tiebreaker: the total points of this game. This is the optimizer's guess -- chosen together with the picks to maximize your chance of winning the week, using the posted total, the likely scoring distribution, and where the other entrants tend to guess.">Tiebreaker: total points</div>
+            <div><strong>${poolRecWeek.tiebreak_guess}</strong></div>
+            <div class="muted small">${poolRecWeek.tiebreak_posted_total != null ? `posted total ${poolRecWeek.tiebreak_posted_total}` : (o.total != null ? `posted total ${o.total}` : ' ')}${poolRecWeek.my_tiebreak != null ? ` &middot; yours on CBS: ${poolRecWeek.my_tiebreak}` : ''}${postGame ? ` &middot; final ${(+g.home_score || 0) + (+g.away_score || 0)}` : ''}</div>
+          </div>` : ''}
         </div>
         <div class="game-card-pick">
           ${btn(g.away)} ${btn(g.home)}

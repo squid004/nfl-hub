@@ -69,7 +69,8 @@ def _fetch_history(sheet_id: str, week: int) -> dict[int, dict[str, Any]]:
         picks: dict[str, list[str]] = {}
         for p in data.picks:
             picks.setdefault(p.opponent, []).append(p.team_picked)
-        out[w] = {"standings": {s.opponent: (s.correct_week or 0, s.correct_season or 0) for s in data.standings}, "picks": picks}
+        out[w] = {"standings": {s.opponent: (s.correct_week or 0, s.correct_season or 0) for s in data.standings}, "picks": picks,
+                  "tiebreaks": data.tiebreaks}
     return out
 
 
@@ -124,6 +125,16 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
 
     opponents = [pool_mc.Entrant(n, offset=offsets.get(n, 0.0)) for n in names]
     me = pool_mc.Entrant(me_name)
+
+    # each entrant's Monday-night tiebreak habits (a favorite number they repeat, and their typical offset from the posted total)
+    tb_history: list[tuple[float, dict[str, float]]] = []
+    for w, h in sorted(history.items()):
+        wk_games = sorted(((r.get("gameday", ""), r.get("gametime", ""), r) for (rw, _h, _a), r in rows_by_pair.items() if rw == w),
+                          key=lambda t: (t[0], t[1]))
+        lines = [num(r, "total_line") for _d, _t, r in wk_games if num(r, "total_line") is not None]
+        if lines and h.get("tiebreaks"):
+            tb_history.append((lines[-1], h["tiebreaks"]))
+    habits = pool_mc.estimate_tb_habits(tb_history, names)   # applied below only when the tie could actually matter
 
     # ---- this week's games ----
     pgs: list[pool_mc.PoolGame] = []
@@ -209,14 +220,41 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
     if not [g for g in pgs if g.home_won is None]:
         raise RuntimeError("every game of the week is final")
     me.picks = me_locked_picks
+    for opp in opponents:   # a tiebreak guess CBS has revealed (after Monday's kickoff) replaces the habit model
+        if _norm(opp.name) in live_tb_by_key:
+            opp.tiebreak = live_tb_by_key[_norm(opp.name)]
     for gid, by_name in revealed_for_game.items():
         for opp in opponents:
             if _norm(opp.name) in by_name:
                 opp.picks[gid] = by_name[_norm(opp.name)]
+    # Personal tiebreak habits and the Contenders panel only matter once Sunday is done AND the user is within one pick of the
+    # leader (leading, tied, or one back) -- otherwise the pooled guess model is used and no contenders are computed.
+    last_day = max((g.lock_key for g in pgs), default=None)
+    earlier = [g for g in pgs if g.lock_key != last_day]
+    sunday_done = bool(earlier) and all(g.home_won is not None for g in earlier)
+    winner_of = {g.game_id: (g.home if g.home_won else g.away) for g in pgs if g.home_won is not None}
+    all_revealed = all(g.game_id in revealed_for_game for g in earlier)
+    striking = False
+    gate_info: dict[str, Any] = {}
+    if sunday_done and all_revealed:
+        my_correct = sum(1 for gid, t in me_locked_picks.items() if t is not None and winner_of.get(gid) == t)
+        opp_correct = [sum(1 for gid, t in o.picks.items() if t is not None and winner_of.get(gid) == t) for o in opponents]
+        top = max(opp_correct + [my_correct])
+        striking = my_correct >= top - 1
+        gate_info = {"my_correct": my_correct, "top": top}
+    if striking:
+        for opp in opponents:
+            hb = habits.get(opp.name) or {}
+            opp.tb_fixed = float(hb["mode"]) if hb.get("mode") is not None else None
+            opp.tb_p_fixed = hb.get("p_fixed", 0.0)
+            opp.tb_offset = hb.get("offset", pool_mc.TB_MEAN_OFFSET)
     res = pool_mc.optimize(pgs, opponents, me, n=n_sims)
     allfav = {g.game_id: g.fav for g in pgs}
     base = pool_mc.evaluate_card(pgs, opponents, me, allfav, round(res.guess), n=n_sims)
 
+    # the pool's tiebreaker game: the last game of the week with a posted total (the rule the simulation uses)
+    tb_idx = max(((g.lock_key, i) for i, g in enumerate(pgs) if g.total_line is not None), default=None)
+    tb_game = pgs[tb_idx[1]] if tb_idx else None
     out_games: dict[str, dict[str, Any]] = {}
     for g in pgs:
         d = res.per_game[g.game_id]
@@ -230,11 +268,34 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
             "national_pct": g.national_fav_pct, "locked": g.locked, "final": g.home_won is not None,
             **pick_info.get(g.game_id, {}),
         }
+    def short(name: str) -> str:
+        parts = name.split()
+        return f"{parts[0]} {parts[-1][0]}." if len(parts) > 1 else name
+
+    def habit_text(hb: dict) -> str:
+        if not hb or not hb.get("n"):
+            return "no history yet"
+        if hb["mode"] is not None and hb["p_fixed"] >= 0.35:
+            return f"usually {hb['mode']} ({hb['count']} of {hb['n']} weeks)"
+        return f"{hb['mean_offset']:+.1f} vs posted total on average ({hb['n']} weeks)"
+
+    contenders = []
+    for c in (res.contenders if striking else []):
+        opp = opponents[c["j"]]
+        known = [t for gid, t in opp.picks.items() if gid in winner_of]
+        contenders.append({
+            "name": short(opp.name), "p_top": round(c["p_top"], 3), "p_tie_me": round(c["p_tie_me"], 3),
+            "correct_so_far": sum(1 for gid, t in opp.picks.items() if t is not None and winner_of.get(gid) == t) if known else None,
+            "tiebreak_habit": habit_text(habits.get(opp.name) or {}), "favorite_number": (habits.get(opp.name) or {}).get("mode"),
+            "tiebreak_revealed": opp.tiebreak,
+        })
     return {
-        "schema": SCHEMA_VERSION, "season": season, "week": week, "generated": datetime.now(timezone.utc).isoformat(),
+        "schema": SCHEMA_VERSION, "contenders": contenders, "season": season, "week": week, "generated": datetime.now(timezone.utc).isoformat(),
         "n_sims": n_sims,
         "p_win": round(res.p_win, 4),
         "expected_correct": round(res.expected_correct, 2), "tiebreak_guess": int(round(res.guess)),
+        "tiebreak_game_id": tb_game.game_id if tb_game else None,
+        "tiebreak_posted_total": tb_game.total_line if tb_game else None,
         "all_favorites": {"p_win": round(base["p_win"], 4),
                           "expected_correct": round(base["expected_correct"], 2)},
         "contrarian_picks": sum(1 for v in out_games.values() if v["contrarian"] and not v["locked"]),
@@ -248,7 +309,8 @@ def build(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: dic
                 "pick_flags": sum(1 for v in out_games.values() if v.get("flag")),
                 "unverified_locked": sum(1 for v in out_games.values() if v["locked"] and v.get("source") != "cbs")},
         "games": out_games,
-        "inputs": {"entrants": len(opponents) + 1, "history_weeks": sorted(history), "national_missing": national_missing},
+        "inputs": {"entrants": len(opponents) + 1, "history_weeks": sorted(history), "national_missing": national_missing,
+                   "last_day_window": {"sunday_done": sunday_done, "striking_distance": striking, **gate_info}},
     }
 
 
@@ -272,6 +334,16 @@ def refresh(cfg, season: int, week: int, games: list[dict[str, Any]], wk_odds: d
     except RuntimeError as exc:
         return f"skipped ({exc})"
     rec["sig"] = sig
+    # Freeze what was displayed before each game locked: the first run that finds a game locked keeps the previous run's
+    # (pre-kickoff) pick and impact for it, so the card can show it and grade it red/green like ELWAY/History/Power Model.
+    frozen: dict[str, Any] = dict(stored.get("frozen", {})) if same_week else {}
+    if same_week:
+        for gid, v in rec["games"].items():
+            prev = (stored.get("games") or {}).get(gid)
+            if v["locked"] and gid not in frozen and prev and not prev.get("locked"):
+                frozen[gid] = {k: prev.get(k) for k in ("pick", "other", "favorite", "contrarian", "p_favorite",
+                                                       "pool_favorite_share", "impact_pts")}
+    rec["frozen"] = frozen
     store.kv_set(POOL_REC_KEY, json.dumps(rec))
     return (f"built (P(win) {rec['p_win']:.1%} vs {rec['all_favorites']['p_win']:.1%} all-favorites, "
             f"{rec['contrarian_picks']} contrarian)")

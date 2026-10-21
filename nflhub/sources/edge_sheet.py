@@ -57,6 +57,7 @@ class SheetWeekData:
     picks: list[SheetPick]
     standings: list[SheetStanding]
     pool_size: int
+    tiebreaks: dict[str, float] = field(default_factory=dict)   # entrant -> Monday-night total guess (the numeric cell after the picks)
 
 
 def _csv_url(sheet_id: str, week: int, suffix: str = "") -> str:
@@ -107,6 +108,7 @@ def fetch_week(sheet_id: str, week: int, normalize_team) -> SheetWeekData:
 
     picks: list[SheetPick] = []
     standings: list[SheetStanding] = []
+    tiebreaks: dict[str, float] = {}
     for row in rows:
         if len(row) < 2:
             continue
@@ -121,19 +123,24 @@ def fetch_week(sheet_id: str, week: int, normalize_team) -> SheetWeekData:
             correct_week=_parse_int(row[1]) if len(row) > 1 else None,
             correct_season=_parse_int(row[2]) if len(row) > 2 else None,
         ))
-        for cell in row[1:]:
+        for ci, cell in enumerate(row[1:], start=1):
             code = (cell or "").strip()
             if code.lower() in _NO_PICK:
                 continue
             try:
                 team = normalize_team(code)
             except ValueError:
+                if ci >= 3:   # columns 1-2 are weekly/season correct; a number after the picks is the tiebreaker guess
+                    try:
+                        tiebreaks[opponent] = float(code)
+                    except ValueError:
+                        pass
                 continue
             picks.append(SheetPick(opponent=opponent, team_picked=team))
 
     if not picks:
         raise EdgeSheetUnavailable(f"parsed 0 picks from Week {week} tab — sheet layout may have changed")
-    return SheetWeekData(picks=picks, standings=standings, pool_size=len(standings))
+    return SheetWeekData(picks=picks, standings=standings, pool_size=len(standings), tiebreaks=tiebreaks)
 
 
 @dataclass(frozen=True)

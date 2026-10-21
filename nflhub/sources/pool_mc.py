@@ -41,6 +41,7 @@ PICK_A, PICK_B, PICK_C = 0.02, 0.33, 0.76
 OFFSET_TAU = 0.36          # sd of entrants' persistent chalk offset, logit scale (v65 method of moments)
 TB_MEAN_OFFSET, TB_SD = -1.5, 4.5   # opponents' tiebreaker guess vs the posted total (v65)
 TOTAL_SD = 13.3            # actual game total vs the posted total (nflverse history)
+TB_K, TB_P0 = 2.0, 0.15    # shrinkage for per-entrant tiebreak habits: pseudo-weeks, prior P(repeats favorite number) (v67)
 
 
 def _sig(x):
@@ -77,6 +78,9 @@ class PoolGame:
 class Entrant:
     name: str
     offset: float = 0.0               # persistent chalk tendency (logit)
+    tb_fixed: float | None = None     # favorite tiebreak number (their modal past guess)
+    tb_p_fixed: float = 0.0           # probability they repeat it this week
+    tb_offset: float = TB_MEAN_OFFSET # otherwise: guess ~ Normal(posted total + tb_offset, TB_SD)
     picks: dict[str, str | None] = field(default_factory=dict)   # game_id -> team, revealed picks only
     tiebreak: float | None = None     # revealed only after Monday kickoff
 
@@ -106,6 +110,29 @@ def estimate_offsets(history: list[tuple[list[PoolGame], dict[str, dict[str, str
     return {n: num[n] / (den[n] + 1.0 / tau ** 2) for n in names}
 
 
+def estimate_tb_habits(history: list[tuple[float, dict[str, float]]], names: list[str]) -> dict[str, dict]:
+    """Per-entrant Monday-night tiebreak habits from past weeks. `history` = [(posted total, {name: guess}), ...].
+    p_fixed = P(repeat the favorite number) and offset = typical guess minus posted total, both shrunk toward the pooled
+    values by TB_K pseudo-weeks so a one- or two-week history moves them little (research/edge_signal_test_v67: this
+    beats the pooled guess model by ~0.33 nats per held-out guess)."""
+    out: dict[str, dict] = {}
+    for name in names:
+        guesses = [(g[name], line) for line, g in history if name in g]
+        n = len(guesses)
+        if n == 0:
+            out[name] = {"mode": None, "count": 0, "n": 0, "p_fixed": 0.0, "offset": TB_MEAN_OFFSET, "mean_offset": None}
+            continue
+        counts: dict[int, int] = {}
+        for g, _line in guesses:
+            counts[int(g)] = counts.get(int(g), 0) + 1
+        mode, cnt = max(counts.items(), key=lambda kv: (kv[1], -kv[0]))
+        p_fixed = (cnt + TB_K * TB_P0) / (n + TB_K) if cnt >= 2 else TB_K * TB_P0 / (n + TB_K)
+        offs = [g - line for g, line in guesses]
+        out[name] = {"mode": mode, "count": cnt, "n": n, "p_fixed": p_fixed,
+                     "offset": (sum(offs) + TB_K * TB_MEAN_OFFSET) / (n + TB_K), "mean_offset": sum(offs) / n}
+    return out
+
+
 @dataclass
 class Result:
     card: dict[str, str]              # game_id -> recommended team (locked games = my actual pick)
@@ -115,6 +142,7 @@ class Result:
     ev: float                         # in weekly-pot units: 0.8 * p_win
     steps: list[dict]                 # flips applied, in order
     per_game: dict[str, dict]
+    contenders: list[dict] = field(default_factory=list)   # opponents with a real chance at the top score: {j, p_top, p_tie_me}
 
 
 class Sim:
@@ -156,8 +184,12 @@ class Sim:
         self.line = float(line if line is not None else 45.0)
         total = np.round(self.line + TOTAL_SD * rng.standard_normal(n)) if actual_total is None else np.full(n, float(actual_total))
         self.total = total
-        guesses = np.round(self.line + TB_MEAN_OFFSET + TB_SD * rng.standard_normal((n, J)))
+        # each opponent's tiebreak guess: with probability tb_p_fixed their favorite number, else Normal around their own offset
+        tb_off = np.array([e.tb_offset for e in opponents]) if J else np.zeros(0)
+        guesses = np.round(self.line + tb_off[None, :] + TB_SD * rng.standard_normal((n, J)))
         for j, e in enumerate(opponents):
+            if e.tb_fixed is not None and e.tb_p_fixed > 0:
+                guesses[rng.random(n) < e.tb_p_fixed, j] = e.tb_fixed
             if e.tiebreak is not None:
                 guesses[:, j] = e.tiebreak
         self.max_opp = self.opp_correct.max(1) if J else np.zeros(n)
@@ -240,8 +272,15 @@ def optimize(games: list[PoolGame], opponents: list[Entrant], me: Entrant, *, n:
                                "pool_fav_share": pf if g.fav == g.home else 1 - pf,
                                "ev_if_flipped": float(v[0]), "p_win_if_flipped": float(v[1]), "locked": g.locked,
                                "contrarian": bool((g.home if side[i] else g.away) != g.fav)}
+    # who can actually reach the top score, and how often they'd be tied with me there (tiebreak decides those)
+    c_final = sim.correct(side)
+    at_max = (sim.opp_correct == sim.max_opp[:, None]) if opponents else np.zeros((n, 0), bool)
+    p_top = at_max.mean(0) if opponents else np.zeros(0)
+    p_tie = (at_max & (c_final == sim.max_opp)[:, None]).mean(0) if opponents else np.zeros(0)
+    contenders = [{"j": int(j), "p_top": float(p_top[j]), "p_tie_me": float(p_tie[j])}
+                  for j in np.argsort(-p_top)[:8] if p_top[j] >= 0.02]
     return Result(card={g.game_id: (g.home if side[i] else g.away) for i, g in enumerate(games)}, guess=int(guess), p_win=float(pw),
-                  expected_correct=float(ec), ev=float(ev), steps=steps, per_game=per_game)
+                  expected_correct=float(ec), ev=float(ev), steps=steps, per_game=per_game, contenders=contenders)
 
 
 def evaluate_card(games: list[PoolGame], opponents: list[Entrant], me: Entrant, card: dict[str, str], guess: float, *,
