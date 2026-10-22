@@ -44,6 +44,21 @@ def _rostered_names(week: int) -> set[str]:
     return names
 
 
+def _opener_window_open(week_games: list[dict[str, Any]]) -> bool:
+    """True once it is Tuesday 6am ET of the week these games are played in (the Tuesday on or before the week's first kickoff).
+    Spread lines logged before then (placeholders posted while the previous week is still being played or settling) must not become
+    the "opener" in spread_history, so nothing is logged for a week until its Tuesday morning."""
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    et = ZoneInfo("America/New_York")
+    kicks = [datetime.fromisoformat(g["kickoff"].replace("Z", "+00:00")) for g in week_games if g.get("kickoff")]
+    if not kicks:
+        return False
+    first = min(kicks).astimezone(et)
+    tuesday = (first - timedelta(days=(first.weekday() - 1) % 7)).replace(hour=6, minute=0, second=0, microsecond=0)
+    return datetime.now(et) >= tuesday
+
+
 def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     cfg = cfg or get_config()
     store.init_db()
@@ -141,11 +156,30 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
         new_rows = []
         for gid, o in wk_odds.items():
             sp = o.get("spread")
-            if sp is None:
+            if sp is None or not _opener_window_open(games):
                 continue
             prev = latest.get(gid)
             if prev is None or abs(prev["spread_home"] - sp) >= 0.5:
                 new_rows.append({"game_id": gid, "week": week, "spread_home": sp})
+        # Next week's lines are already on ESPN's scoreboard during this week (verified Oct 2026: week 8 had all 14
+        # spreads while week 7 was still being played). Log them now so the FIRST row per game is the true opener, not
+        # whatever the line had become by the time the week rolled over. The game rows are upserted (pre state only) so
+        # spread_history's foreign key holds; nothing else reads a week that isn't current.
+        if week < nfl_schedule.REG_SEASON_WEEKS:
+            try:
+                nxt = nfl_schedule.fetch_scoreboard(season, week + 1)
+                nxt_odds = odds._from_scoreboard(nxt)
+                for g in nxt:
+                    if g.get("state") == "pre":
+                        store.upsert_game({k: v for k, v in g.items() if not k.startswith("_")})
+                nxt_latest = store.spread_history_latest_for_games([g["game_id"] for g in nxt])
+                for gid, o in nxt_odds.items():
+                    sp = o.get("spread")
+                    prev = nxt_latest.get(gid)
+                    if sp is not None and _opener_window_open(nxt) and (prev is None or abs(prev["spread_home"] - sp) >= 0.5):
+                        new_rows.append({"game_id": gid, "week": week + 1, "spread_home": sp})
+            except Exception as exc:  # noqa: BLE001 - opener logging is best-effort
+                log.warning("next-week opener logging failed: %s", exc)
         store.spread_history_insert(new_rows)
         summary["spread_history"] = f"{len(new_rows)} new snapshot(s)"
     except Exception as exc:  # noqa: BLE001 - best-effort analytics; don't fail the run
