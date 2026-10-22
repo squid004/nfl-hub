@@ -1975,14 +1975,19 @@ def power_rankings(ratings: dict[str, dict[str, float]], historical_bounds: dict
     }
 
 
-def season_records(played_games: list[dict], season: int, team_code=normalize_team) -> dict[str, dict[str, int]]:
+def season_records(played_games: list[dict], season: int, team_code=normalize_team,
+                   with_last4: bool = False) -> dict[str, dict[str, int]]:
     """Each team's win-loss-tie record for ONE season, straight off final scores. Keys use
     `team_code` -- normalize_team() by default so the live dashboard's team lookups match;
     the historical dataset passes _historical_team_code so its franchise-era codes (STL/SD/
     OAK) line up with the historical rankings' own keys. Ties count for neither side (NFL
-    regular-season ties are rare but real, e.g. overtime)."""
+    regular-season ties are rare but real, e.g. overtime). with_last4 adds each team's most recent
+    (up to) four results as a "last4" string like "WLWW", oldest first -- the Power Rankings tab's Last 4 column."""
     records: dict[str, dict[str, int]] = {}
-    for g in played_games:
+    results: dict[str, list[str]] = {}
+    ordered = sorted((g for g in played_games if int(g["season"]) == season),
+                     key=lambda g: (int(g["week"]), g.get("gameday") or "")) if with_last4 else played_games
+    for g in ordered:
         if int(g["season"]) != season:
             continue
         try:
@@ -1995,12 +2000,21 @@ def season_records(played_games: list[dict], season: int, team_code=normalize_te
         if home_pts > away_pts:
             records[home]["wins"] += 1
             records[away]["losses"] += 1
+            results.setdefault(home, []).append("W")
+            results.setdefault(away, []).append("L")
         elif away_pts > home_pts:
             records[away]["wins"] += 1
             records[home]["losses"] += 1
+            results.setdefault(away, []).append("W")
+            results.setdefault(home, []).append("L")
         else:
             records[home]["ties"] += 1
             records[away]["ties"] += 1
+            results.setdefault(home, []).append("T")
+            results.setdefault(away, []).append("T")
+    if with_last4:
+        for team, rec in records.items():
+            rec["last4"] = "".join(results.get(team, [])[-4:])
     return records
 
 
@@ -2933,8 +2947,9 @@ def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: i
                 if r.get("result") not in ("", "NA", None) and int(r["season"]) == current_season
                 and int(r["week"]) < week
             ]
-            if "team_records" not in existing_week:
-                existing_week["team_records"] = season_records(records_cutoff, current_season)
+            if ("team_records" not in existing_week
+                    or any("last4" not in v for v in existing_week["team_records"].values())):
+                existing_week["team_records"] = season_records(records_cutoff, current_season, with_last4=True)
                 changed = True
             if existing_week.get("matchups_schema") != MATCHUPS_SCHEMA_VERSION:
                 played_cutoff = [
@@ -2982,7 +2997,7 @@ def refresh_weekly_power_rankings(store, all_rows: list[dict], current_season: i
             # each team's record AS OF right before week W's first kickoff -- same cutoff as
             # everything else in this snapshot, so a browsed past week shows the record that
             # was actually true then, not today's.
-            "team_records": season_records(played_cutoff, current_season),
+            "team_records": season_records(played_cutoff, current_season, with_last4=True),
             # Moneyline/ATS card data (power model, score distribution) for THIS week's own
             # games -- see _week_matchups_asof()'s own docstring for the cutoff/caveats.
             "matchups": _week_matchups_asof(played_cutoff, all_rows, current_season, week),
@@ -3230,7 +3245,7 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
     except Exception as exc:  # noqa: BLE001 - analytics only; never block the rating refresh
         log.warning("prospective log skipped: %s", exc)
     power = power_rankings(ratings, historical_bounds)
-    team_records = season_records(played, current_season)
+    team_records = season_records(played, current_season, with_last4=True)
     _refresh_parlay_snapshot(store, current_season, current_week, power, all_rows)
     refresh_weekly_power_rankings(store, all_rows, current_season, current_week)
 

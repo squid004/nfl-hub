@@ -151,7 +151,12 @@ const App = {
         }
       }
 
-      const ctx = { week: viewWeek, liveWeek, isPastWeek: isPast, season, games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks,
+      // The rank baseline for the Power Rankings trend arrows: the snapshot from before the previous week's games.
+      const prevPower = weeklyPowerRankings?.[String(season)]?.[String(viewWeek - 1)]?.power_rankings || null;
+      // ...and four weeks back for the Last 4 trend (earliest snapshot of the season if fewer than four weeks exist).
+      const base4 = Math.max(1, viewWeek - 4);
+      const prevPower4 = viewWeek > 1 ? (weeklyPowerRankings?.[String(season)]?.[String(base4)]?.power_rankings || null) : null;
+      const ctx = { prevPower, prevPower4, week: viewWeek, liveWeek, isPastWeek: isPast, season, games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks,
                     refreshReq, lastRefresh, hist, bSnap,
                     edgeLog, edgeBias, edgeLeaderboard,
                     injuries, spreadHist, elwayQb1, teamRatings, qbDepthChart, parlaySnapshot, historicalPower, elwayScoreHistory,

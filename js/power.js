@@ -18,6 +18,7 @@ const POWER_COLS = [
   ['rank', 'Rank'],
   ['team', 'Team'],
   ['record', 'Record'],
+  ['last4', 'Last 4', 'Record over the most recent four games. The arrow is how far its power rank has moved over the last four weeks: green up, red down, yellow dash for no change. Hover for the W/L sequence, oldest first.'],
   ['score', 'Power Score'],
   ['rush_off_epa', 'Rush Offense'],
   ['pass_off_epa', 'Pass Offense'],
@@ -146,10 +147,19 @@ function normalizeToTier(value, cutoffs) {
 
 function fmtPowerVal(key, v) {
   if (v == null) return '—';
-  if (key === 'team' || key === 'rank' || key === 'record') return v;
+  if (key === 'team' || key === 'rank' || key === 'record' || key === 'last4') return v;
   if (EPA_0_100_COLS.has(key)) return v.toFixed(1); // fixed 0-100 scale
   if (key.startsWith('points')) return v.toFixed(1); // raw per-game average
   return v.toFixed(2); // turnovers: raw per-game average
+}
+
+// Trend marker: green up arrow with the size of the move, red down arrow, yellow dash for no change.
+function trendHtml(delta, title, showN = true) {
+  const t = title ? ` title="${esc(title)}"` : '';
+  if (delta == null) return '';
+  if (delta > 0) return ` <span class="trend-up"${t}>&#9650;${showN ? delta : ''}</span>`;
+  if (delta < 0) return ` <span class="trend-down"${t}>&#9660;${showN ? -delta : ''}</span>`;
+  return ` <span class="trend-flat"${t}>&ndash;</span>`;
 }
 
 const Power = {
@@ -168,10 +178,22 @@ const Power = {
     const pr = teamRatings.power_rankings || {};
     const meta = teamRatings.power_ranking_meta || null;
     const records = teamRatings.team_records || {};
+    const prev = ctx.prevPower || null;
+    const prev4 = ctx.prevPower4 || null;
     const rows = Object.entries(pr).map(([team, info]) => {
       const rec = records[team];
       const played = rec ? rec.wins + rec.losses + rec.ties : 0;
+      // Last 4: record plus a trend against the whole-season record (win share lately vs overall).
+      const seq = rec && rec.last4 ? rec.last4 : null;
+      const l4w = seq ? [...seq].filter(c => c === 'W').length + 0.5 * [...seq].filter(c => c === 'T').length : null;
+      const l4pct = seq ? l4w / seq.length : null;
+      const prevRank4 = prev4 && prev4[team] ? prev4[team].rank : null;
+      const l4trend = prevRank4 == null ? null : prevRank4 - info.rank;   // positive = moved up over the last four weeks
+      const l4rec = seq ? `${[...seq].filter(c => c === 'W').length}-${[...seq].filter(c => c === 'L').length}${seq.includes('T') ? '-' + [...seq].filter(c => c === 'T').length : ''}` : '—';
+      const prevRank = prev && prev[team] ? prev[team].rank : null;
       return {
+        rankDelta: prevRank == null ? null : prevRank - info.rank,   // positive = moved up
+        l4rec, l4pct, l4trend, l4seq: seq,
         team, rank: info.rank, score: info.score_display, sos: info.sos_display, ...info.ratings_display,
         record: rec ? `${rec.wins}-${rec.losses}${rec.ties ? '-' + rec.ties : ''}` : '—',
         recordPct: played ? (rec.wins + rec.ties * 0.5) / played : null,
@@ -186,6 +208,7 @@ const Power = {
     const { col, dir } = this._sort;
     rows.sort((a, b) => {
       if (col === 'team') return dir * a.team.localeCompare(b.team);
+      if (col === 'last4') return dir * ((a.l4pct ?? -1) - (b.l4pct ?? -1)) || a.team.localeCompare(b.team);
       if (col === 'record') return dir * ((a.recordPct ?? -1) - (b.recordPct ?? -1)) || a.team.localeCompare(b.team);
       return dir * ((a[col] ?? 0) - (b[col] ?? 0)) || a.team.localeCompare(b.team);
     });
@@ -209,6 +232,8 @@ const Power = {
       const c = classifications[key];
       const g = c ? c.groupOf.get(r.team) : null;
       const cls = g ? GROUP_META[g].textCls : '';
+      if (key === 'rank') return `<td class="num">${r.rank}${trendHtml(r.rankDelta, 'Change in power rank since last week')}</td>`;
+      if (key === 'last4') return `<td class="num" title="${esc(r.l4seq ? [...r.l4seq].join(' ') : '')}">${r.l4rec}${trendHtml(r.l4trend, 'Change in power rank over the last four weeks')}</td>`;
       return `<td class="num${cls ? ' ' + cls : ''}">${fmtPowerVal(key, r[key])}</td>`;
     }).join('')}</tr>`).join('');
 

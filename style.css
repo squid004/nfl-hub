@@ -274,3 +274,6 @@ body.read-only button[data-act="refresh"] { opacity:.45; cursor:not-allowed; }
 .toast { padding:9px 12px; border-radius:6px; border:1px solid var(--line); background:var(--panel2); color:var(--text); font-size:.85rem; box-shadow:0 4px 14px rgba(0,0,0,.35); }
 .toast.bad { border-color:var(--bad); }
 .toast.warn { border-color:var(--warn); }
+.trend-up   { color:var(--good); font-weight:600; font-size:.8em; }
+.trend-down { color:var(--bad);  font-weight:600; font-size:.8em; }
+.trend-flat { color:var(--warn); font-weight:600; font-size:.8em; }
