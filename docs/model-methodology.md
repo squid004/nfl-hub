@@ -375,6 +375,23 @@ revisiting.
 
 ### 3.1 Confirmed null (don't re-attempt without new reasoning)
 
+- **QB weight refit against the ATS residual** (v68, 2026-10-22; cowork B6.1) — the market
+  residual (margin - closing spread) correlates with the QB gap even after delta uses it: the
+  fitted shift is consistently toward a *larger* QB weight (about 0.7 delta units on the EPA gap,
+  1.4-2.7 on QB-flag games only), i.e. the market prices a QB change more heavily than the
+  win/loss fit does. Shifting the weights that way, walk-forward 2011-2026 vs. the fully
+  walk-forward win/loss-fit baseline: dLogLoss +0.0006 to +0.0015, dAUC +0.0006 to +0.0009,
+  better in both halves and in 69-75% of seasons — but paired-bootstrap P(dLL <= 0) = 0.022 to
+  0.042, so **fails the pre-registered p <= 0.01 bar** (all three variants). Model-side ATS on
+  QB-flag games stays 44-48%, unchanged. Real direction, too small to ship; B6.2 (QB-adjusted
+  team rating prototype) not attempted.
+- **Empirical-Bayes shrinkage of the actual passer's trailing EPA toward `backup_avg_epa`**
+  (v69, 2026-10-22; the item v38 left untried) — K in {25, 50, 100, 200, 400} (backup only) and
+  K=100 on both sides, same walk-forward pipeline. All six improve both metrics by a hair
+  (dLL +0.0002 to +0.0005, dAUC +0.0003 to +0.0006) but P(dLL <= 0) is 0.10 to 0.18 and only
+  K=100 reaches 62% of seasons. Not adopted. The `QB_EPA_SHRINK_K` / `QB_EPA_SHRINK_BOTH`
+  constants (default off) stay in `team_ratings.py` only so the script can run.
+
 - **Weather vs. win probability** (v29, 2026-10-06) — real, modest effect on *predicted
   points* (shipped, see §1.4), but genuinely nothing to add to win probability: hit rate in
   bad vs. good weather is statistically identical, and a grid search's own optimal
@@ -408,7 +425,7 @@ revisiting.
   effect. A specific player's own EPA over 50-150 attempts is noisier than the SAME average
   pooled over 46,000 backup attempts — more specific isn't automatically more accurate at
   this sample size. Shrinking the specific number toward the pool average by sample size,
-  instead of using it outright, might recover something — not attempted.
+  instead of using it outright, might recover something — tried as v69 (see below): not enough.
 - **Garbage-time-filtered points_off/points_def_allowed, composite reweighted** (v39,
   2026-10-11) — prompted by noticing `points_off`/`points_def_allowed` are the #1 and #3
   heaviest-weighted of all 8 stats (~41% of total weight combined) *and* the only two not
@@ -465,6 +482,18 @@ revisiting.
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
+- **Direct margin model for the ATS tab's cover probability** (v70, 2026-10-22; cowork B7.2) —
+  margin distribution = the 400 nearest training games by predicted margin (shifted by the
+  rounded gap), versus production's independent per-side scores re-weighted by historical score
+  frequency. Against the weak form of the baseline (no mean calibration) it wins everything,
+  but that is mostly the empirical margin recalibrating the *scale* of the predicted margin.
+  Against the fair baseline (production's own bisection onto B's win probability, so only the
+  distribution shape differs): margin log-likelihood +0.009 overall but -0.008 in the second
+  half and better in only 50% of seasons (P = 0.275) — shape alone is NOT better; cover-probability
+  log loss is better by +0.015 in both halves (P < 0.001) — the one piece that looks real. Not
+  shipped: the pre-registered rule needs both metrics. Worth a follow-up that tests only the
+  cover-probability piece (e.g. key-number mass at 3 and 7 on top of the production pipeline).
+
 - **Secondary (DB/S) unit health** (v27, 2026-10-06) — the one real survivor of the
   OL/DL/LB/secondary sweep: confirmed in the correct direction on a proper train-early/
   confirm-late split (p=0.082/0.094, consistent sign, a genuine p97 threshold). Fitted
@@ -486,11 +515,20 @@ revisiting.
 
 ### 3.3 Deferred (not tested — blocked on data, not found wanting)
 
+- **State-space (Kalman) team ratings** (cowork B7.3, 2026-10-22) — a research branch that must
+  beat the B1 composite under the ADOPT rule; not started (largest item on the plan, no evidence
+  yet that the EWMA composite is the bottleneck given v61/v62/v63 all landed within noise).
+
 - **"Steam" / line movement as a predictive signal** (2026-10-02) — the `Steam:` chip is
   currently cosmetic (flags `|Δspread| >= 1.5`, feeds nothing). Testing whether it predicts
   outcomes needs opening-vs-closing-line data; nflverse's `games.csv` only has closing lines,
   and this project's own `spread_history` table doesn't yet cover enough completed weeks for
   a real backtest.
+  **Update 2026-10-22 (B5):** `spread_history` only began in week 3 and its first row per game was the line at the time the page's week
+  rolled, not the true opener. The refresh now also polls NEXT week's ESPN lines every run (verified: week 8 had all 14 spreads
+  during week 7), so from week 8 onward the first row per game is the opener and the last is the close. Nothing is logged for a week until Tuesday 6am ET of that week (`_opener_window_open`), so placeholder lines posted while the previous week is still settling never count as the opener (week 8 starts logging Tue 2026-10-27). Test (model-side ATS vs.
+  opener, and vs. steam, split by halves, v60 discipline) is deferred until a full season of openers exists (earliest: after the
+  2027 season).
 - **Broader roster-depth signal via `weekly_rosters`** (flagged 2026-10-07, not built) —
   nflverse's Active/IR/PUP/PS status field, back to 2002, could extend the QB-only health
   work toward a general roster-depth signal without waiting on PFF — not yet attempted.
