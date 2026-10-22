@@ -552,6 +552,13 @@ QB_GAP_DECAY_RATE = 0.4  # shrinks the QB-health gap by (1-rate)**(n-1) for the 
 # the primary's return (that half was tested and separately confirmed to hurt, v44).
 
 
+# Empirical-Bayes shrinkage of a passer's trailing EPA toward backup_avg_epa by career attempts (research v69; 0 = off, the
+# shipped behavior). QB_EPA_SHRINK_BOTH also shrinks the primary's number (v43's variant); default shrinks only whoever
+# actually played, i.e. the backup the plan's B7 item is about.
+QB_EPA_SHRINK_K = 0.0
+QB_EPA_SHRINK_BOTH = False
+
+
 def qb_quality_gap_data(played_games: list[dict], current_season: int):
     """One chronological walk over every passer's pass attempts/EPA (FIRST_INJURY_SEASON
     through current_season -- matches the window QB_QUALITY_GAP_WEIGHT was fit against)
@@ -658,6 +665,8 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
     window_hist: dict[str, deque] = defaultdict(lambda: deque(maxlen=PRIMARY_WINDOW))
     primary_so_far: dict[tuple[str, str], str] = {}
     passer_hist: dict[str, list[float]] = defaultdict(list)
+    passer_att: dict[str, int] = defaultdict(int)          # career attempts so far (only used by the optional shrinkage)
+    trailing_att: dict[tuple[str, str], int] = {}
     trailing_epa: dict[tuple[str, str], float | None] = {}
     league_avg: list[float] = []
     backup_epa_sum = 0.0
@@ -671,8 +680,10 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
         if ap is not None:
             ph = passer_hist[ap]
             trailing_epa[(ap, gid)] = (sum(ph) / len(ph)) if ph else None
+            trailing_att[(ap, gid)] = passer_att[ap]
             epa_sum, attempts = game_team_epa[(gid, team)]
             if attempts:
+                passer_att[ap] += attempts
                 per_play = epa_sum / attempts
                 ph.append(per_play)
                 league_avg.append(per_play)
@@ -703,6 +714,13 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
         tp = trailing_epa.get((primary, gid))
         ta = trailing_epa.get((actual, gid))
         tp = tp if tp is not None else league_avg_epa
+        if QB_EPA_SHRINK_K > 0:
+            if ta is not None:
+                na = trailing_att.get((actual, gid), 0)
+                ta = (na * ta + QB_EPA_SHRINK_K * backup_avg_epa) / (na + QB_EPA_SHRINK_K)
+            if QB_EPA_SHRINK_BOTH and trailing_epa.get((primary, gid)) is not None:
+                npri = trailing_att.get((primary, gid), 0)
+                tp = (npri * tp + QB_EPA_SHRINK_K * backup_avg_epa) / (npri + QB_EPA_SHRINK_K)
         # `ta`'s fallback only fires when the passer who ACTUALLY played has zero prior
         # tracked attempts (a true NFL debut) -- backup_avg_epa is the better estimate of
         # "an unknown passer thrust into playing," same reasoning as the live gate below.
