@@ -18,8 +18,8 @@ const POWER_COLS = [
   ['rank', 'Rank'],
   ['team', 'Team'],
   ['record', 'Record'],
-  ['last4', 'Last 4', 'Record over the most recent four games. The arrow is how far its power rank has moved over the last four weeks: green up, red down, yellow dash for no change. Hover for the W/L sequence, oldest first.'],
   ['score', 'Power Score'],
+  ['elo', 'Elo', 'Elo rating (FiveThirtyEight-style, margin-aware, regressed a third toward the mean each new season). The arrow is the change since last week; the composite Power Score uses Elo as its 10th stat.'],
   ['rush_off_epa', 'Rush Offense'],
   ['pass_off_epa', 'Pass Offense'],
   ['rush_def_epa_allowed', 'Rush Defense'],
@@ -147,23 +147,26 @@ function normalizeToTier(value, cutoffs) {
 
 function fmtPowerVal(key, v) {
   if (v == null) return '—';
-  if (key === 'team' || key === 'rank' || key === 'record' || key === 'last4') return v;
+  if (key === 'team' || key === 'rank' || key === 'record') return v;
+  if (key === 'elo') return v.toFixed(0);
   if (EPA_0_100_COLS.has(key)) return v.toFixed(1); // fixed 0-100 scale
   if (key.startsWith('points')) return v.toFixed(1); // raw per-game average
   return v.toFixed(2); // turnovers: raw per-game average
 }
 
 // Trend marker: green up arrow with the size of the move, red down arrow, yellow dash for no change.
-function trendHtml(delta, title, showN = true) {
+// `delta` is the signed move (positive = up/better); `fmt` formats its magnitude.
+function trendHtml(delta, title, fmt = v => v) {
   const t = title ? ` title="${esc(title)}"` : '';
   if (delta == null) return '';
-  if (delta > 0) return ` <span class="trend-up"${t}>&#9650;${showN ? delta : ''}</span>`;
-  if (delta < 0) return ` <span class="trend-down"${t}>&#9660;${showN ? -delta : ''}</span>`;
+  if (delta > 0) return ` <span class="trend-up"${t}>&#9650;${fmt(delta)}</span>`;
+  if (delta < 0) return ` <span class="trend-down"${t}>&#9660;${fmt(-delta)}</span>`;
   return ` <span class="trend-flat"${t}>&ndash;</span>`;
 }
 
 const Power = {
   _sort: { col: 'rank', dir: 1 },
+  _open: new Set(),   // teams whose dropdown is open; survives the 90-second re-renders
 
   sortBy(col) {
     if (this._sort.col === col) this._sort.dir *= -1;
@@ -178,22 +181,21 @@ const Power = {
     const pr = teamRatings.power_rankings || {};
     const meta = teamRatings.power_ranking_meta || null;
     const records = teamRatings.team_records || {};
-    const prev = ctx.prevPower || null;
-    const prev4 = ctx.prevPower4 || null;
+    const prev = ctx.prevPower || null;   // last week's snapshot: baseline for every trend arrow
     const rows = Object.entries(pr).map(([team, info]) => {
       const rec = records[team];
       const played = rec ? rec.wins + rec.losses + rec.ties : 0;
-      // Last 4: record plus a trend against the whole-season record (win share lately vs overall).
-      const seq = rec && rec.last4 ? rec.last4 : null;
-      const l4w = seq ? [...seq].filter(c => c === 'W').length + 0.5 * [...seq].filter(c => c === 'T').length : null;
-      const l4pct = seq ? l4w / seq.length : null;
-      const prevRank4 = prev4 && prev4[team] ? prev4[team].rank : null;
-      const l4trend = prevRank4 == null ? null : prevRank4 - info.rank;   // positive = moved up over the last four weeks
-      const l4rec = seq ? `${[...seq].filter(c => c === 'W').length}-${[...seq].filter(c => c === 'L').length}${seq.includes('T') ? '-' + [...seq].filter(c => c === 'T').length : ''}` : '—';
-      const prevRank = prev && prev[team] ? prev[team].rank : null;
+      const p = prev && prev[team] ? prev[team] : null;
+      const elo = info.ratings && info.ratings.elo != null ? info.ratings.elo : null;
+      const prevElo = p && p.ratings && p.ratings.elo != null ? p.ratings.elo : null;
+      // Moves are measured on the numbers as displayed (1 decimal for Power Score, whole points for Elo), so a flat
+      // dash never hides behind a visible change and an arrow never shows a move of zero.
+      const scoreDelta = p && p.score_display != null && info.score_display != null
+        ? Math.round((info.score_display - p.score_display) * 10) / 10 : null;
+      const eloDelta = elo != null && prevElo != null ? Math.round(elo) - Math.round(prevElo) : null;
       return {
-        rankDelta: prevRank == null ? null : prevRank - info.rank,   // positive = moved up
-        l4rec, l4pct, l4trend, l4seq: seq,
+        rankDelta: p ? p.rank - info.rank : null,   // positive = moved up
+        scoreDelta, eloDelta, elo,
         team, rank: info.rank, score: info.score_display, sos: info.sos_display, ...info.ratings_display,
         record: rec ? `${rec.wins}-${rec.losses}${rec.ties ? '-' + rec.ties : ''}` : '—',
         recordPct: played ? (rec.wins + rec.ties * 0.5) / played : null,
@@ -208,14 +210,12 @@ const Power = {
     const { col, dir } = this._sort;
     rows.sort((a, b) => {
       if (col === 'team') return dir * a.team.localeCompare(b.team);
-      if (col === 'last4') return dir * ((a.l4pct ?? -1) - (b.l4pct ?? -1)) || a.team.localeCompare(b.team);
       if (col === 'record') return dir * ((a.recordPct ?? -1) - (b.recordPct ?? -1)) || a.team.localeCompare(b.team);
       return dir * ((a[col] ?? 0) - (b[col] ?? 0)) || a.team.localeCompare(b.team);
     });
 
-    // One classification per EPA stat, shared by the table's cell coloring below and the
-    // distribution panel -- computed once so the two can never disagree about which group a
-    // team is in.
+    // One classification per EPA stat, shared by the table's cell coloring and each team's dropdown strips -- computed once
+    // so the two can never disagree about which group a team is in.
     const classifications = {};
     DIST_METRICS.forEach(([key]) => {
       const teamVals = rows.filter(r => r[key] != null).map(r => ({ team: r.team, value: r[key] }));
@@ -228,14 +228,26 @@ const Power = {
       return `<th class="num"${title ? ` title="${esc(title)}"` : ''}><button data-act="power-sort" data-col="${key}" class="sort-btn${active ? ' active' : ''}">${label}${arrow}</button></th>`;
     }).join('');
 
-    const body = rows.map(r => `<tr data-team="${esc(r.team)}">${POWER_COLS.map(([key]) => {
-      const c = classifications[key];
-      const g = c ? c.groupOf.get(r.team) : null;
-      const cls = g ? GROUP_META[g].textCls : '';
-      if (key === 'rank') return `<td class="num">${r.rank}${trendHtml(r.rankDelta, 'Change in power rank since last week')}</td>`;
-      if (key === 'last4') return `<td class="num" title="${esc(r.l4seq ? [...r.l4seq].join(' ') : '')}">${r.l4rec}${trendHtml(r.l4trend, 'Change in power rank over the last four weeks')}</td>`;
-      return `<td class="num${cls ? ' ' + cls : ''}">${fmtPowerVal(key, r[key])}</td>`;
-    }).join('')}</tr>`).join('');
+    const body = rows.map(r => {
+      const open = this._open.has(r.team);
+      const cells = POWER_COLS.map(([key]) => {
+        const c = classifications[key];
+        const g = c ? c.groupOf.get(r.team) : null;
+        const cls = g ? GROUP_META[g].textCls : '';
+        if (key === 'rank') return `<td class="num">${r.rank}${trendHtml(r.rankDelta, 'Change in power rank since last week')}</td>`;
+        if (key === 'team') return `<td class="num"><span class="power-chev">${open ? '&#9662;' : '&#9656;'}</span> ${esc(r.team)}</td>`;
+        if (key === 'score') return `<td class="num">${fmtPowerVal(key, r.score)}${trendHtml(r.scoreDelta, 'Change in Power Score since last week', v => v.toFixed(1))}</td>`;
+        if (key === 'elo') return `<td class="num">${fmtPowerVal(key, r.elo)}${trendHtml(r.eloDelta, 'Change in Elo since last week')}</td>`;
+        return `<td class="num${cls ? ' ' + cls : ''}">${fmtPowerVal(key, r[key])}</td>`;
+      }).join('');
+      const detail = open ? `<tr class="power-detail" data-detail="${esc(r.team)}"><td colspan="${POWER_COLS.length}">
+          <div class="power-detail-grid">
+            <div class="power-detail-cell"><div class="power-detail-cap">${esc(r.team)} &mdash; EPA profile</div><div class="power-radar-chart" data-radar="${esc(r.team)}"></div></div>
+            <div class="power-detail-cell"><div class="power-detail-cap">Where ${esc(r.team)} sits in the league</div>${this._teamStrips(r.team, rows, classifications)}</div>
+            <div class="power-detail-cell"><div class="power-detail-cap">${esc(r.team)} &mdash; Power Score and Elo, ratings entering each week</div><div class="power-trend-chart" data-trend="${esc(r.team)}"></div></div>
+          </div></td></tr>` : '';
+      return `<tr data-team="${esc(r.team)}" class="${open ? 'power-row-open' : ''}">${cells}</tr>${detail}`;
+    }).join('');
 
     const statLabel = key => (POWER_COLS.find(([k]) => k === key) || [null, key])[1];
     const weightsList = meta
@@ -248,103 +260,40 @@ const Power = {
     el.innerHTML = `
       <div class="panel">
         <h2>Power Rankings</h2>
+        <p class="muted small">Click a team for its EPA profile, league position and season trend. Arrows show the change since last week.</p>
         ${meta ? `<details class="power-methodology">
           <summary class="muted small">Weights used (click to expand)</summary>
           <ul class="power-weights">${weightsList}</ul>
         </details>` : ''}
         <table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>
-      </div>
-      ${this._distributionPanel(rows, classifications)}`;
+        ${this._tiersHtml(classifications)}
+      </div>`;
 
-    // Read by the radar popup's hover/click handlers below, which are wired ONCE (see
-    // _hoverWired) but need whatever the CURRENT render's data is, not a stale closure from
-    // whenever they were first attached -- every reload replaces these.
     this._lastRows = rows;
     this._lastClassifications = classifications;
 
-    // Delegated, wired once -- #power itself survives every re-render (only its innerHTML's
-    // children get replaced), so this never needs rewiring on sort/reload.
-    if (!this._hoverWired) {
-      const highlight = (team, on) => {
-        el.querySelectorAll(`.dist-tick[data-team="${team}"]`).forEach(t => t.classList.toggle('dist-tick-hover', on));
-      };
-      el.addEventListener('mouseover', e => {
-        const tr = e.target.closest('tr[data-team]');
-        if (!tr) return;
-        highlight(tr.dataset.team, true);
-        if (!this._pinnedTeam) this._showRadar(tr.dataset.team, tr);
-      });
-      el.addEventListener('mouseout', e => {
-        const tr = e.target.closest('tr[data-team]');
-        if (!tr) return;
-        highlight(tr.dataset.team, false);
-        if (!this._pinnedTeam) this._hideRadar();
-      });
+    // Charts exist only for open teams; drawn after the markup is in place (Plotly needs the node).
+    this._open.forEach(team => {
+      const row = rows.find(r => r.team === team);
+      if (!row) return;
+      const radarEl = el.querySelector(`[data-radar="${CSS.escape(team)}"]`);
+      if (radarEl) this._drawRadar(radarEl, team, row, classifications);
+      const trendEl = el.querySelector(`[data-trend="${CSS.escape(team)}"]`);
+      if (trendEl) this._drawTrend(trendEl, team, ctx.powerSeries ? ctx.powerSeries[team] : null);
+    });
+
+    // Delegated, wired once -- #power itself survives every re-render (only its innerHTML's children are replaced).
+    if (!this._clickWired) {
       el.addEventListener('click', e => {
+        if (e.target.closest('button, a, .power-detail')) return;   // sort buttons and open dropdowns handle themselves
         const tr = e.target.closest('tr[data-team]');
         if (!tr) return;
-        if (this._pinnedTeam === tr.dataset.team) {
-          this._pinnedTeam = null;
-          this._hideRadar();
-        } else {
-          this._pinnedTeam = tr.dataset.team;
-          this._showRadar(tr.dataset.team, tr);
-        }
+        const team = tr.dataset.team;
+        if (this._open.has(team)) this._open.delete(team); else this._open.add(team);
+        this.render(App._ctx);
       });
-      // Click anywhere outside the table/popup unpins -- otherwise a pinned popup can only
-      // ever be dismissed by re-clicking the exact same row.
-      document.addEventListener('click', e => {
-        if (!this._pinnedTeam) return;
-        if (e.target.closest('#power') || e.target.closest('.power-radar-popup')) return;
-        this._pinnedTeam = null;
-        this._hideRadar();
-      });
-      this._hoverWired = true;
+      this._clickWired = true;
     }
-  },
-
-  // Built once, appended to <body> (not inside #power's own innerHTML, which gets fully
-  // replaced every render/reload -- a child element there would lose its Plotly chart and
-  // any open/pinned state every ~90s).
-  _ensureRadarPopup() {
-    if (this._radarPopup) return this._radarPopup;
-    const popup = document.createElement('div');
-    popup.className = 'power-radar-popup';
-    popup.hidden = true;
-    popup.innerHTML = `<div class="power-radar-cap"></div><div class="power-radar-chart"></div>
-      <div class="power-radar-pin-hint">Click a row to pin this open</div>`;
-    document.body.appendChild(popup);
-    this._radarPopup = popup;
-    return popup;
-  },
-
-  _hideRadar() {
-    if (this._radarPopup) this._radarPopup.hidden = true;
-  },
-
-  // Positions near the hovered/clicked row, clamped to stay fully on-screen either way.
-  _showRadar(team, anchorEl) {
-    const rows = this._lastRows, classifications = this._lastClassifications;
-    if (!rows || !classifications) return;
-    const row = rows.find(r => r.team === team);
-    if (!row) return;
-
-    const popup = this._ensureRadarPopup();
-    popup.querySelector('.power-radar-cap').textContent = `${team} — EPA profile`;
-    popup.querySelector('.power-radar-pin-hint').textContent = this._pinnedTeam === team ? 'Click the row again to unpin' : 'Click a row to pin this open';
-    popup.hidden = false;
-
-    const rect = anchorEl.getBoundingClientRect();
-    const width = 320, height = popup.offsetHeight || 330;
-    let left = rect.right + 10;
-    if (left + width > window.innerWidth - 8) left = rect.left - width - 10;
-    if (left < 8) left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left));
-    let top = rect.top;
-    if (top + height > window.innerHeight - 8) top = Math.max(8, window.innerHeight - height - 8);
-    popup.style.left = `${left}px`;
-    popup.style.top = `${top}px`;
-
-    this._drawRadar(popup.querySelector('.power-radar-chart'), team, row, classifications);
   },
 
   // True-circle bullseye (see tierCutoffs()/normalizeToTier() above): the angular axis is
@@ -407,28 +356,60 @@ const Power = {
     }, { displayModeBar: false, responsive: true, staticPlot: true });
   },
 
-  // One number-line strip per EPA stat, every team positioned at its actual 0-100 value (not
-  // just rank order) so clustering vs. real gaps is visible as literal physical distance, not
-  // just color or order. See classifyTeams() above for the five groups every team lands in.
-  _distributionPanel(rows, classifications) {
-    // Each metric returns its strip plus its tier thresholds separately; the thresholds are
-    // gathered into one collapsed section under all the plots instead of under each strip.
-    const metricHtml = ([key, label]) => {
+  // Season trend for one team: Power Score (left axis) and Elo (right axis) at each week's snapshot, plus the live point.
+  // series = [{ label, score, elo }, ...] built in app.js from the stored weekly snapshots.
+  _drawTrend(el, team, series) {
+    if (!series || series.length < 2) {
+      el.innerHTML = '<p class="muted small">Needs at least two weekly snapshots.</p>';
+      return;
+    }
+    const cs = getComputedStyle(document.documentElement);
+    const cssVar = name => cs.getPropertyValue(name).trim();
+    const text = cssVar('--text'), dim = cssVar('--dim'), accent = cssVar('--accent'), warn = cssVar('--warn');
+    const x = series.map(p => p.label);
+    const traces = [
+      { type: 'scatter', mode: 'lines+markers', name: 'Power Score', x, y: series.map(p => p.score), yaxis: 'y',
+        line: { color: accent, width: 2.5 }, marker: { size: 6 }, hovertemplate: '%{y:.1f}<extra>Power Score</extra>' },
+      { type: 'scatter', mode: 'lines+markers', name: 'Elo', x, y: series.map(p => p.elo), yaxis: 'y2',
+        line: { color: warn, width: 2.5, dash: 'dot' }, marker: { size: 6 }, hovertemplate: '%{y:.0f}<extra>Elo</extra>' },
+    ];
+    const grid = 'rgba(255,255,255,.12)';
+    Plotly.react(el, traces, {
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: text, size: 11 },
+      margin: { t: 8, b: 40, l: 52, r: 52 }, height: 300,
+      legend: { orientation: 'h', y: -0.22, x: 0.5, xanchor: 'center' },
+      xaxis: { type: 'category', gridcolor: grid, linecolor: grid, tickfont: { color: dim } },
+      yaxis: { title: { text: 'Power Score', font: { color: accent } }, tickfont: { color: accent }, gridcolor: grid, zeroline: false },
+      yaxis2: { title: { text: 'Elo', font: { color: warn } }, tickfont: { color: warn }, overlaying: 'y', side: 'right', showgrid: false, zeroline: false, tickformat: ',.0f' },
+    }, { displayModeBar: false, responsive: true });
+  },
+
+  // The four EPA number-line strips for ONE team: every team is a faint dot at its real 0-100 value, the selected team is
+  // ringed and labeled so its position (and the actual gaps to its neighbors) reads at a glance.
+  _teamStrips(team, rows, classifications) {
+    const strips = DIST_METRICS.map(([key, label]) => {
       const c = classifications[key];
-      if (!c) return null;
-      const groupOf = c.groupOf;
-
+      if (!c) return '';
       const ticks = rows.filter(r => r[key] != null).map(r => {
-        const g = groupOf.get(r.team);
-        const meta = g ? GROUP_META[g] : null;
-        return `<div class="dist-tick${meta && meta.dotCls ? ' ' + meta.dotCls : ''}" data-team="${esc(r.team)}" style="left:${r[key]}%"
-            title="${esc(r.team)}: ${r[key].toFixed(1)}/100 (${meta ? meta.label.toLowerCase() : ''})">${meta && meta.labelDots ? `<span class="dist-tick-label ${meta.dotCls}">${esc(r.team)}</span>` : ''}</div>`;
+        const g = c.groupOf.get(r.team);
+        const m = g ? GROUP_META[g] : null;
+        const self = r.team === team;
+        return `<div class="dist-tick${m && m.dotCls ? ' ' + m.dotCls : ''}${self ? ' dist-tick-self' : ' dist-tick-dim'}" style="left:${r[key]}%"
+            title="${esc(r.team)}: ${r[key].toFixed(1)}/100 (${m ? m.label.toLowerCase() : ''})">${self ? `<span class="dist-tick-label dist-tick-label-self">${esc(r.team)} ${r[key].toFixed(0)}</span>` : ''}</div>`;
       }).join('');
+      return `<div class="dist-metric">
+          <div class="dist-label">${esc(label)}</div>
+          <div class="dist-strip"><div class="dist-mean-line" style="left:${c.avg}%" title="League average: ${c.avg.toFixed(1)}/100"></div>${ticks}</div>
+        </div>`;
+    }).join('');
+    return strips || '<p class="muted small">Not enough teams to classify.</p>';
+  },
 
-      // Piecewise boundaries instead of team lists: each group's own lowest value is its
-      // cutoff, chained against the next-better group's cutoff -- exactly the step function
-      // buildTiers()/classifyTeams() actually computed, just read back as thresholds instead
-      // of membership.
+  // The tier cutoffs behind the strips and the table's cell colors, kept as one collapsed list under the table.
+  _tiersHtml(classifications) {
+    const parts = DIST_METRICS.map(([key, label]) => {
+      const c = classifications[key];
+      if (!c) return '';
       const nonEmpty = GROUP_ORDER.map(k => ({ key: k, teams: c[k], ...GROUP_META[k] })).filter(g => g.teams.length);
       const lines = nonEmpty.map((g, i) => {
         const min = Math.min(...g.teams.map(t => t.value));
@@ -440,31 +421,11 @@ const Power = {
         else cond = `${min.toFixed(1)} &le; v &lt; ${prevMin.toFixed(1)}`;
         return `<li><strong class="${g.textCls}">${g.label}</strong>: ${cond}</li>`;
       }).join('');
-
-      return {
-        strip: `<div class="dist-metric">
-          <div class="dist-label">${esc(label)}</div>
-          <div class="dist-strip">
-            <div class="dist-mean-line" style="left:${c.avg}%" title="League average: ${c.avg.toFixed(1)}/100"></div>
-            ${ticks}
-          </div>
-        </div>`,
-        tiers: `<div class="dist-metric">
-          <div class="dist-label">${esc(label)}</div>
-          <ul class="dist-tiers">${lines}</ul>
-        </div>`,
-      };
-    };
-    const parts = DIST_METRICS.map(metricHtml).filter(Boolean);
-    if (!parts.length) return '';
-    return `
-      <div class="panel">
-        <h2>EPA distribution &amp; tiers</h2>
-        ${parts.map(p => p.strip).join('')}
-        <details class="power-methodology">
-          <summary class="muted small">Show tiers (click to expand)</summary>
-          ${parts.map(p => p.tiers).join('')}
-        </details>
-      </div>`;
+      return `<div class="dist-metric"><div class="dist-label">${esc(label)}</div><ul class="dist-tiers">${lines}</ul></div>`;
+    }).filter(Boolean).join('');
+    if (!parts) return '';
+    return `<details class="power-methodology">
+        <summary class="muted small">EPA tier cutoffs (click to expand)</summary>${parts}
+      </details>`;
   },
 };

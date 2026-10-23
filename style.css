@@ -181,20 +181,22 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 .dist-tick-label.outlier-good { color:var(--good); }
 .dist-tick-label.outlier-bad { color:var(--bad); }
 .dist-mean-line { position:absolute; top:-3px; bottom:-3px; width:1px; background:var(--accent); opacity:.6; }
-.dist-tick.dist-tick-hover {
-  width:14px; height:14px; margin:-7px 0 0 -7px; z-index:2;
-  box-shadow:0 0 0 3px var(--accent);
-}
 #power tbody tr[data-team]:hover { background:var(--panel2); cursor:pointer; }
-.power-radar-popup {
-  position:fixed; z-index:50; background:var(--panel); border:1px solid var(--line);
-  border-radius:10px; padding:10px 12px; box-shadow:0 10px 30px rgba(0,0,0,.45);
-  width:320px;
+.power-chev { color:var(--dim); font-size:.8em; }
+#power tr.power-row-open { background:var(--panel2); }
+.power-detail > td { padding:10px 8px 16px; background:var(--panel2); }
+.power-detail-grid {
+  display:grid; grid-template-columns:repeat(auto-fit, minmax(290px, 1fr)); gap:16px; text-align:left;
+  /* the table is wider than the screen, so keep the dropdown pinned to the visible width instead of stretching with the table */
+  position:sticky; left:0; width:min(1200px, calc(100vw - 90px));
 }
-.power-radar-popup[hidden] { display:none; }
-.power-radar-cap { text-align:center; font-size:12px; font-weight:700; margin-bottom:2px; }
-.power-radar-chart { width:100%; height:260px; }
-.power-radar-pin-hint { text-align:center; font-size:10px; color:var(--dim); margin-top:2px; }
+.power-detail-cell { min-width:0; }
+.power-detail-cap { font-size:.8rem; font-weight:700; margin-bottom:4px; }
+.power-radar-chart { width:100%; height:300px; }
+.power-trend-chart { width:100%; height:300px; }
+.dist-tick.dist-tick-dim { opacity:.45; }
+.dist-tick.dist-tick-self { opacity:1; z-index:3; width:12px; height:12px; margin:-6px 0 0 -6px; box-shadow:0 0 0 3px var(--accent); background:var(--accent); }
+.dist-tick-label-self { color:var(--text); }
 .dist-summary { margin-top:4px; }
 .dist-tiers { margin:4px 0 0; padding-left:18px; font-size:.82rem; color:var(--dim); }
 .dist-tiers li { margin-bottom:3px; }
