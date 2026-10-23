@@ -2675,6 +2675,28 @@ def compute_calibration_stats(scatter: list[dict]) -> dict | None:
     }
 
 
+def _played_signature(played: list[dict], game_log: list[dict], season: int) -> str:
+    """The value stored as the 'played games' signature after a rebuild: nflverse's played-game count MINUS recent games the build
+    could not rate. A game's result lands in games.csv before its play-by-play file does, and compute_ratings() skips a game with no
+    play-by-play. Storing the plain count would record such a game as built, so the next freshness check (count unchanged) would
+    never retry it, leaving it out of the ratings and the backtest until the NEXT game finished. Storing a smaller number makes
+    the next check see a mismatch and rebuild, repeating every check until the play-by-play arrives. Only games from the last 7
+    days count as 'missing', so a game that never gets play-by-play cannot cause rebuilds forever."""
+    from datetime import date as _date, timedelta as _td
+    rated = {r["game_id"] for r in game_log if r["season"] == season}
+    cutoff = (_date.today() - _td(days=7)).isoformat()
+    missing = 0
+    for g in played:
+        try:
+            if int(g["season"]) != season or (g.get("gameday") or "") < cutoff or g["game_id"] in rated:
+                continue
+            float(g["spread_line"])   # compute_ratings only logs games that have a spread
+        except (KeyError, ValueError, TypeError):
+            continue
+        missing += 1
+    return str(len(played) - missing)
+
+
 def _nflverse_unchanged(store, date_key: str, played_key: str, checked_key: str, today: str, force: bool) -> bool:
     """True if this daily rebuild can be skipped: it already ran today AND nflverse has no new completed games since.
     A plain once-per-UTC-day gate (which flips at 8pm ET) used to lock in ratings built before Monday night's play-by-play
@@ -2753,7 +2775,7 @@ def refresh_historical(store, force: bool = False) -> str:
         "walkforward": walkforward_summary,
     }))
     store.kv_set("historical_power_date", today)
-    store.kv_set("historical_power_played_n", str(len(played)))
+    store.kv_set("historical_power_played_n", _played_signature(played, game_log, current_season))
     return (
         f"built ({len(rankings)} team-seasons, "
         f"{seasons_covered[0] if seasons_covered else '?'}-{seasons_covered[-1] if seasons_covered else '?'}, "
@@ -3289,5 +3311,5 @@ def refresh(store, force: bool = False, injuries: dict[str, list[dict]] | None =
         "healthy": fantasy_healthy_week,
     }))
     store.kv_set("team_ratings_date", today)
-    store.kv_set("team_ratings_played_n", str(len(played)))
+    store.kv_set("team_ratings_played_n", _played_signature(played, game_log, current_season))
     return f"built ({len(ratings)} teams, {len(matchups)} upcoming matchups, through {current_season} wk {current_week})"

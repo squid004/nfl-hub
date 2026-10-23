@@ -9,11 +9,16 @@ betting lines — plus ntfy phone reminders before every lineup lock and pick de
 
 - **Frontend:** static `index.html` + `js/*.js` on **GitHub Pages**. Reads Supabase live,
   renders every panel client-side. Pick'em buttons write straight to Supabase.
-- **Data store:** **Supabase** (Postgres). Anon key is committed (client-side use); every
-  table's RLS policy is "anon all" — personal single-tenant tool.
-- **Updater:** a **GitHub Actions** cron job (`.github/workflows/refresh.yml`, every ~10 min
-  + manual "Run workflow") runs `python -m nflhub refresh` to pull all sources into Supabase
-  and `python -m nflhub tick` to send any due reminders to ntfy. Your PC does not need to be on.
+- **Data store:** **Supabase** (Postgres). The anon key is committed (client-side use) and is read-only:
+  since the 2026-10-23 lockdown (`supabase/auth.sql`) every table is public-read and writable only by the
+  signed-in owner (Google sign-in) or the refresh job's secret key.
+- **Updater:** the **GitHub Actions** workflow `.github/workflows/refresh.yml` runs
+  `python -m nflhub refresh` to pull all sources into Supabase and `python -m nflhub tick` to send any
+  due reminders to ntfy. What actually fires it every 10 minutes (observed 2026-10-23) is NOT the
+  workflow's own `schedule` cron: those runs are `workflow_dispatch` events made with your account's
+  credentials at :00/:10/:20... from something outside GitHub (not a Cowork routine, a Windows task or
+  another repo's workflow; check Settings > Developer settings > tokens for the one used every 10 min).
+  GitHub's native cron fires only about every 5 hours and is just the fallback.
 - **"Refresh now" button:** sets a flag in Supabase; the next cron run refreshes immediately.
   No token in the page.
 
@@ -105,8 +110,11 @@ nflhub/                               the Actions job
 
 ## Known trade-offs
 
-- Public repo + RLS "anon all": anyone with the Supabase URL can read/write your picks
-  (same posture as the meal-planner project). The FantasyPros paid key is **not** exposed —
-  it lives only in Actions secrets.
-- "Refresh now" latency = one cron interval; GitHub's scheduled runs can lag 5–20 min.
+- Public repo: anyone with the Supabase URL can READ your picks; only the owner can write (see above).
+  The FantasyPros paid key is **not** exposed — it lives only in Actions secrets.
+- "Refresh now" latency = one dispatch interval (10 min) while the external trigger is running; on GitHub's
+  native cron alone it can be hours.
+- Rating/backtest rebuilds are gated on nflverse's played-game count, but a game's play-by-play can land after its
+  result, so the stored count deducts recent games that could not be rated and the next check retries
+  (`_played_signature` in `team_ratings.py`).
 - Reminder precision is bounded by the cron cadence.
