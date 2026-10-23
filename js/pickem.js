@@ -392,7 +392,7 @@ function powerModelBreakdownHtml(matchup, home, away) {
       ${row('Home-field advantage', pm.hfa_term, hfaDetail)}
       ${row('QB health', pm.qb_term, qbDetail)}
       ${row('Flex Health', pm.skill_term, skillDetail)}
-      ${row('Momentum', pm.momentum_term, streakDetail)}
+      ${pm.momentum_term ? row('Momentum', pm.momentum_term, streakDetail) : ''}
     </tbody>
   </table>`;
 }

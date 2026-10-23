@@ -83,11 +83,10 @@ graded dataset, none of them touch `POWER_WEIGHTS` or the 9-stat composite itsel
 
 | Correction | Weight | What it captures | Hit-rate mover? |
 |---|---|---|---|
-| QB health (EPA) | `QB_QUALITY_GAP_WEIGHT = -1.2399` | Trailing EPA/dropback gap between a team's **current primary** (most starts in the trailing 5 games, ties broken toward the more recent start) and whoever's actually playing, **decayed** by `QB_GAP_DECAY_RATE = 0.4` for each additional straight game the same non-primary passer has started. Active only as the **fallback** when FantasyPros has no data for that week — never summed with the fantasy gap below — see below | No (calibration only) |
-| QB health (fantasy) | `QB_FANTASY_GAP_WEIGHT = -0.0618` | Same gap/decay structure as above, but sourced from FantasyPros' own weekly QB projections instead of trailing EPA. **Switches in** per game-week whenever that data is available, replacing the EPA gap entirely for that week rather than adding to it — see below | No (calibration only) |
-| Skill-position health | `SKILL_EPA_OUT_WEIGHT = -0.0767` | Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB | No (calibration only) |
-| Home-field advantage | `HFA_WEIGHT = 1.0079` | Trailing-5-season home win rate, shrunk toward all-time average (`HFA_SHRINKAGE_K = 100`) | **Yes** |
-| Momentum | `MOMENTUM_WEIGHT = 0.0071` | Signed current win/loss streak, reset at season boundaries and ties | **Yes** |
+| QB health (EPA) | `QB_QUALITY_GAP_WEIGHT = -1.2268` | Trailing EPA/dropback gap between a team's **current primary** (most starts in the trailing 5 games, ties broken toward the more recent start) and whoever's actually playing, **decayed** by `QB_GAP_DECAY_RATE = 0.4` for each additional straight game the same non-primary passer has started. Active only as the **fallback** when FantasyPros has no data for that week — never summed with the fantasy gap below — see below | No (calibration only) |
+| QB health (fantasy) | `QB_FANTASY_GAP_WEIGHT = -0.0619` | Same gap/decay structure as above, but sourced from FantasyPros' own weekly QB projections instead of trailing EPA. **Switches in** per game-week whenever that data is available, replacing the EPA gap entirely for that week rather than adding to it — see below | No (calibration only) |
+| Skill-position health | `SKILL_EPA_OUT_WEIGHT = -0.0747` | Summed trailing EPA of every Out/Doubtful RB/WR/TE/FB | No (calibration only) |
+| Home-field advantage | `HFA_WEIGHT = 1.0366` | Trailing-5-season home win rate, shrunk toward all-time average (`HFA_SHRINKAGE_K = 100`) | **Yes** |
 
 ```
 delta = delta_raw
@@ -191,10 +190,10 @@ weaker: mean AUC edge only +0.0059, favorable in just 69.5% of resamples (resear
 edge_signal_test_v50). Summing both barely outperforms fantasy alone, and FantasyPros is a
 paid third-party API that can lapse, change terms, or go down mid-season; EPA/dropback has
 zero dependency on it. So the shipped design does not sum the two gaps — it SWITCHES
-between them per game-week. `QB_FANTASY_GAP_WEIGHT` (-0.0618 after the 2026-10-16 Elo refit, z=-3.1, much smaller in
+between them per game-week. `QB_FANTASY_GAP_WEIGHT` (-0.0619 after the 2026-10-23 momentum-removal refit, z=-3.1, much smaller in
 magnitude than the EPA weight since fantasy points have a far larger raw scale than
 EPA/dropback) applies whenever `fantasypros.qb_projections_by_season()` actually returned
-data for that season/week; `QB_QUALITY_GAP_WEIGHT` (-1.2399 after the 2026-10-16 Elo refit, z=-3.2, first fit jointly in
+data for that season/week; `QB_QUALITY_GAP_WEIGHT` (-1.2268 after the 2026-10-23 momentum-removal refit, z=-3.2, first fit jointly in
 `_v51` alongside the fantasy weight) is the automatic fallback the instant that data is
 missing — a lapsed/revoked API key, a FantasyPros outage, or a week not yet published.
 `team_ratings.qb_fantasy_gap_data()` returns a `fantasy_available` flag per (season, week)
@@ -350,6 +349,7 @@ graded decided game available at the time.
 | 2026-10-17 | Pool optimizer scoped to the week only (season-pot term removed) | Requested: optimize the week being played, separately from whole-year scoring. The objective is now P(win the week); dollars shown are the weekly-prize expectation (0.8 × P × $270) and each game's value is the change in that. Removing the term changed nothing in the upset picks the engine chose in weeks 1-5 (17 upset picks, favorite's market win chance 50.4%-65.7%, pool taking the favorite 58%-89%), but the realized-and-modelled backtest numbers moved (v66, weeks 1-5, the model's own P(win week), not a significance test): optimizer 7.3% (was 6.9%), played card 5.2%, old FADE/CHALK card 4.0%, always-favorite 3.4%; realized correct picks per week 9.4 for the optimizer (was 10.0), 10.0 for all favorites and the old card, 9.6 for the card played; every card won 0 of 5 weeks. Re-optimizing after each game day still changes an open pick or the tiebreaker in 8 of 11 windows | **Shipped** — research/edge_signal_test_v66 (first-version output kept in output/v66_run_with_season_term.txt) |
 | 2026-10-17 | Pool optimizer metric changed from dollars to simulated win percentage | Requested. Each game's rating is now its impact: the recommended card's simulated weekly win chance minus the win chance with just that game on the other side (all other picks re-optimized), in percentage points. No dollar figures are shown; the picks themselves are unchanged | **Shipped** |
 | 2026-10-20 | Per-entrant Monday-night tiebreak habits in the pool optimizer, a Contenders panel, and a tiebreaker box on the last game card (v67) | The first optimizer drew every opponent's tiebreak guess from one pooled distribution. The pool sheet's weeks 1-5 show real personal habits: 17% of all guesses are exactly 42 and 13% exactly 45, one entrant guessed 42 in all five weeks, another 45 in all five, and several repeat a number 4 of 5 weeks. Per-entrant model (repeat a favorite number with a shrunk probability, else a shrunk personal offset from the posted total) vs. the pooled model on held-out guesses: +0.35 nats per guess walk-forward (weeks 3-5, 77 guesses) and +0.33 leave-one-week-out (129 guesses). On the weeks-4/5 'after Sunday' states the habits change the recommended tiebreak (week 4: 52 → 41; week 5 unchanged at 62) because the always-42 entrants sit in the tie pack. Shipped: the habit model in the simulation, a Contenders table (correct so far, chance at the top, chance tied with you, tiebreak habit; names shortened), and a Tiebreaker: total points box on the Monday card showing the optimizer's guess, the posted total and your CBS guess when known | **Shipped** — research/edge_signal_test_v67 |
+| 2026-10-23 | Momentum (win/loss streak) removed from delta; other delta constants and calibration refit (v71/v72) | Drop test (v71, fully walk-forward, 3,999 games 2011-2026, v57 rule): with vs. without momentum dLL -0.0001, dAUC -0.0005, p=0.83, better in 56% of seasons: it adds nothing once Elo is in the composite (weight already z=0.7). The same ablation found only the two QB gaps together earn their place under the rule (dLL +0.0027, p=0.001); nothing else removed. Refit without the streak term: QB -1.2399→-1.2268, fantasy gap -0.0618→-0.0619, skill -0.0767→-0.0747, HFA 1.0079→1.0366, calibration 0.0017/1.0505→0.0177/1.0481; composite weights unchanged. Full-history hit rate 65.6%→65.7% (in-sample). `MATCHUPS_SCHEMA_VERSION` 8 so stored weekly matchups rebuild; the Momentum row is hidden on the Moneyline card breakdown | **Shipped** — research/edge_signal_test_v71, v72 |
 
 **Net effect across the whole timeline**: the model's backtested SU hit rate moved from
 **62.87%** (pure 8-stat composite, no corrections) to **63.09%** (current, with QB/skill
@@ -482,6 +482,19 @@ revisiting.
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
+- **Correction ablation: do the shipped delta corrections still earn their place?** (v71, 2026-10-23; cowork A8 re-check and the
+  momentum drop test). Fully walk-forward pipeline (v64's V4), test seasons 2011-2026 (3,999 games), each correction removed one at a
+  time and everything else refit; v57 rule applied to "with vs. without". Only the QB gaps taken together pass (dLL +0.0027, dAUC
+  +0.0036, both halves, p = 0.001, better in 100% of seasons). Everything else fails the rule as an individual piece:
+  momentum dLL -0.0001 / dAUC -0.0005 (adds nothing; its weight is already z = 0.7, so this is the drop test: **candidate for
+  removal**), skill-out dLL +0.0007 but negative in the early half (p = 0.11), home-field dAUC -0.0045 (the walk-forward constant is
+  unstable early; log loss mixed), EPA QB gap alone p = 0.11, FantasyPros gap alone dLL +0.0004 (p = 0.34, better in only 38% of
+  seasons), QB decay dLL +0.0010 (p = 0.015, both halves positive: close to the bar, consistent with its "real but not airtight"
+  status). All corrections together vs. none: dLL +0.0025 (p = 0.23). Nothing was removed: dropping a shipped term is its own
+  decision, and the QB corrections exist for calibration and for flagging games, not just hit rate. Re-run when a season of
+  FantasyPros history longer than 2017+ accrues. The structural choices from v14-v51 (5-start primary window, mid-game QB injury
+  filter, weather in the points model only) were not re-run.
+
 - **Direct margin model for the ATS tab's cover probability** (v70, 2026-10-22; cowork B7.2) —
   margin distribution = the 400 nearest training games by predicted margin (shifted by the
   rounded gap), versus production's independent per-side scores re-weighted by historical score
@@ -514,6 +527,11 @@ revisiting.
   noise. Re-test if the composite's regularization changes again or more seasons accrue.
 
 ### 3.3 Deferred (not tested — blocked on data, not found wanting)
+
+- **ESPN vs. nflverse QB injury sources** (cowork A8, logging started 2026-10-23) — the live gate reads ESPN while every backtest and the
+  QB weights come from nflverse's weekly report. `refresh` now appends each team's QB statuses from both sources whenever either
+  changes (kv `injury_source_log`, `nflhub/sources/injury_log.py`; nflverse polled at most hourly). Compare after the 2026 season:
+  agreement rate on "Out/Doubtful", how many hours earlier ESPN knows, and whether disagreements matter.
 
 - **State-space (Kalman) team ratings** (cowork B7.3, 2026-10-22) — a research branch that must
   beat the B1 composite under the ADOPT rule; not started (largest item on the plan, no evidence
@@ -553,15 +571,15 @@ FIRST_SEASON = 2007                FIRST_INJURY_SEASON = 2009
 EWMA_ALPHA = 0.08  (bias-corrected)  SEASON_PRIOR_GAMES = 8
 WP_LO, WP_HI = 0.05, 0.95          HFA_SHRINKAGE_K = 100
 
-DELTA_CALIBRATION_INTERCEPT = 0.0017   DELTA_CALIBRATION_SLOPE = 1.0505   DELTA_PROB_MAX = 0.85   (P(favorite) also floored at 0.5)
+DELTA_CALIBRATION_INTERCEPT = 0.0177   DELTA_CALIBRATION_SLOPE = 1.0481   DELTA_PROB_MAX = 0.85   (P(favorite) also floored at 0.5)
                                    (P(favorite wins) = sigmoid(a + b*|delta|), clean games, 4348)
-QB_QUALITY_GAP_WEIGHT  = -1.2399   (calibration only, fallback when FantasyPros has no data that week)
-QB_FANTASY_GAP_WEIGHT  = -0.0618   (calibration only, switches in per week INSTEAD of the EPA gap, never summed with it)
-SKILL_EPA_OUT_WEIGHT   = -0.0767   (calibration only)
+QB_QUALITY_GAP_WEIGHT  = -1.2268   (calibration only, fallback when FantasyPros has no data that week)
+QB_FANTASY_GAP_WEIGHT  = -0.0619   (calibration only, switches in per week INSTEAD of the EPA gap, never summed with it)
+SKILL_EPA_OUT_WEIGHT   = -0.0747   (calibration only)
 PRIMARY_WINDOW         = 5 games   (trailing-window plurality, ties -> more recent start)
 QB_GAP_DECAY_RATE      = 0.4       (shrinks the gap each straight game a backup keeps starting)
-HFA_WEIGHT             = +1.0079   (moves hit rate)
-MOMENTUM_WEIGHT        = +0.0071   (moves hit rate)
+HFA_WEIGHT             = +1.0366   (moves hit rate)
+MOMENTUM_WEIGHT        = 0         (removed 2026-10-23, v71/v72; the streak plumbing stays and contributes 0)
 
 MIDGAME_MIN_BACKUP_ATTEMPTS = 3    (display/filter only, not in delta)
 SCORE_HIST_FIRST_SEASON = 2015     MAX_TEAM_SCORE = 60

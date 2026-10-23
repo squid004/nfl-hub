@@ -235,8 +235,10 @@ POWER_WEIGHTS = {
 # gives the favorite under 50%.
 # Refit again 2026-10-16 with Elo in the composite (v63_ship_refit.py, same 4348 clean games, fav hit
 # 0.6534): was 0.0336 / 0.9921.
-DELTA_CALIBRATION_INTERCEPT = 0.0017
-DELTA_CALIBRATION_SLOPE = 1.0505
+# Refit 2026-10-23 with the momentum term removed (v72_ship_refit_no_momentum.py, 4359 clean games, fav hit
+# 0.6543): was 0.0017 / 1.0505.
+DELTA_CALIBRATION_INTERCEPT = 0.0177
+DELTA_CALIBRATION_SLOPE = 1.0481
 DELTA_PROB_MAX = 0.85
 
 
@@ -296,8 +298,9 @@ def delta_win_prob(delta: float) -> float:
 # Refit 2026-10-15 (v62_ship_refit.py) for the retuned ratings: QB -1.3268 -> -1.2518 (z=-3.2),
 # SKILL -0.0608 -> -0.0726 (z=-3.2).
 # Refit 2026-10-16 (v63_ship_refit.py, with Elo): QB -1.2518 -> -1.2399 (z=-3.2), SKILL -0.0726 -> -0.0767 (z=-3.3).
-QB_QUALITY_GAP_WEIGHT = -1.2399
-SKILL_EPA_OUT_WEIGHT = -0.0767
+# Refit 2026-10-23 with momentum removed (v72): QB -1.2399 -> -1.2268 (z=-3.2), SKILL -0.0767 -> -0.0747 (z=-3.3).
+QB_QUALITY_GAP_WEIGHT = -1.2268
+SKILL_EPA_OUT_WEIGHT = -0.0747
 
 # Home-field advantage: every OTHER signal in this model is venue-blind (a team's own rating
 # reflects its average performance regardless of where it played), so `delta` had NO
@@ -321,7 +324,8 @@ HFA_SHRINKAGE_K = 100
 # Refit 2026-10-13 (v57) for the L2=0.03 composite: was 0.9169 (z=2.2 in the joint fit).
 # Refit 2026-10-15 (v62_ship_refit.py): was 1.0407 (z=2.2).
 # Refit 2026-10-16 (v63_ship_refit.py, with Elo): was 1.0319.
-HFA_WEIGHT = 1.0079
+# Refit 2026-10-23 with momentum removed (v72): was 1.0079.
+HFA_WEIGHT = 1.0366
 
 # Neutral-site games get none of the home-field term above -- confirmed as a real,
 # recurring gap, not a one-off: nflverse's games.csv `location` column correctly flags 72
@@ -415,7 +419,7 @@ def home_field_logit_by_season(played_games: list[dict]) -> dict[int, float]:
 # plus a strong calibration signal (confidence reduced 25.8% of misses vs 20.4% of hits,
 # z=4.35, p<0.0001). No new data source: games.csv's own chronological results are already
 # fetched for everything else in this module.
-MOMENTUM_WEIGHT = 0.0071  # refit 2026-10-16 (v63_ship_refit.py, with Elo in the composite; z=0.7, i.e. noise -- Elo's margin-aware results already carry most of the streak signal), was 0.0164; earlier: refit 2026-10-15 (v62_ship_refit.py, z=1.6), was 0.0256 (v57) / 0.0262
+MOMENTUM_WEIGHT = 0.0  # REMOVED 2026-10-23 (v71 drop test: with vs. without dLL -0.0001, dAUC -0.0005, p=0.83; v72 refit of the other constants without it). The streak plumbing stays and now contributes 0. Was 0.0071: refit 2026-10-16 (v63_ship_refit.py, with Elo in the composite; z=0.7, i.e. noise -- Elo's margin-aware results already carry most of the streak signal), was 0.0164; earlier: refit 2026-10-15 (v62_ship_refit.py, z=1.6), was 0.0256 (v57) / 0.0262
 
 
 def team_streak_by_week(played_games: list[dict]) -> dict[tuple[str, int, int], int]:
@@ -743,7 +747,7 @@ def qb_quality_gap_data(played_games: list[dict], current_season: int):
     return gap_by_team_week, current_primary, current_trailing_epa, league_avg_epa, passer_names, backup_avg_epa, current_streak_n
 
 
-QB_FANTASY_GAP_WEIGHT = -0.0618  # refit 2026-10-16 (v63_ship_refit.py, with Elo), was -0.0598; earlier: refit 2026-10-15 (v62_ship_refit.py) was -0.0651 (v57), -0.0429; see qb_fantasy_gap_data()'s own docstring. Fit jointly
+QB_FANTASY_GAP_WEIGHT = -0.0619  # refit 2026-10-23 (v72_ship_refit_no_momentum.py, momentum removed), was -0.0618; earlier: refit 2026-10-16 (v63_ship_refit.py, with Elo), was -0.0598; earlier: refit 2026-10-15 (v62_ship_refit.py) was -0.0651 (v57), -0.0429; see qb_fantasy_gap_data()'s own docstring. Fit jointly
 # with QB_QUALITY_GAP_WEIGHT (research/edge_signal_test_v51_fantasypros_qb_gap_refit.py,
 # z=-3.24) -- a SEPARATE, additive term on top of the EPA-based gap, not a replacement for
 # it. Much smaller in magnitude than QB_QUALITY_GAP_WEIGHT because fantasy_gap_diff's own
@@ -2908,7 +2912,8 @@ def _week_matchups_asof(played_cutoff: list[dict], all_rows: list[dict], current
 # v6 (2026-10-15): ratings retuned (slower bias-corrected EWMA, prior 8 games) and every delta-scale
 # constant refit again -- see EWMA_ALPHA.
 # v7 (2026-10-16): Elo added as the 10th composite stat -- `rating_terms` gains an `elo` term.
-MATCHUPS_SCHEMA_VERSION = 7
+# v8 (2026-10-23): momentum removed from delta (weight 0) and the QB/fantasy/skill/HFA constants + calibration refit without it.
+MATCHUPS_SCHEMA_VERSION = 8
 
 # Bump whenever POWER_WEIGHTS / the rating pipeline changes, so a frozen week's stored `teams`,
 # `power_rankings` and `parlay_teams` (which MATCHUPS_SCHEMA_VERSION does NOT touch) are rebuilt
