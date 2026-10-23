@@ -279,7 +279,7 @@ const Power = {
       const radarEl = el.querySelector(`[data-radar="${CSS.escape(team)}"]`);
       if (radarEl) this._drawRadar(radarEl, team, row, classifications);
       const trendEl = el.querySelector(`[data-trend="${CSS.escape(team)}"]`);
-      if (trendEl) this._drawTrend(trendEl, team, ctx.powerSeries ? ctx.powerSeries[team] : null);
+      if (trendEl) this._drawTrend(trendEl, team, ctx.powerSeries ? ctx.powerSeries[team] : null, this._trendRanges(ctx.powerSeries));
     });
 
     // Delegated, wired once -- #power itself survives every re-render (only its innerHTML's children are replaced).
@@ -358,7 +358,19 @@ const Power = {
 
   // Season trend for one team: Power Score (left axis) and Elo (right axis) at each week's snapshot, plus the live point.
   // series = [{ label, score, elo }, ...] built in app.js from the stored weekly snapshots.
-  _drawTrend(el, team, series) {
+  // One shared axis range per metric across EVERY team's whole season, so two teams' charts can be compared by eye without the
+  // scale changing underneath them. Padded a little so the extremes don't sit on the frame.
+  _trendRanges(allSeries) {
+    const span = key => {
+      const vals = Object.values(allSeries || {}).flat().map(p => p[key]).filter(v => v != null);
+      if (!vals.length) return null;
+      const lo = Math.min(...vals), hi = Math.max(...vals), pad = (hi - lo) * 0.05 || 1;
+      return [lo - pad, hi + pad];
+    };
+    return { score: span('score'), elo: span('elo') };
+  },
+
+  _drawTrend(el, team, series, ranges) {
     if (!series || series.length < 2) {
       el.innerHTML = '<p class="muted small">Needs at least two weekly snapshots.</p>';
       return;
@@ -379,8 +391,8 @@ const Power = {
       margin: { t: 8, b: 40, l: 52, r: 52 }, height: 300,
       legend: { orientation: 'h', y: -0.22, x: 0.5, xanchor: 'center' },
       xaxis: { type: 'category', gridcolor: grid, linecolor: grid, tickfont: { color: dim } },
-      yaxis: { title: { text: 'Power Score', font: { color: accent } }, tickfont: { color: accent }, gridcolor: grid, zeroline: false },
-      yaxis2: { title: { text: 'Elo', font: { color: warn } }, tickfont: { color: warn }, overlaying: 'y', side: 'right', showgrid: false, zeroline: false, tickformat: ',.0f' },
+      yaxis: { title: { text: 'Power Score', font: { color: accent } }, tickfont: { color: accent }, gridcolor: grid, zeroline: false, ...(ranges && ranges.score ? { range: ranges.score, autorange: false } : {}) },
+      yaxis2: { title: { text: 'Elo', font: { color: warn } }, tickfont: { color: warn }, overlaying: 'y', side: 'right', showgrid: false, zeroline: false, tickformat: ',.0f', ...(ranges && ranges.elo ? { range: ranges.elo, autorange: false } : {}) },
     }, { displayModeBar: false, responsive: true });
   },
 
