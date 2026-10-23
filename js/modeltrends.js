@@ -43,7 +43,7 @@ function calibrationSummaryHtml(cal) {
       : 'not yet a statistically significant difference.'}</p>`;
 }
 
-// Honest backtest: every fitted piece (z-score stats, composite weights, QB/skill/HFA/momentum
+// Honest backtest: every fitted piece (z-score stats, composite weights, QB/skill/HFA
 // constants, calibration) trained on earlier seasons only -- see compute_walkforward_deltas() in
 // team_ratings.py and research/edge_signal_test_v64. The scatter's own `delta` uses constants fit
 // on ALL data, so its hit rate is the optimistic in-sample one.
@@ -53,7 +53,7 @@ function walkforwardSummaryHtml(wf) {
   const rel = (wf.reliability || []).map(b =>
     `<tr><td>${b.lo.toFixed(2)}${b.hi == null ? '+' : '–' + b.hi.toFixed(2)}</td><td class="num">${b.n}</td>` +
     `<td class="num">${pct(b.predicted)}</td><td class="num">${pct(b.actual)}</td></tr>`).join('');
-  return `<p class="lean" title="Each season is scored by a model fit only on earlier seasons: z-score stats, composite weights, QB/skill/home-field/momentum constants and the probability calibration. The all-data numbers elsewhere use constants that have seen the games they score.">
+  return `<p class="lean" title="Each season is scored by a model fit only on earlier seasons: z-score stats, composite weights, QB/skill/home-field constants and the probability calibration. The all-data numbers elsewhere use constants that have seen the games they score.">
     <strong>Honest (walk-forward) hit rate:</strong> ${pct(wf.all.hit_wf)} over ${wf.all.n} games
     (${wf.first_season} on) vs. ${pct(wf.all.hit_in_sample)} for the same games with today&rsquo;s all-data constants;
     since ${wf.recent_from}: ${pct(wf.recent.hit_wf)} vs. ${pct(wf.recent.hit_in_sample)}

@@ -2473,7 +2473,7 @@ def compute_backtest_scatter(
 # (including the season being scored) to every past game -- fine for showing what today's model
 # says, but an optimistic hit rate. research/edge_signal_test_v64_honest_walkforward_delta.py
 # measured the gap piece by piece: refitting the composite weights and z-score stats
-# walk-forward costs ~0.2 points of hit rate, the QB/skill/HFA/momentum constants ~1.7 more (the
+# walk-forward costs ~0.2 points of hit rate, the QB/skill/HFA(/momentum, removed 2026-10-23) constants ~1.7 more (the
 # early walk-forward HFA constants are unstable with only a few training seasons), calibration
 # ~0. WF_TEST_START is the first season scored out-of-sample (needs 4+ training seasons);
 # WF_CORR_FROM is when the injury data behind those corrections starts.
@@ -2514,7 +2514,8 @@ def compute_walkforward_deltas(
 ) -> list[dict | None]:
     """One entry per `game_log` row (same order): {"delta", "p_home"} produced by a model whose
     EVERY fitted piece -- z-score mean/std, composite weights (non-negative L2 logistic), the
-    QB/fantasy/skill/HFA/momentum constants (joint logistic, as in the research refits), and the
+    QB/fantasy/skill/HFA constants (joint logistic, as in the research refits; momentum was dropped from
+    production 2026-10-23 and from this pipeline with it), and the
     delta->probability calibration -- uses only seasons BEFORE the game's own season. None for
     seasons before WF_TEST_START. A correction with no training data yet (e.g. FantasyPros before
     its first season) gets weight 0."""
@@ -2536,7 +2537,6 @@ def compute_walkforward_deltas(
     fa = np.array([gap(fantasy_gap, r, "home") - gap(fantasy_gap, r, "away") for r in game_log])
     sk = np.array([gap(skill_out, r, "home") - gap(skill_out, r, "away") for r in game_log])
     hf = np.array([0.0 if r.get("neutral") else hfa_by_season.get(r["season"], 0.0) for r in game_log])
-    stk = np.array([gap(streak, r, "home") - gap(streak, r, "away") for r in game_log])
     use_fp = np.array([fantasy_available.get((r["season"], r["week"]), False) for r in game_log])
     clean = np.array([not (qb_out.get((r["home"], r["season"], r["week"]), False)
                            or qb_out.get((r["away"], r["season"], r["week"]), False)) for r in game_log])
@@ -2552,13 +2552,13 @@ def compute_walkforward_deltas(
         w = _fit_nonneg_logistic((X[tri] - mu) / sd, y[tri], 0.03)[1:]
         d_raw = ((X - mu) / sd) @ w
         kp = tri & (seasons >= WF_CORR_FROM)
-        feats = np.column_stack([d_raw, qb, fa, sk, hf, stk])
+        feats = np.column_stack([d_raw, qb, fa, sk, hf])
         live = feats[kp].std(0) > 0
         live[0] = True
         coef = _fit_logistic(feats[kp][:, live], y[kp])
-        ratio = np.zeros(6)
+        ratio = np.zeros(5)
         ratio[live] = np.concatenate([[1.0], coef[2:] / coef[1]])
-        delta = d_raw + np.where(use_fp, ratio[2] * fa, ratio[1] * qb) + ratio[3] * sk + ratio[4] * hf + ratio[5] * stk
+        delta = d_raw + np.where(use_fp, ratio[2] * fa, ratio[1] * qb) + ratio[3] * sk + ratio[4] * hf
         fav = np.where(delta > 0, y, 1 - y)
         km = kp & clean & (delta != 0)
         a, b = _fit_logistic(np.abs(delta[km])[:, None], fav[km])
