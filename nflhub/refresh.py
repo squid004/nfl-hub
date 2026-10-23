@@ -19,6 +19,7 @@ from .sources import (
     espn_fantasy,
     fantasypros,
     history,
+    injury_log,
     nfl_schedule,
     odds,
     pool_live,
@@ -238,6 +239,15 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.exception("news refresh failed")
         summary["errors"].append(f"news: {exc}")
+
+    # 4-log. ESPN vs nflverse QB injury statuses, side by side (research plan A8: compare the live source with the backtest source
+    # after a season). Best-effort; never blocks the run.
+    if injuries:
+        try:
+            summary["injury_source_log"] = injury_log.record(store, season, week, injuries)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("injury source log failed: %s", exc)
+            summary["injury_source_log"] = f"skipped ({exc})"
 
     # 4a. QB depth-chart order (index 0 = starter) -- lets the frontend tell a genuinely
     # next-man-up QB injury apart from a healthy backup's unrelated minor issue. Independent
