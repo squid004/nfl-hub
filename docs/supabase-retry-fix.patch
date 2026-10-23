@@ -1,0 +1,109 @@
+Subject: Retry transient Supabase failures in store.py
+
+Diagnosis (refresh run #2427, 2026-10-16 02:30 UTC, commit 03783d2)
+https://github.com/squid004/nfl-hub/actions/runs/38840741111
+
+  * The only error annotation is "Process completed with exit code 1" on
+    step 6, "Refresh data + send due reminders".
+  * The Pipeline Health log (kv.pipeline_health_log) entry at
+    2026-10-16T02:32:36Z records the cause:
+      odds: HTTPSConnectionPool(host='ssomwvamhlmozguhosaf.supabase.co',
+            port=443): Read timed out. (read timeout=20)
+      news: (same Supabase read timeout)
+  * cmd_refresh in nflhub/__main__.py returns 1 when summary["errors"] is
+    non-empty, so these two transient timeouts failed the job.
+  * It was a one-off: more than 80 runs since then have passed. Commit 03783d2
+    (previous-week pick backfill) is not involved.
+
+Fix
+  nflhub/store.py makes bare requests.* calls with no retries. This patch
+  routes them through a shared requests.Session whose HTTPAdapter retries
+  connect/read errors and 429/5xx responses up to 3 times with backoff
+  (backoff_factor=1.5, so waits of up to about 6s). POST is retried too.
+  That is safe because the only POST in store.py is _upsert (Prefer:
+  resolution=merge-duplicates), and PATCH/DELETE are keyed on row filters.
+  Worst case adds about 70s per call before giving up (timeout=20 x 4 tries
+  plus backoff), well inside the job's runtime budget.
+
+Base: origin/master 1565f48. Apply with:
+  git apply --check docs/supabase-retry-fix.patch && git apply docs/supabase-retry-fix.patch
+
+Optional follow-ups (not in this patch)
+  * Bump actions/checkout and actions/setup-python to Node 24 versions to
+    clear the deprecation warning.
+  * Consider retries for the ESPN/schedule sources too; the earlier health
+    log entries (Oct 13, Oct 14) were connection resets on those.
+
+diff --git a/nflhub/store.py b/nflhub/store.py
+index 74dd24b..a210d89 100644
+--- a/nflhub/store.py
++++ b/nflhub/store.py
+@@ -12,12 +12,27 @@ from datetime import datetime, timezone
+ from typing import Any, Iterable, Optional
+ 
+ import requests
++from requests.adapters import HTTPAdapter
++from urllib3.util.retry import Retry
+ 
+ from .config import get_config
+ 
+ log = logging.getLogger(__name__)
+ TIMEOUT = 20
+ 
++# Supabase occasionally stalls for >20s (run #2427 on 2026-10-16: two read timeouts failed
++# the whole refresh). Retry transient failures with backoff instead of erroring out.
++# Every write here is an upsert/patch/delete keyed on a PK, so retrying POST is safe.
++_RETRY = Retry(
++    total=3, connect=3, read=3, status=3,
++    backoff_factor=1.5,                      # ~0s, 3s, 6s between attempts
++    status_forcelist=(429, 500, 502, 503, 504),
++    allowed_methods=frozenset({"GET", "POST", "PATCH", "DELETE"}),
++    raise_on_status=False,                   # let raise_for_status() report the final status
++)
++_session = requests.Session()
++_session.mount("https://", HTTPAdapter(max_retries=_RETRY))
++
+ 
+ def _now() -> str:
+     return datetime.now(timezone.utc).isoformat()
+@@ -42,14 +57,14 @@ def _url(table: str) -> str:
+ 
+ 
+ def _get(table: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+-    r = requests.get(_url(table), headers=_headers(), params=params, timeout=TIMEOUT)
++    r = _session.get(_url(table), headers=_headers(), params=params, timeout=TIMEOUT)
+     r.raise_for_status()
+     return r.json()
+ 
+ 
+ def _upsert(table: str, rows: list[dict[str, Any]] | dict[str, Any], on_conflict: str | None = None) -> None:
+     params = {"on_conflict": on_conflict} if on_conflict else {}
+-    r = requests.post(
++    r = _session.post(
+         _url(table),
+         headers=_headers("resolution=merge-duplicates,return=minimal"),
+         params=params,
+@@ -60,20 +75,20 @@ def _upsert(table: str, rows: list[dict[str, Any]] | dict[str, Any], on_conflict
+ 
+ 
+ def _patch(table: str, params: dict[str, Any], body: dict[str, Any]) -> None:
+-    r = requests.patch(
++    r = _session.patch(
+         _url(table), headers=_headers("return=minimal"), params=params, json=body, timeout=TIMEOUT
+     )
+     r.raise_for_status()
+ 
+ 
+ def _delete(table: str, params: dict[str, Any]) -> None:
+-    r = requests.delete(_url(table), headers=_headers("return=minimal"), params=params, timeout=TIMEOUT)
++    r = _session.delete(_url(table), headers=_headers("return=minimal"), params=params, timeout=TIMEOUT)
+     r.raise_for_status()
+ 
+ 
+ def init_db() -> None:
+     """Connectivity check; schema itself is applied via supabase/schema.sql."""
+-    requests.get(_url("kv"), headers=_headers(), params={"limit": 1}, timeout=TIMEOUT).raise_for_status()
++    _session.get(_url("kv"), headers=_headers(), params={"limit": 1}, timeout=TIMEOUT).raise_for_status()
+ 
+ 
+ # --- key/value -------------------------------------------------------------
