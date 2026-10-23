@@ -263,3 +263,10 @@ begin
     );
   end loop;
 end $$;
+
+-- Data API grants. Since 2026-10-30 Supabase no longer grants API access to new public tables automatically, so a project
+-- rebuilt from this file would otherwise get tables the page and the refresh job cannot reach (error 42501, permission
+-- denied). RLS above still decides what each role may actually do. Keep this block last, after every create table;
+-- docs/auth-setup.md's auth.sql then narrows anon to read-only.
+grant select, insert, update, delete on all tables in schema public to anon, authenticated, service_role;
+grant usage, select on all sequences in schema public to anon, authenticated, service_role;

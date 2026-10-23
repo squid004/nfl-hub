@@ -55,3 +55,12 @@ begin
     );
   end loop;
 end $$;
+
+-- 3. Least privilege at the grant level (RLS already blocks anon writes; this removes the privilege as well).
+-- anon: read only. authenticated keeps write grants on the data tables because the owner writes through RLS.
+-- app_owner: not readable by anon at all, select-only for a signed-in user (the page checks its own row).
+revoke insert, update, delete on all tables in schema public from anon;
+revoke all on app_owner from anon, authenticated;
+grant select on app_owner to authenticated;
+-- The refresh job uses the secret key (service_role); make sure it keeps full access to every table.
+grant select, insert, update, delete on all tables in schema public to service_role;
