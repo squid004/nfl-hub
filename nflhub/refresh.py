@@ -23,6 +23,7 @@ from .sources import (
     nfl_schedule,
     odds,
     pool_live,
+    pool_backtest,
     pool_notify,
     pool_recommend,
     team_ratings,
@@ -392,6 +393,12 @@ def refresh_all(cfg: Config | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - best-effort; never block the rest of refresh
         log.exception("pool recommendation failed")
         summary["pool_recommendation"] = f"error ({exc})"
+    # How the optimizer's point-in-time card did against the pool, one frozen record per completed week (Model Trends).
+    try:
+        summary["pool_backtest"] = pool_backtest.refresh(cfg, season, week, history.fetch_games)
+    except Exception as exc:  # noqa: BLE001 - best-effort; never block the rest of refresh
+        log.warning("pool backtest failed: %s", exc)
+        summary["pool_backtest"] = f"skipped ({exc})"
 
     # 4e. pool leaderboard chalk/dog-pick reminder for the Upset Budget panel (rebuilt
     # once/day, same cadence as hist_distribution)

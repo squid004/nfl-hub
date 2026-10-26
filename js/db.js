@@ -233,6 +233,13 @@ const DB = {
 
   // The week's pool simulation in compact form (nflhub/sources/pool_recommend._sim_payload): the page re-uses it to score any
   // selection live. Cached by updated_at like the other big blobs.
+  // Frozen per-week record of the optimizer's point-in-time card vs. the week winner and the user (nflhub/sources/pool_backtest.py).
+  async poolBacktest() {
+    const row = await this._kvRow('pool_backtest');
+    if (!row || !row.value) return null;
+    try { return JSON.parse(row.value); } catch { return null; }
+  },
+
   async poolSim() {
     const row = await this._kvRow('pool_sim');
     if (!row || !row.value) return null;

@@ -216,6 +216,13 @@ const ModelTrends = {
           <div id="season-hitrate-chart" style="height:400px;"></div>
         </div>
 
+        <div class="panel" id="pool-backtest-panel" style="overflow:visible;">
+          <h2>Pool optimizer vs. the pool</h2>
+          <div id="pool-backtest-summary" class="muted small"></div>
+          <div id="pool-backtest-chart" style="height:340px;"></div>
+          <p class="muted small" id="pool-backtest-note"></p>
+        </div>
+
         <div class="panel" id="distribution-panel" style="overflow:visible;">
           <h2>Distribution: market spread vs. model delta</h2>
           <div class="backtest-control-row">
@@ -329,6 +336,7 @@ const ModelTrends = {
     }
 
     this._drawSeasonHitRate(scatter, ctx.elwayScoreHistory || [], ctx.gutPicks || {});
+    this._drawPoolBacktest(ctx.poolBacktest);
     this._drawDistributions(scatter);
     this._drawProspective(scatter, ctx.prospectiveLog || {});
   },
@@ -688,6 +696,59 @@ const ModelTrends = {
   // row before this app started recording picks or for a week still in progress -- that
   // shows up here as a gap in ELWAY's bars, not a fabricated 0%, since a week with zero
   // decided ELWAY games is left out of its own series rather than counted.
+  // Correct picks per week: the pool's winner, the optimizer's card as it would have been recommended BEFORE the week (only earlier
+  // weeks' picks for each entrant's bias, none at all before week 4), and the user's own card. See pool_backtest.py.
+  _drawPoolBacktest(pb) {
+    const chartEl = document.getElementById('pool-backtest-chart');
+    if (!chartEl) return;
+    const summaryEl = document.getElementById('pool-backtest-summary');
+    const noteEl = document.getElementById('pool-backtest-note');
+    const weeks = pb && pb.weeks ? Object.values(pb.weeks).sort((a, b) => a.week - b.week) : [];
+    if (!weeks.length) {
+      if (summaryEl) summaryEl.textContent = 'No completed pool weeks scored yet.';
+      Plotly.purge(chartEl);
+      return;
+    }
+    const cs = getComputedStyle(document.documentElement);
+    const cssVar = name => cs.getPropertyValue(name).trim();
+    const colors = { text: cssVar('--text'), dim: cssVar('--dim'), line: cssVar('--line'), panel: cssVar('--panel2'),
+      winner: cssVar('--good'), optimizer: cssVar('--accent'), me: cssVar('--warn') };
+    const mean = k => weeks.reduce((s, w) => s + w[k], 0) / weeks.length;
+    const optBeatsMe = weeks.filter(w => w.optimizer_correct > w.my_correct).length;
+    const optTiesMe = weeks.filter(w => w.optimizer_correct === w.my_correct).length;
+    if (summaryEl) summaryEl.textContent =
+      `${weeks.length} completed week${weeks.length === 1 ? '' : 's'} — average correct: week winner ${mean('winner_correct').toFixed(1)} · ` +
+      `optimizer ${mean('optimizer_correct').toFixed(1)} · you ${mean('my_correct').toFixed(1)} · pool average ${mean('field_mean').toFixed(1)}. ` +
+      `The optimizer out-picked you in ${optBeatsMe} week${optBeatsMe === 1 ? '' : 's'}, tied in ${optTiesMe}.`;
+    const x = weeks.map(w => `Wk ${w.week}`);
+    const bar = (name, color, key, extra) => ({
+      type: 'bar', name, x, y: weeks.map(w => w[key]), marker: { color },
+      customdata: weeks.map(extra), hovertemplate: `${name}: %{y} correct%{customdata}<extra></extra>`,
+    });
+    const traces = [
+      bar('Week winner', colors.winner, 'winner_correct', () => ''),
+      bar('Pool optimizer', colors.optimizer, 'optimizer_correct',
+        w => ` (would have placed ${w.optimizer_rank} of ${w.entrants} by correct picks; ${w.upset_picks} upset pick${w.upset_picks === 1 ? '' : 's'}; ` +
+             `${w.bias_used ? 'entrant bias from ' + w.prior_weeks + ' earlier weeks' : 'no entrant bias yet'})`),
+      bar('You', colors.me, 'my_correct', () => ''),
+    ];
+    const axisCommon = { gridcolor: colors.line, color: colors.dim, tickfont: { size: 11 } };
+    Plotly.react(chartEl, traces, {
+      autosize: true, barmode: 'group', margin: { l: 48, r: 12, t: 50, b: 44 },
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: colors.text, size: 12 },
+      xaxis: Object.assign({ type: 'category' }, axisCommon),
+      yaxis: Object.assign({ title: { text: 'Correct picks' }, rangemode: 'tozero', dtick: 2 }, axisCommon),
+      legend: { orientation: 'h', x: 0, y: 1, yanchor: 'bottom', font: { color: colors.text, size: 12 } },
+      hoverlabel: { bgcolor: colors.panel, bordercolor: colors.line, font: { color: colors.text, size: 12 } },
+    }, { responsive: true, displaylogo: false, modeBarButtonsToRemove: ['lasso2d', 'select2d'] });
+    if (noteEl) noteEl.textContent =
+      'The optimizer bar is its card as it would have been recommended before each week, using only what was knowable then: each ' +
+      'entrant\u2019s chalk bias is estimated from earlier weeks only and not used at all until week 4 (three earlier weeks of picks); ' +
+      'closing moneylines and that week\u2019s national pick % as inputs. The pick-share constants were fit on weeks 1-5, so those weeks carry ' +
+      'a small leak there. The optimizer maximizes the chance of winning the week, not the number of correct picks, so it deliberately takes ' +
+      'some upsets.';
+  },
+
   _drawSeasonHitRate(scatter, elwayHistory, gutPicks) {
     const chartEl = document.getElementById('season-hitrate-chart');
     if (!chartEl) return;
