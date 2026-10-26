@@ -483,6 +483,17 @@ revisiting.
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
+- **Persistent team-level market bias ("Vegas over/under-values particular teams")** (v73, 2026-10-26). Market residual = actual margin
+  minus closing spread, per team, 1999-2026 (7,073 games). Real but tiny: the spread of team-average residuals is far wider than luck
+  (Q = 75.8 vs. a bootstrap mean of 32.1, p < 0.001), implying a true between-team sd of about **0.7 points per game**, and odd- vs.
+  even-season team means correlate +0.34 (95% CI -0.08 to +0.63). Walk-forward from 2012 (bias from earlier seasons only, shrunk by K
+  pseudo-games): the realized residual moves with the predicted one (slope +0.5 to +2.0, 95% CI excludes 0 at every K; about 1.0 at
+  K = 800), but **betting it does not work**: ATS hit 50.6% (1,860 of 3,672) against the 52.4% break-even, p = 0.98, no better on the
+  largest predicted biases, and a recency-weighted variant is no better. Under the pre-registered rule: descriptive only. All-time,
+  shrunk (pts/game): New England +1.0, Baltimore +0.7, Pittsburgh +0.4, Green Bay +0.4 (the line under-rated them) versus Cleveland
+  -0.6, Las Vegas/Oakland -0.5, Arizona -0.4, Washington -0.4 (over-rated); much of New England's is the 2000s-2010s dynasty
+  (+0.6 over the last five seasons). The last-five-season averages (each +-1.5) are mostly noise. Not folded into `delta`.
+
 - **Correction ablation: do the shipped delta corrections still earn their place?** (v71, 2026-10-23; cowork A8 re-check and the
   momentum drop test). Fully walk-forward pipeline (v64's V4), test seasons 2011-2026 (3,999 games), each correction removed one at a
   time and everything else refit; v57 rule applied to "with vs. without". Only the QB gaps taken together pass (dLL +0.0027, dAUC
