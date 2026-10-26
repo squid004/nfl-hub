@@ -682,14 +682,14 @@ const Pickem = {
                  ${move ? `<div class="muted small">opened ${signed(move.open)}</div>` : ''}`}
           </div>
           <div class="stat-block">
-            <div class="stat-label">ELWAY</div>
-            <div class="${resultClass(elwayHit)}">${elwayFav ? `${elwayFav.team} ${pct(elwayFav.pct)}` : '<span class="muted">—</span>'}</div>
-            <div class="muted">${el && el.spread_home != null ? `implied ${signed(el.spread_home)}` : ' '}</div>
-          </div>
-          <div class="stat-block">
             <div class="stat-label">History</div>
             <div class="${resultClass(histHit)}">${histCell ? `${favTeam} ${pct(histCell.su)}` : '<span class="muted">—</span>'}</div>
             <div class="muted">${bucketLabel ? `${bucketLabel} bucket` : ' '}</div>
+          </div>
+          <div class="stat-block">
+            <div class="stat-label">ELWAY</div>
+            <div class="${resultClass(elwayHit)}">${elwayFav ? `${elwayFav.team} ${pct(elwayFav.pct)}` : '<span class="muted">—</span>'}</div>
+            <div class="muted">${el && el.spread_home != null ? `implied ${signed(el.spread_home)}` : ' '}</div>
           </div>
           <div class="stat-block">
             <div class="stat-label" title="The Power Rankings composite (9 EPA/points/turnover/penalty stats) applied to this matchup, calibrated into a win probability from backtested accuracy at that confidence level (QB-injury games excluded from calibration). Backtesting found this does NOT beat the market -- a third data point alongside ELWAY/History, not a replacement.">Power Model</div>
