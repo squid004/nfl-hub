@@ -1479,7 +1479,8 @@ def elo_ratings(played_games: list[dict]) -> tuple[dict[str, tuple[float, float,
 
 
 def compute_ratings(
-    played_games: list[dict], current_season: int, game_log: list[dict] | None = None
+    played_games: list[dict], current_season: int, game_log: list[dict] | None = None,
+    weekly_ratings: dict[tuple[int, int], dict[str, dict[str, float]]] | None = None,
 ) -> tuple[dict[str, dict[str, float]], dict[str, tuple[float, float]]]:
     """`played_games`: nflverse games.csv REG rows with a result, any seasons needed.
     Returns ({team: {metric: rating}} as of the most recent game passed in, historical_bounds)
@@ -1488,6 +1489,10 @@ def compute_ratings(
     observed at any point in the replayed history, used to anchor the fixed 0-100 display
     scale (see module docstring) instead of a per-season min/max that would make a mediocre
     season's best team look inflated.
+
+    If `weekly_ratings` is given, it is filled with {(season, week): {team: ratings}}: every team's blended ratings as they stood
+    ENTERING that week (before any of that week's games), with Elo set to the team's pre-game Elo for its first game of that week
+    or later (the replay's own `rating[..]["elo"]` is a game behind). Feeds the Historical Rankings dropdown's weekly trend.
 
     If `game_log` is given, every game with a complete pre-game rating for both teams gets
     appended to it as {game_id, season, week, gameday, home, away, home_score, away_score,
@@ -1517,6 +1522,23 @@ def compute_ratings(
 
     games_by_id = {g["game_id"]: g for g in played_games}
     elo_by_game, _elo_final = elo_ratings(played_games)
+    # each team's pre-game Elo by week, per season: the Elo it carried INTO that week (only used for weekly_ratings)
+    elo_pre: dict[tuple[int, str], list[tuple[int, float]]] = defaultdict(list)
+    if weekly_ratings is not None:
+        for gid_, vals_ in elo_by_game.items():
+            eh, ea = vals_[0], vals_[1]
+            g_ = games_by_id.get(gid_)
+            if not g_:
+                continue
+            try:
+                h_, a_ = normalize_team(g_["home_team"]), normalize_team(g_["away_team"])
+                s_, w_ = int(g_["season"]), int(g_["week"])
+            except (UnknownTeamError, ValueError, TypeError, KeyError):
+                continue
+            elo_pre[(s_, h_)].append((w_, eh))
+            elo_pre[(s_, a_)].append((w_, ea))
+        for lst in elo_pre.values():
+            lst.sort()
 
     # `rating`/`sos` are the BLENDED values everything else reads (bounds tracking, SOS
     # opponent lookups, the final return value) -- a mix of last season's own ending value
@@ -1552,6 +1574,18 @@ def compute_ratings(
             home_pts, away_pts = float(g["home_score"]), float(g["away_score"])
         except (ValueError, TypeError):
             continue
+
+        if weekly_ratings is not None:
+            wk_key = (season, int(g.get("week") or 0))
+            if wk_key not in weekly_ratings:
+                snap = {t: dict(r) for t, r in rating.items() if all(r[m] is not None for m in POWER_METRICS)}
+                for t in list(snap):
+                    nxt = next((e for w_, e in elo_pre.get((season, t), ()) if w_ >= wk_key[1]), None)
+                    if nxt is None:
+                        del snap[t]
+                    else:
+                        snap[t]["elo"] = nxt
+                weekly_ratings[wk_key] = snap
 
         home_raw, away_raw = dict(teams[home]), dict(teams[away])
         home_raw["rush_def_epa_allowed"] = away_raw["rush_off_epa"]
@@ -2753,7 +2787,16 @@ def refresh_historical(store, force: bool = False) -> str:
     # along the way (see that function's `game_log` param) instead of only returning the
     # final state.
     game_log: list[dict] = []
-    compute_ratings(played, current_season, game_log=game_log)
+    weekly_snaps: dict[tuple[int, int], dict[str, dict[str, float]]] = {}
+    _final_ratings, hist_bounds = compute_ratings(played, current_season, game_log=game_log, weekly_ratings=weekly_snaps)
+    # Weekly rolling Power Score and Elo for every completed season ("ratings entering each week", the same method as the live
+    # season's weekly snapshots): {season: {team: [[week, power_score_0_100, elo], ...]}} for the Historical Rankings dropdown.
+    weekly: dict[str, dict[str, list]] = {}
+    for (w_season, w_week), snap in sorted(weekly_snaps.items()):
+        if w_season >= current_season or len(snap) < 4:
+            continue
+        for t, info in power_rankings(snap, hist_bounds).items():
+            weekly.setdefault(str(w_season), {}).setdefault(t, []).append([w_week, round(float(info["score_display"]), 1), int(round(snap[t]["elo"]))])
     qb_out = _qb_out_doubtful_by_week(current_season)
     qb_gap, _primary, _trailing, _league_avg, _names, _backup_avg, _streak_n = qb_quality_gap_data(played, current_season)
     fantasy_gap, _trailing_fp, _league_avg_fp, _backup_avg_fp, fantasy_available = qb_fantasy_gap_data(played, current_season, current_week)
@@ -2770,6 +2813,7 @@ def refresh_historical(store, force: bool = False) -> str:
         "generated": datetime.now(timezone.utc).isoformat(),
         "seasons": seasons_covered,
         "rankings": rankings,
+        "weekly": weekly,
         "backtest_scatter": scatter,
         "calibration": calibration,
         "walkforward": walkforward_summary,

@@ -11,8 +11,10 @@
 //
 // Rendered by Power.render() into #power-view when the page's toggle is on "Historical
 // Rankings" (the two used to be separate tabs). Each row opens the same three-panel dropdown
-// as the current-season table: EPA profile, where the team sat in THAT season's league, and
-// the team's Power Score / Elo across every season.
+// as the current-season table, all limited to the row's own season: EPA profile, where the team
+// sat in THAT season's league, and the team's weekly Power Score and Elo through THAT season
+// ("ratings entering each week", same rolling method as the current season's chart; the
+// table's own Power Score is the full-season average, so the two differ).
 const HIST_DISPLAY_CAP = 32;
 const HIST_COLS = [
   ['rank', 'Rank'],
@@ -91,13 +93,20 @@ const Historical = {
       };
     });
 
-    // Season series per franchise for the trend chart, and ONE shared axis range across all of them.
-    const series = {};
-    rows.slice().sort((a, b) => a.season - b.season).forEach(r => {
-      const f = FRANCHISE[r.team] || r.team;
-      (series[f] = series[f] || []).push({ label: String(r.season), score: r.score, elo: r.elo });
-    });
-    const ranges = Power._trendRanges(series);
+    // Weekly series for the trend chart (backend `weekly`: {season: {franchise: [[week, score, elo], ...]}}) and ONE shared axis
+    // range across every season and team, so any two dropdowns compare on the same scale. Computed once per rebuilt blob.
+    const weekly = data.weekly || {};
+    if (this._rangesFor !== data.generated) {
+      const flat = {};
+      Object.entries(weekly).forEach(([sn, teams]) => Object.entries(teams).forEach(([t, pts]) => {
+        flat[`${sn}-${t}`] = pts.map(p => ({ score: p[1], elo: p[2] }));
+      }));
+      this._ranges = Power._trendRanges(flat);
+      this._rangesFor = data.generated;
+    }
+    const ranges = this._ranges;
+    const weeklySeries = row => ((weekly[String(row.season)] || {})[FRANCHISE[row.team] || row.team] || [])
+      .map(p => ({ label: `Wk ${p[0]}`, score: p[1], elo: p[2] }));
 
     // Filters narrow the dataset; sorting always runs over what is left, and only the display is capped to the
     // top HIST_DISPLAY_CAP of whatever order that produces -- so with no filter, sorting Pass Defense ascending
@@ -133,7 +142,7 @@ const Historical = {
           <div class="power-detail-grid">
             <div class="power-detail-cell"><div class="power-detail-cap">${esc(r.team)} ${r.season} &mdash; EPA profile</div><div class="power-radar-chart" data-hradar="${esc(r.key)}"></div></div>
             <div class="power-detail-cell"><div class="power-detail-cap">Where ${esc(r.team)} sat in the ${r.season} league</div>${Power._teamStrips(r.team, rows.filter(x => x.season === r.season))}</div>
-            <div class="power-detail-cell"><div class="power-detail-cap">${esc(FRANCHISE[r.team] || r.team)} &mdash; Power Score and Elo by season (${r.season} marked)</div><div class="power-trend-chart" data-htrend="${esc(r.key)}"></div></div>
+            <div class="power-detail-cell"><div class="power-detail-cap">${esc(r.team)} ${r.season} &mdash; Power Score and Elo, ratings entering each week</div><div class="power-trend-chart" data-htrend="${esc(r.key)}"></div></div>
           </div></td></tr>` : '';
       return `<tr data-hkey="${esc(r.key)}" class="${open ? 'power-row-open' : ''}">${cells}</tr>${detail}`;
     }).join('');
@@ -171,7 +180,7 @@ const Historical = {
       const radarEl = el.querySelector(`[data-hradar="${CSS.escape(key)}"]`);
       if (radarEl) Power._drawRadar(radarEl, row.team, row, classifications);
       const trendEl = el.querySelector(`[data-htrend="${CSS.escape(key)}"]`);
-      if (trendEl) Power._drawTrend(trendEl, row.team, series[FRANCHISE[row.team] || row.team], ranges, String(row.season));
+      if (trendEl) Power._drawTrend(trendEl, row.team, weeklySeries(row), ranges);
     });
   },
 };
