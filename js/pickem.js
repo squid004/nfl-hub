@@ -595,7 +595,7 @@ const Pickem = {
       }
       const stateChip = liveStateChip(g, live, postGame);
 
-      const histCell = hist && hasLine ? History.lookup(hist, Math.abs(effSpread), effSpread <= 0) : null;
+      const histCell = hist && hasLine ? History.lookup(hist, Math.abs(effSpread), effSpread <= 0, !!(matchup && matchup.neutral_site)) : null;
 
       // Grading, once the game is final OR live (null = no verdict -- not started yet, or
       // nothing to compare). A tie/currently-tied grades neither side right nor wrong.
@@ -954,7 +954,7 @@ const Pickem = {
 
       const elwaySf = el ? spreadFavLabel(el.spread_home, g.home, g.away) : null;
       const prSf = sd ? spreadFavLabel(sd.spread, g.home, g.away) : null;
-      const histCell = hist && hasLine ? History.lookup(hist, Math.abs(effSpread), effSpread <= 0) : null;
+      const histCell = hist && hasLine ? History.lookup(hist, Math.abs(effSpread), effSpread <= 0, !!(matchup && matchup.neutral_site)) : null;
 
       const elwayHit = (postGame || live) && elwaySf && result !== 'PUSH' ? elwaySf.team === result : null;
       const histHit = (postGame || live) && histCell && favTeam && result !== 'PUSH' ? favTeam === result : null;

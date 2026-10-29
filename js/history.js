@@ -93,10 +93,13 @@ const History = {
   // splits (tested when investigating week-to-week variation) replicated across independent
   // halves of the 2007-2025 data -- see nflhub/sources/history.py module docstring for the
   // actual numbers. Pooling everything is both simpler and the statistically defensible choice.
-  lookup(dist, absSpread, homeFav) {
+  // `neutral` (a neutral-site game, no real home or away side) reads the all-games cell: only 70 neutral REG games since 2007 exist,
+  // about 6 per spread bucket, far too few for cells of their own, and the home/away cells would misapply a home edge.
+  lookup(dist, absSpread, homeFav, neutral = false) {
     if (!dist || !dist.cells) return null;
     const cells = dist.cells;
     const lab = this.bucketLabel(absSpread);
+    if (neutral) return (cells.all && cells.all[lab]) || null;
     const side = homeFav ? 'home' : 'away';
     return (cells[side] && cells[side][lab]) || (cells.all && cells.all[lab]) || null;
   },
@@ -105,9 +108,9 @@ const History = {
   // key-number correction at 3/7 applied. Mirror of predict() in nflhub/sources/history.py
   // — see that docstring for why a smooth curve plus an explicit key-number bump, instead
   // of either pure discrete buckets or a pure smooth curve alone.
-  predict(dist, absSpread, homeFav, field) {
+  predict(dist, absSpread, homeFav, field, neutral = false) {
     if (!dist || !dist.curves) return null;
-    const side = homeFav ? 'home' : 'away';
+    const side = neutral ? 'all' : (homeFav ? 'home' : 'away');   // a neutral-site game uses the pooled curve
     const curves = dist.curves;
     const coef = (curves[side] && curves[side][field]) || (curves.all && curves.all[field]);
     if (!coef) return null;
@@ -128,19 +131,21 @@ const History = {
   // to the other side's curve). Mirror of _predict_signed in nflhub/sources/history.py —
   // see that docstring for why: a floor-clamped magnitude let an ELWAY/market blend
   // collapse multiple different games to the identical toss-up value and re-tie them.
-  predictSigned(dist, homeFavSide, signedMargin, field) {
-    if (signedMargin >= 0) return this.predict(dist, signedMargin, homeFavSide, field);
-    const pOther = this.predict(dist, -signedMargin, !homeFavSide, field);
+  predictSigned(dist, homeFavSide, signedMargin, field, neutral = false) {
+    if (signedMargin >= 0) return this.predict(dist, signedMargin, homeFavSide, field, neutral);
+    const pOther = this.predict(dist, -signedMargin, !homeFavSide, field, neutral);
     return pOther == null ? null : 1 - pOther;
   },
 
   // Poisson-binomial mean/sd of favorite SU wins and ATS covers over this week's games.
-  expected(games, odds, dist) {
+  expected(games, odds, dist, teamRatings = null) {
     let suM = 0, suV = 0, atsM = 0, atsV = 0, k = 0;
     for (const g of games) {
       const o = odds[g.game_id];
       if (!o || o.spread == null) continue;
-      const cell = this.lookup(dist, Math.abs(o.spread), o.spread <= 0);
+      // a neutral-site game has no home/away side: read the pooled cell (see lookup())
+      const m = typeof matchupFor === 'function' ? matchupFor(teamRatings, g.home, g.away) : null;
+      const cell = this.lookup(dist, Math.abs(o.spread), o.spread <= 0, !!(m && m.neutral_site));
       if (!cell || cell.su == null) continue;
       suM += cell.su; suV += cell.su * (1 - cell.su);
       if (cell.ats != null) { atsM += cell.ats; atsV += cell.ats * (1 - cell.ats); }
@@ -153,7 +158,7 @@ const History = {
     const d = ctx.hist;
     if (!d) return '';
     const s = d.summary;
-    const e = this.expected(ctx.games, ctx.odds, d);
+    const e = this.expected(ctx.games, ctx.odds, d, ctx.teamRatings);
     if (!e.k || !s) return '';
     if (mode === 'ml') {
       const upsets = Math.round(e.k - e.suMean);
@@ -201,7 +206,9 @@ const History = {
       const bp = bestPrice[g.game_id];
       const sp = (bp && bp.avg_spread_home != null) ? bp.avg_spread_home : o.spread;
       const homeFav = sp <= 0;
-      const v = this.predict(d, Math.abs(sp), homeFav, F);
+      const mu = typeof matchupFor === 'function' ? matchupFor(ctx.teamRatings, g.home, g.away) : null;
+      const neutral = !!(mu && mu.neutral_site);   // no home/away side: pooled cell and curve
+      const v = this.predict(d, Math.abs(sp), homeFav, F, neutral);
       if (v == null) continue;
 
       // Blend the market favorite's margin toward ELWAY's margin for that same team
@@ -216,12 +223,12 @@ const History = {
         const elwayFavMargin = homeFav ? -el.spread_home : el.spread_home;
         effMargin = 0.35 * Math.abs(sp) + 0.65 * elwayFavMargin;
       }
-      const rankV = this.predictSigned(d, homeFav, effMargin, F) ?? v;
+      const rankV = this.predictSigned(d, homeFav, effMargin, F, neutral) ?? v;
 
       // Display bucket only: BUCKETS/bucketLabel assumes clean half-point spreads (true
       // for a single book's line, not necessarily for a cross-book average, e.g. 2.75).
       const dispSpread = Math.round(Math.abs(sp) * 2) / 2;
-      const cell = this.lookup(d, dispSpread, homeFav);
+      const cell = this.lookup(d, dispSpread, homeFav, neutral);
 
       groups[this.bucketLabel(dispSpread)].push({
         gameId: g.game_id,

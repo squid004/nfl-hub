@@ -21,6 +21,10 @@ each week's spreads to answer "how many games should I expect to be upsets?":
   getting smoothed away.
 - one pooled summary across the whole season (large n, no week-of-season split).
 
+Neutral-site games (team_ratings.is_neutral_site) are excluded from every statistic here: they have no home or away side, so
+they would dilute the home/away cells and the pooled "all" cell, which is what the page reads for a neutral-site game (only
+~70 such games exist since 2007, about 6 per spread bucket, too few for cells of their own).
+
 One constant estimate regardless of week, by design, not by omission: this used to split
 Week 1 from "the rest," and a later investigation (prompted by the week-over-week table
 showing some weeks visibly more upset-heavy than others, e.g. week 10 vs week 17) tested
@@ -57,6 +61,8 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 import requests
+
+from .team_ratings import is_neutral_site
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +183,10 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
             except ValueError:
                 continue
 
+        # Neutral-site games (international series, old Toronto Series) have no home or away side, so they belong in none of
+        # these statistics: they would dilute the home/away cells and the pooled "all" cell the page uses for neutral games.
+        if is_neutral_site(r):
+            continue
         max_season = max(max_season, season)
         abs_s = abs(sl)
         lab = _bucket(abs_s)
@@ -184,7 +194,6 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
             continue
         home_fav = sl >= 0
         side = "home" if home_fav else "away"
-        neutral = (r.get("location", "Home") == "Neutral")
         fav_margin = res if home_fav else -res
         su = 1.0 if fav_margin > 0 else 0.0
         cov = fav_margin - abs_s
@@ -192,20 +201,14 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
         is_push = abs(cov) < 1e-9
         ats = None if is_push else (1.0 if cov > 0 else 0.0)
 
-        targets = [("all", lab)]
-        if not neutral:
-            targets.append((side, lab))
-        for key in targets:
+        for key in (("all", lab), (side, lab)):
             c = data[key]
             c["su_w"] += su; c["su_n"] += 1; c["miss"] += miss
             if ats is not None:
                 c["ats_w"] += ats; c["ats_n"] += 1
 
-        # smooth-curve fit inputs: every game feeds "all", plus its own side unless neutral
-        curve_keys = ["all"]
-        if not neutral:
-            curve_keys.append(side)
-        for ck in curve_keys:
+        # smooth-curve fit inputs: every game feeds "all", plus its own side
+        for ck in ("all", side):
             raw_su[ck].append((abs_s, su))
             if ats is not None:
                 raw_ats[ck].append((abs_s, ats))
@@ -221,7 +224,7 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
         if ats is not None:
             p["ats_w"] += ats; p["ats_n"] += 1
 
-        for pkey in ["all"] + ([] if neutral else [side]):
+        for pkey in ("all", side):
             pc = pooled[pkey]
             pc["su_w"] += su; pc["su_n"] += 1; pc["miss"] += miss
             if ats is not None:
@@ -297,18 +300,22 @@ def build_distributions(rows: list[dict[str, str]], min_season: int = MIN_SEASON
     }
 
 
-def _lookup(dist: dict, abs_spread: float, home_fav: bool) -> dict | None:
-    """Mirror of History.lookup in js/history.js: most specific cell for a game."""
+def _lookup(dist: dict, abs_spread: float, home_fav: bool, neutral: bool = False) -> dict | None:
+    """Mirror of History.lookup in js/history.js: most specific cell for a game. A neutral-site game has no home or away side,
+    so it reads the pooled cell (built without neutral games, see build_distributions)."""
     cells = dist.get("cells") or {}
     lab = _bucket(abs_spread)
+    if neutral:
+        return cells.get("all", {}).get(lab)
     side = "home" if home_fav else "away"
     return cells.get(side, {}).get(lab) or cells.get("all", {}).get(lab)
 
 
-def predict(dist: dict, abs_spread: float, home_fav: bool, field: str) -> Optional[float]:
+def predict(dist: dict, abs_spread: float, home_fav: bool, field: str, neutral: bool = False) -> Optional[float]:
     """P(favorite wins SU / covers) from the smooth curve at this exact spread, with the
-    key-number correction applied at 3 and 7. Mirror: History.predict in js/history.js."""
-    side = "home" if home_fav else "away"
+    key-number correction applied at 3 and 7. Mirror: History.predict in js/history.js.
+    A neutral-site game uses the pooled ("all") curve and key-number adjustment."""
+    side = "all" if neutral else ("home" if home_fav else "away")
     curves = dist.get("curves") or {}
     coef = (curves.get(side, {}) or {}).get(field) or (curves.get("all", {}) or {}).get(field)
     if not coef:
@@ -323,7 +330,7 @@ def predict(dist: dict, abs_spread: float, home_fav: bool, field: str) -> Option
     return round(min(0.995, max(0.005, p)), 4)
 
 
-def _predict_signed(dist: dict, home_fav_side: bool, signed_margin: float, field: str) -> Optional[float]:
+def _predict_signed(dist: dict, home_fav_side: bool, signed_margin: float, field: str, neutral: bool = False) -> Optional[float]:
     """P(the team on `home_fav_side`, home if True else away, wins/covers), from a SIGNED
     margin for that side (positive = favored by that many points; negative = actually the
     worse side by that many, evaluated by flipping to the other side's curve at the
@@ -334,8 +341,8 @@ def _predict_signed(dist: dict, home_fav_side: bool, signed_margin: float, field
     strictly monotonic and keeps differentiating games no matter how large the blend gets.
     """
     if signed_margin >= 0:
-        return predict(dist, signed_margin, home_fav_side, field)
-    p_other = predict(dist, -signed_margin, not home_fav_side, field)
+        return predict(dist, signed_margin, home_fav_side, field, neutral)
+    p_other = predict(dist, -signed_margin, not home_fav_side, field, neutral)
     return None if p_other is None else round(1 - p_other, 4)
 
 
@@ -396,7 +403,8 @@ def week_budget(
                 continue
             sp = float(o["spread"])
             home_fav = sp <= 0
-            v = predict(dist, abs(sp), home_fav, field)
+            neutral = bool(g.get("_neutral"))   # no home/away side: pooled cell and curve
+            v = predict(dist, abs(sp), home_fav, field, neutral)
             if v is None:
                 continue
 
@@ -408,7 +416,7 @@ def week_budget(
             if el and el.get("spread_home") is not None:
                 elway_fav_margin = -el["spread_home"] if home_fav else el["spread_home"]
                 eff_margin = (1 - ELWAY_BLEND_WEIGHT) * abs(sp) + ELWAY_BLEND_WEIGHT * elway_fav_margin
-            rank_v = _predict_signed(dist, home_fav, eff_margin, field)
+            rank_v = _predict_signed(dist, home_fav, eff_margin, field, neutral)
             if rank_v is None:
                 rank_v = v
 
@@ -420,7 +428,7 @@ def week_budget(
             lab = _bucket(disp_spread)
             if lab is None:
                 continue
-            hist_cell = _lookup(dist, disp_spread, home_fav) or {}
+            hist_cell = _lookup(dist, disp_spread, home_fav, neutral) or {}
             by_bin[lab].append({
                 "game_id": gid,
                 "bin": lab,

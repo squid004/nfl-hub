@@ -108,6 +108,9 @@ def fetch_scoreboard(season: int, week: int) -> list[dict[str, Any]]:
                 "state": state,
                 "home_score": int(home.get("score") or 0),
                 "away_score": int(away.get("score") or 0),
+                # ESPN's own neutral-site flag (London/Paris/Madrid etc., verified against the 2026 international games); the
+                # leading underscore keeps it out of the `game` table, like _odds
+                "_neutral": bool(comp.get("neutralSite")),
                 "_odds": {
                     "spread": _parse_spread(odds_obj, home_abbr, away_abbr),
                     "total": odds_obj.get("overUnder"),
