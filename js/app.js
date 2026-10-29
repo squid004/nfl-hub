@@ -38,7 +38,7 @@ const App = {
   _timer: null,
   _liveTimer: null,
   // null = viewing the live/current week; a number = browsing a past week's Moneyline
-  // Pick'em, ATS, Power Rankings, and Parlays. Historical Power Rankings is never affected
+  // Pick'em, ATS, Power Rankings, and Parlays. The Power Rankings page's Historical Rankings view is never affected
   // (it already covers every season, independent of any single week). Deadlines (header
   // chips) and Historical Power always stay on the LIVE week regardless of this -- browsing
   // old data shouldn't make the "locks at" countdown show a date that already passed.
@@ -60,6 +60,7 @@ const App = {
       if (b.dataset.act === 'refresh') App.requestRefresh();
       if (b.dataset.act === 'power-sort') Power.sortBy(b.dataset.col);
       if (b.dataset.act === 'historical-sort') Historical.sortBy(b.dataset.col);
+      if (b.dataset.act === 'power-view') Power.setView(b.dataset.v);
       if (b.dataset.act === 'model-trends-toggle-agree') ModelTrends.toggleAgreement();
       if (b.dataset.act === 'model-trends-toggle-colorby') ModelTrends.toggleColorBy();
       if (b.dataset.act === 'model-trends-reset-filters') ModelTrends.resetAllFilters();
@@ -189,15 +190,25 @@ const App = {
       Odds.render(ctx);
       Power.render(ctx);
       Parlays.render(ctx);
-      Historical.render(ctx);
       ModelTrends.render(ctx);
-      Methodology.render(ctx);
-      PipelineHealth.render(ctx);
       this.renderStatus(ctx);
+      this.renderHealthLink(ctx);
       this._syncLivePolling();
     } catch (e) {
       document.getElementById('status').textContent = 'Error: ' + e.message;
     }
+  },
+
+  // The header's "Pipeline health" link carries a status chip so a failing refresh is visible without opening the page.
+  renderHealthLink(ctx) {
+    const chip = document.getElementById('health-chip');
+    if (!chip) return;
+    const cur = ctx.pipelineHealth && ctx.pipelineHealth.current;
+    if (!cur) { chip.className = 'chip'; chip.textContent = '?'; chip.title = 'No health data yet'; return; }
+    const n = (cur.errors || []).length;
+    chip.className = 'chip ' + (cur.ok ? 'good' : 'bad');
+    chip.textContent = cur.ok ? 'OK' : `${n} failing`;
+    chip.title = cur.ok ? 'All sources OK' : (cur.errors || []).join('\n');
   },
 
   renderStatus(ctx) {

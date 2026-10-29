@@ -279,3 +279,13 @@ body.read-only button[data-act="refresh"] { opacity:.45; cursor:not-allowed; }
 .trend-up   { color:var(--good); font-weight:600; font-size:.8em; }
 .trend-down { color:var(--bad);  font-weight:600; font-size:.8em; }
 .trend-flat { color:var(--warn); font-weight:600; font-size:.8em; }
+
+/* Power Rankings view toggle (this season / historical) and the header links to the Methodology and Health pages */
+.toolbar { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; margin-bottom:12px; }
+.seg { display:inline-flex; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:3px; gap:2px; }
+.seg button { font:inherit; color:var(--dim); background:transparent; border:0; border-radius:6px; padding:6px 14px; cursor:pointer; }
+.seg button[aria-pressed="true"] { background:var(--accent); color:#06121f; font-weight:650; }
+.filters { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:0 0 10px; }
+.header-links { display:inline-flex; gap:14px; align-items:center; font-size:13px; }
+.header-links a { color:var(--dim); } .header-links a:hover { color:var(--text); }
+.header-links a::after { content:" \2197"; font-size:11px; }

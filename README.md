@@ -98,6 +98,7 @@ Open `index.html` — it talks to the same Supabase project as the deployed page
 
 ```
 index.html  style.css  js/*.js       static dashboard (GitHub Pages)
+methodology.html  health.html      standalone Methodology and Pipeline Health pages (linked from the main header)
 supabase/schema.sql                   Postgres schema + RLS
 nflhub/                               the Actions job
   __main__.py   refresh | tick | notify | yahoo-auth

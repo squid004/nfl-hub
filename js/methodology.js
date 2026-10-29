@@ -9,7 +9,7 @@
 // and rejected or put on hold -- update BOTH this file and docs/model-methodology.md in the
 // same change. This page is the user-facing mirror of that doc, not a one-time snapshot.
 // Bump LAST_UPDATED below whenever either is touched.
-const METHODOLOGY_LAST_UPDATED = '2026-10-16';
+const METHODOLOGY_LAST_UPDATED = '2026-10-29';
 
 const Methodology = {
   _built: false,
@@ -95,7 +95,7 @@ const Methodology = {
         <p class="lean">Walk-forward AUC 0.6983 vs. 0.7224 for the closing market spread
           alone -- <strong>this does not beat the market</strong> at picking winners. Shown as
           descriptive context (Power Rankings tab), not a betting edge.</p>
-        <p class="small"><strong>Historical Power Rankings tab</strong> uses the same formula
+        <p class="small"><strong>Historical Rankings view</strong> (the second view of the Power Rankings page) uses the same formula
           but each team's simple full-season average, not the live tab's EWMA rolling rating
           -- every team-season is already fully known, so there's no "as of this week" to
           track. Z-scored against every team-season at once so different eras compare directly.</p>

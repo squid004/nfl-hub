@@ -167,6 +167,30 @@ function trendHtml(delta, title, fmt = v => v) {
 const Power = {
   _sort: { col: 'rank', dir: 1 },
   _open: new Set(),   // teams whose dropdown is open; survives the 90-second re-renders
+  // Which of the page's two views is showing: 'current' (this season, live) or 'history' (every team-season since 2007). The
+  // last choice is remembered; a #power-history link (see Tabs) overrides it.
+  _view: (() => { try { return localStorage.getItem('nflhub.powerView') === 'history' ? 'history' : 'current'; } catch { return 'current'; } })(),
+
+  setView(v) {
+    this._view = v === 'history' ? 'history' : 'current';
+    try { localStorage.setItem('nflhub.powerView', this._view); } catch { /* private mode */ }
+    Tabs.syncHash();
+    this.render(App._ctx);
+  },
+
+  setViewQuiet(v) { this._view = v === 'history' ? 'history' : 'current'; try { localStorage.setItem('nflhub.powerView', this._view); } catch { /* private mode */ } },
+
+  // Segmented toggle above the table: "2026 (Week 8)" | "Historical Rankings (2007-2025)".
+  _toggleHtml(ctx) {
+    const hp = ctx.historicalPower;
+    const span = hp && hp.seasons && hp.seasons.length ? ` (${hp.seasons[0]}&ndash;${hp.seasons[hp.seasons.length - 1]})` : '';
+    const cur = this._view === 'current';
+    return `<div class="toolbar"><h2 style="margin:0;">Power Rankings</h2>
+      <div class="seg" role="group" aria-label="Which rankings">
+        <button data-act="power-view" data-v="current" aria-pressed="${cur}">${esc(String(ctx.season))} (Week ${esc(String(ctx.week))})</button>
+        <button data-act="power-view" data-v="history" aria-pressed="${!cur}">Historical Rankings${span}</button>
+      </div></div>`;
+  },
 
   sortBy(col) {
     if (this._sort.col === col) this._sort.dir *= -1;
@@ -177,6 +201,12 @@ const Power = {
   render(ctx) {
     const el = document.getElementById('power');
     if (!el) return;
+    if (this._view === 'history') {
+      el.innerHTML = `<div class="panel">${this._toggleHtml(ctx)}<div id="power-view"></div></div>`;
+      Historical.render(ctx);
+      this._wire(el);
+      return;
+    }
     const teamRatings = ctx.teamRatings || {};
     const pr = teamRatings.power_rankings || {};
     const meta = teamRatings.power_ranking_meta || null;
@@ -203,7 +233,8 @@ const Power = {
     });
 
     if (!rows.length) {
-      el.innerHTML = `<div class="panel"><h2>Power Rankings</h2><p class="muted">No rating data yet.</p></div>`;
+      el.innerHTML = `<div class="panel">${this._toggleHtml(ctx)}<p class="muted">No rating data yet.</p></div>`;
+      this._wire(el);
       return;
     }
 
@@ -259,7 +290,7 @@ const Power = {
 
     el.innerHTML = `
       <div class="panel">
-        <h2>Power Rankings</h2>
+        ${this._toggleHtml(ctx)}
         <p class="muted small">Click a team for its EPA profile, league position and season trend. Arrows show the change since last week.</p>
         ${meta ? `<details class="power-methodology">
           <summary class="muted small">Weights used (click to expand)</summary>
@@ -282,18 +313,27 @@ const Power = {
       if (trendEl) this._drawTrend(trendEl, team, ctx.powerSeries ? ctx.powerSeries[team] : null, this._trendRanges(ctx.powerSeries));
     });
 
-    // Delegated, wired once -- #power itself survives every re-render (only its innerHTML's children are replaced).
-    if (!this._clickWired) {
-      el.addEventListener('click', e => {
-        if (e.target.closest('button, a, .power-detail')) return;   // sort buttons and open dropdowns handle themselves
-        const tr = e.target.closest('tr[data-team]');
-        if (!tr) return;
-        const team = tr.dataset.team;
-        if (this._open.has(team)) this._open.delete(team); else this._open.add(team);
-        this.render(App._ctx);
-      });
-      this._clickWired = true;
-    }
+    this._wire(el);
+  },
+
+  // Delegated, wired once -- #power itself survives every re-render (only its innerHTML's children are replaced).
+  _wire(el) {
+    if (this._clickWired) return;
+    el.addEventListener('click', e => {
+      if (e.target.closest('button, a, select, .power-detail')) return;   // buttons, filters and open dropdowns handle themselves
+      const hr = e.target.closest('tr[data-hkey]');
+      if (hr) { Historical.toggle(hr.dataset.hkey); return; }
+      const tr = e.target.closest('tr[data-team]');
+      if (!tr) return;
+      const team = tr.dataset.team;
+      if (this._open.has(team)) this._open.delete(team); else this._open.add(team);
+      this.render(App._ctx);
+    });
+    el.addEventListener('change', e => {
+      if (e.target.id === 'hist-season') Historical.setFilter('season', e.target.value);
+      else if (e.target.id === 'hist-team') Historical.setFilter('team', e.target.value);
+    });
+    this._clickWired = true;
   },
 
   // True-circle bullseye (see tierCutoffs()/normalizeToTier() above): the angular axis is
@@ -370,7 +410,7 @@ const Power = {
     return { score: span('score'), elo: span('elo') };
   },
 
-  _drawTrend(el, team, series, ranges) {
+  _drawTrend(el, team, series, ranges, highlight = null) {
     if (!series || series.length < 2) {
       el.innerHTML = '<p class="muted small">Needs at least two weekly snapshots.</p>';
       return;
@@ -381,9 +421,9 @@ const Power = {
     const x = series.map(p => p.label);
     const traces = [
       { type: 'scatter', mode: 'lines+markers', name: 'Power Score', x, y: series.map(p => p.score), yaxis: 'y',
-        line: { color: accent, width: 2.5 }, marker: { size: 6 }, hovertemplate: '%{y:.1f}<extra>Power Score</extra>' },
+        line: { color: accent, width: 2.5 }, marker: { size: x.map(l => l === highlight ? 12 : 6) }, hovertemplate: '%{y:.1f}<extra>Power Score</extra>' },
       { type: 'scatter', mode: 'lines+markers', name: 'Elo', x, y: series.map(p => p.elo), yaxis: 'y2',
-        line: { color: warn, width: 2.5, dash: 'dot' }, marker: { size: 6 }, hovertemplate: '%{y:.0f}<extra>Elo</extra>' },
+        line: { color: warn, width: 2.5, dash: 'dot' }, marker: { size: x.map(l => l === highlight ? 12 : 6) }, hovertemplate: '%{y:.0f}<extra>Elo</extra>' },
     ];
     const grid = 'rgba(255,255,255,.12)';
     Plotly.react(el, traces, {
@@ -399,6 +439,13 @@ const Power = {
   // The four EPA number-line strips for ONE team: every team is a faint dot at its real 0-100 value, the selected team is
   // ringed and labeled so its position (and the actual gaps to its neighbors) reads at a glance.
   _teamStrips(team, rows, classifications) {
+    if (!classifications) {
+      classifications = {};
+      DIST_METRICS.forEach(([key]) => {
+        const vals = rows.filter(r => r[key] != null).map(r => ({ team: r.team, value: r[key] }));
+        if (vals.length >= 4) classifications[key] = classifyTeams(vals);
+      });
+    }
     const strips = DIST_METRICS.map(([key, label]) => {
       const c = classifications[key];
       if (!c) return '';

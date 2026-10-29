@@ -69,7 +69,7 @@ for the closing market spread alone — this does not beat the market at picking
 Shown as descriptive context (Power Rankings tab, college-poll-style display), not a
 betting edge.
 
-**Historical Power Rankings tab** uses the same formula but each team's simple full-season
+**Historical Rankings view** (the second view of the Power Rankings page) uses the same formula but each team's simple full-season
 average, not the live tab's EWMA rolling rating — every team-season is already fully known,
 so there's no "as of this week" to track. Z-scored against every team-season at once so
 different eras compare directly.
