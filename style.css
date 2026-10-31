@@ -1,8 +1,3 @@
-:root {
-  --bg:#0f1216; --panel:#171c22; --panel2:#1e252d; --line:#2a323c;
-  --text:#e7ecf1; --dim:#93a1b0; --accent:#4da3ff;
-  --good:#3ecf8e; --bad:#ff6b6b; --warn:#ffcf5c;
-}
 * { box-sizing:border-box; }
 body {
   margin:0; background:var(--bg); color:var(--text);
@@ -22,20 +17,6 @@ header .muted { display:block; font-size:12px; }
 
 [hidden] { display:none !important; }
 
-#tabs {
-  display:flex; gap:4px; padding:0 20px; border-bottom:1px solid var(--line);
-  overflow-x:auto; max-width:1280px; margin:0 auto;
-}
-#tabs button {
-  font:inherit; font-size:.9rem; white-space:nowrap;
-  background:transparent; color:var(--dim); border:none;
-  border-bottom:2px solid transparent; border-radius:0;
-  padding:10px 14px; cursor:pointer;
-}
-#tabs button:hover { color:var(--text); }
-#tabs button.active { color:var(--text); border-bottom-color:var(--accent); font-weight:600; }
-
-main { padding:20px; max-width:1280px; margin:0 auto; display:grid; gap:20px; }
 
 .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }
 section > .panel { min-width:0; }
@@ -184,12 +165,7 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 #power tbody tr[data-team]:hover { background:var(--panel2); cursor:pointer; }
 .power-chev { color:var(--dim); font-size:.8em; }
 #power tr.power-row-open { background:var(--panel2); }
-.power-detail > td { padding:10px 8px 16px; background:var(--panel2); }
-.power-detail-grid {
-  display:grid; grid-template-columns:repeat(auto-fit, minmax(290px, 1fr)); gap:16px; text-align:left;
-  /* the table is wider than the screen, so keep the dropdown pinned to the visible width instead of stretching with the table */
-  position:sticky; left:0; width:min(1200px, calc(100vw - 90px));
-}
+.power-detail-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(290px, 1fr)); gap:16px; text-align:left; }
 .power-detail-cell { min-width:0; }
 .power-detail-cap { font-size:.8rem; font-weight:700; margin-bottom:4px; }
 .power-radar-chart { width:100%; height:300px; }
@@ -289,3 +265,730 @@ body.read-only button[data-act="refresh"] { opacity:.45; cursor:not-allowed; }
 .header-links { display:inline-flex; gap:14px; align-items:center; font-size:13px; }
 .header-links a { color:var(--dim); } .header-links a:hover { color:var(--text); }
 .header-links a::after { content:" \2197"; font-size:11px; }
+
+/* =====================================================================================
+   Hub layout and look: sidebar + top bar on desktop, bottom tab bar on phones, the slate
+   and its detail pane, tiles, tables. Everything above is the original component styling;
+   the palette and type scale below apply to all of it.
+   ===================================================================================== */
+
+:root {
+  color-scheme: dark;
+  /* palette */
+  --bg: #0b0e13;
+  --panel: #12161d;
+  --panel2: #181d26;
+  --line: #242b36;
+  --line-soft: #1c222b;
+  --text: #e6eaf0;
+  --dim: #8c98a8;
+  --accent: #4da3ff;
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --good: #3cc98c;
+  --bad: #f06a6a;
+  --warn: #f2c14e;
+  --violet: #a78bfa;
+  /* type scale */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --fs-xs: 11px;
+  --fs-sm: 12.5px;
+  --fs-base: 14px;
+  --fs-md: 16px;
+  --fs-lg: 20px;
+  /* spacing and shape */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --gutter: 24px;
+  --sticky-h: 52px;
+  --page-l: max(var(--gutter), env(safe-area-inset-left));
+  --page-r: max(var(--gutter), env(safe-area-inset-right));
+}
+
+html { -webkit-text-size-adjust: 100%; }
+body {
+  background: var(--bg);
+  font: var(--fs-base)/1.5 var(--font);
+  padding-bottom: env(safe-area-inset-bottom);
+  -webkit-font-smoothing: antialiased;
+}
+a:hover { text-decoration: underline; }
+
+h1 { font-size: var(--fs-md); font-weight: 700; letter-spacing: -.01em; }
+h2 {
+  font-size: var(--fs-md); font-weight: 650; letter-spacing: -.005em; text-transform: none;
+  color: var(--text); margin: 0 0 var(--sp-3);
+}
+h3 { font-size: var(--fs-base); font-weight: 650; }
+.small, .tablefoot { font-size: var(--fs-sm); }
+
+/* ---------- shell ----------
+   Phone and tablet (the default): brand, then the controls, then the section tabs as a
+   sticky strip, then the page. .rail and .page are display: contents there, so
+   their children are laid out (and ordered) by .app directly, and the tab strip sticks
+   against the whole page. From 1024px (see "desktop" below) the rail becomes a fixed left
+   sidebar and the page gets a sticky top bar. */
+.app { display: flex; flex-direction: column; min-height: 100dvh; }
+.rail, .page { display: contents; }
+.brand { order: 1; }
+.topbar { order: 2; }
+.navbar { order: 3; }
+main { order: 4; }
+.rail-games, .rail-links { display: none; }
+
+.brand {
+  display: flex; align-items: center; gap: var(--sp-3); min-width: 0;
+  padding: max(var(--sp-3), env(safe-area-inset-top)) var(--page-r) 0 var(--page-l);
+}
+.brand img { width: 32px; height: 32px; border-radius: 8px; flex: none; }
+.brand .muted { display: block; font-size: var(--fs-sm); }
+.ico {
+  width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+
+/* top bar: section title (desktop only) + deadlines, week, refresh, view-only, account */
+header.topbar {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-3);
+  padding: var(--sp-3) var(--page-r) var(--sp-3) var(--page-l); border-bottom: none;
+}
+.page-title { display: none; margin: 0; font-size: var(--fs-lg); font-weight: 700; letter-spacing: -.015em; }
+.controls { gap: var(--sp-2); justify-content: flex-end; }
+#deadline-chips { display: inline-flex; gap: var(--sp-1); flex-wrap: wrap; }
+.week { display: flex; align-items: center; gap: 6px; }
+
+.viewonly {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 0 4px 0 12px; min-height: 34px; border-radius: 999px;
+  font-size: var(--fs-sm); color: var(--dim);
+  background: var(--panel); border: 1px solid var(--line);
+}
+.link-btn {
+  background: none; border: none; padding: 2px 8px; min-height: 0; color: var(--accent);
+  font-size: inherit; font-weight: 600;
+}
+.link-btn:hover { border: none; text-decoration: underline; }
+.notowner { display: none; padding-right: 8px; }
+/* Signed in with Google but not the owner (auth.js then shows Sign out in #auth-box):
+   offering "Sign in to edit" again would just loop through OAuth. */
+body:has(#auth-box [data-auth="signout"]) #read-only-note .link-btn { display: none; }
+body:has(#auth-box [data-auth="signout"]) #read-only-note .notowner { display: inline; }
+
+/* ---------- section tabs (a sticky strip until desktop) ---------- */
+.navbar {
+  position: sticky; top: 0; z-index: 50;
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: env(safe-area-inset-top) var(--page-r) 0 var(--page-l);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(140%) blur(10px);
+  -webkit-backdrop-filter: saturate(140%) blur(10px);
+  border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line);
+}
+#tabs {
+  flex: 1; min-width: 0; max-width: none; margin: 0; padding: 0; border-bottom: none; gap: 2px;
+  scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+#tabs::-webkit-scrollbar { display: none; }
+#tabs .nav-group, #tabs .ico { display: none; }
+#tabs button {
+  flex: none; position: relative; display: inline-flex; align-items: center; gap: 10px;
+  padding: 14px 12px; min-height: 48px;
+  font: inherit; font-size: var(--fs-base); font-weight: 500; color: var(--dim);
+  background: none; border: none; border-radius: 0; cursor: pointer; white-space: nowrap;
+}
+#tabs button::after {
+  content: ""; position: absolute; left: 10px; right: 10px; bottom: 0; height: 2px;
+  border-radius: 2px 2px 0 0; background: transparent;
+}
+#tabs button:hover { color: var(--text); border: none; }
+#tabs button.active { color: var(--text); font-weight: 650; border-bottom-color: transparent; }
+#tabs button.active::after { background: var(--accent); }
+#tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; border-radius: 6px; }
+.short { display: none; }
+/* Status badges on the tabs (js/shell.js) */
+.badge {
+  margin-left: auto; padding: 0 7px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line);
+  font-size: 11px; font-weight: 600; line-height: 17px; color: var(--dim); font-variant-numeric: tabular-nums;
+}
+.badge.todo { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.badge.dot { width: 8px; height: 8px; padding: 0; border: none; }
+.badge.dot.good { background: var(--good); }
+.badge.dot.bad { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 25%, transparent); }
+.more-btn, .sheet { display: none; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+
+/* ---------- page and panels ---------- */
+main { display: grid; width: 100%; margin: 0 auto; max-width: 1360px; padding: var(--sp-5) var(--page-r) 48px var(--page-l); gap: var(--sp-4); }
+main > section { min-width: 0; } /* grid items: let wide tables scroll inside their panel, not the page */
+main > section:empty { display: none; }
+.panel {
+  background: var(--panel); border: 1px solid var(--line-soft); border-radius: var(--radius);
+  padding: 20px; box-shadow: 0 1px 0 rgba(255, 255, 255, .02) inset, 0 1px 2px rgba(0, 0, 0, .25);
+}
+section > .panel + .panel { margin-top: var(--sp-4); }
+.lean { background: var(--panel2); border-left-color: var(--accent); border-radius: var(--radius-sm); padding: 10px 12px; }
+.banner { padding: 8px var(--page-r) 8px var(--page-l); }
+
+/* ---------- tables ---------- */
+table { font-variant-numeric: tabular-nums; }
+th, td { padding: 8px 10px; border-bottom-color: var(--line-soft); }
+th {
+  font-size: var(--fs-xs); font-weight: 600; letter-spacing: .04em; color: var(--dim);
+  border-bottom: 1px solid var(--line); background: var(--panel);
+}
+/* Alternating rows: every other row a shade lighter (opaque, so pinned cells match). */
+:root { --zebra: color-mix(in srgb, var(--panel2) 55%, var(--panel)); --row-hover: color-mix(in srgb, var(--panel2) 90%, var(--line-soft)); }
+tbody tr:nth-child(even) > td { background: var(--zebra); }
+tbody tr:hover > td { background: var(--row-hover); }
+
+/* Wide tables (js/shell.js): a frame that scrolls sideways when needed, with pinned columns. */
+.frame { position: relative; }
+.frame-scroll { overflow: auto; overscroll-behavior-x: contain; }
+.frame::before, .frame::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 28px; z-index: 3;
+  pointer-events: none; opacity: 0; transition: opacity .15s;
+}
+.frame::after { right: 0; background: linear-gradient(to right, transparent, var(--panel)); }
+.frame::before { left: var(--pin-w, 0); background: linear-gradient(to left, transparent, color-mix(in srgb, var(--panel) 70%, transparent)); }
+.frame.more-right::after, .frame.more-left::before { opacity: 1; }
+/* A table that fits needs no scroll box, so its header row pins to the page under the top
+   bar. One wider than its panel scrolls sideways in the box (pinned columns, no pinned
+   header: a sideways-scrolling box can't also pin to the page). No vertical inner scroll. */
+.frame:not(.scrolls-x) .frame-scroll { overflow: visible; }
+/* his .panel scrolls sideways itself, which would trap the pinned header; the frame
+   already handles overflow for the table it holds */
+.panel:has(.frame) { overflow: visible; }
+.frame:not(.scrolls-x) table.wide thead th { position: sticky; top: var(--sticky-h); z-index: 2; }
+table.wide .pin { position: sticky; z-index: 1; background: var(--panel); }
+table.wide thead .pin { z-index: 3; }
+table.wide tbody tr:nth-child(even) > td.pin { background: var(--zebra); }
+table.wide tbody tr:hover > td.pin { background: var(--row-hover); }
+table.wide .pin-last { box-shadow: inset -1px 0 0 var(--line); }
+.empty-note { margin: var(--sp-2) 0 0; }
+
+/* Explanations behind an ⓘ on the panel title (js/shell.js). */
+.explain { display: none; }
+.explain-open .explain { display: block; }
+.info-btn {
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: 2px;
+  width: 20px; height: 20px; min-width: 0; min-height: 0; margin-left: 8px; padding: 0;
+  border-radius: 50%; border: 1px solid var(--line); background: none;
+  font: italic 600 12px/1 Georgia, "Times New Roman", serif; color: var(--dim);
+}
+.info-btn:hover, .info-btn[aria-expanded="true"] { color: var(--accent); border-color: var(--accent); }
+@media (pointer: coarse) {
+  /* a 44px target around the small circle */
+  .info-btn { position: relative; }
+  .info-btn::after { content: ""; position: absolute; inset: -12px; }
+}
+
+/* Long error messages wrap instead of running off the panel. */
+#pipeline-health td:last-child { white-space: normal; overflow-wrap: anywhere; }
+tr.tot td { border-top-color: var(--line); }
+/* Power Rankings expand marker (power.js's ▸/▾): his .8em renders as a dot. */
+#power .power-chev {
+  display: inline-block; width: 14px; text-align: center; vertical-align: -1px;
+  font-size: 18px; line-height: 0; color: var(--accent);
+}
+#power tbody tr[data-team]:hover > td, #power tbody tr[data-hkey]:hover > td { background: var(--panel2); cursor: pointer; }
+
+/* ---------- controls ---------- */
+button, select, input, textarea {
+  font-size: var(--fs-base); background: var(--panel2); color: var(--text);
+  border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 12px;
+  min-height: 34px; transition: border-color .12s, background-color .12s, color .12s;
+}
+select { padding-right: 28px; }
+button:hover { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); }
+button:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #04121f; }
+button.small, .chips button { font-size: var(--fs-sm); }
+.sort-btn { min-height: 0; padding: 2px 4px; font-size: var(--fs-xs); letter-spacing: .04em; text-transform: uppercase; }
+#backtest-cell-chip button { min-height: 0; }
+
+/* ---------- chips ---------- */
+.chip {
+  padding: 2px 9px; font-size: var(--fs-sm); font-weight: 500; line-height: 1.5;
+  background: var(--panel2); border-color: var(--line);
+}
+.chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); background: color-mix(in srgb, var(--warn) 8%, var(--panel2)); }
+.chip.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 35%, transparent); background: color-mix(in srgb, var(--bad) 8%, var(--panel2)); }
+.chip.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 35%, transparent); background: color-mix(in srgb, var(--good) 8%, var(--panel2)); }
+.chip.gut { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+
+/* ---------- game cards ---------- */
+.game-card {
+  background: var(--panel2); border-color: var(--line-soft); border-radius: var(--radius);
+  padding: 14px 16px; scroll-margin-top: calc(var(--sticky-h) + var(--sp-3));
+  transition: box-shadow .3s;
+}
+.game-card.result-win { background: color-mix(in srgb, var(--good) 9%, var(--panel2)); border-color: color-mix(in srgb, var(--good) 22%, var(--line-soft)); }
+.game-card.result-loss { background: color-mix(in srgb, var(--bad) 9%, var(--panel2)); border-color: color-mix(in srgb, var(--bad) 22%, var(--line-soft)); }
+.game-card.result-tie { background: color-mix(in srgb, var(--warn) 9%, var(--panel2)); border-color: color-mix(in srgb, var(--warn) 22%, var(--line-soft)); }
+.game-card.flash { box-shadow: 0 0 0 2px var(--accent); }
+.game-card-head .matchup { font-size: var(--fs-md); font-weight: 650; }
+.game-card-body {
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: var(--sp-3); padding: var(--sp-3) 0; border-color: var(--line);
+}
+.stat-label { font-size: var(--fs-xs); letter-spacing: .04em; }
+.stat-block { font-size: var(--fs-base); }
+.market-line { font-size: var(--fs-base); }
+.game-card-pick { padding-top: var(--sp-3); }
+.game-card-pick > button { min-width: 64px; font-weight: 600; }
+.game-card-details summary { padding: 6px 0; }
+
+/* ---------- toasts ---------- */
+#toast-host { right: max(14px, env(safe-area-inset-right)); bottom: max(14px, env(safe-area-inset-bottom)); }
+.toast { border-radius: var(--radius-sm); }
+
+/* ---------- view-only state ----------
+   auth.js puts body.read-only on whenever the visitor can't write (signed out, or signed
+   in but not the app_owner) and shows #read-only-note. Edit controls then read as plain
+   values: the chosen pick stays highlighted, everything else is quiet text. auth.js's
+   guard still blocks any write that gets through (e.g. from the keyboard). */
+body.read-only [data-act="refresh"],
+body.read-only #auth-box [data-auth="signin"] { display: none; }
+body.read-only button[data-act="pick"],
+body.read-only button[data-act="atspick"],
+body.read-only button[data-act="gutpick"] {
+  opacity: 1; cursor: default; pointer-events: none;
+  background: transparent; border-color: transparent; color: var(--dim);
+  min-height: 0; min-width: 0; padding: 3px 10px; font-weight: 500;
+}
+body.read-only button[data-act="pick"].primary,
+body.read-only button[data-act="atspick"].primary {
+  background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 55%, transparent); color: var(--text);
+}
+body.read-only input[data-act="tb-input"] {
+  pointer-events: none; background: transparent; border-color: transparent; padding-left: 0;
+}
+
+/* ---------- below desktop: More opens a sheet with every section and page ---------- */
+@media (max-width: 1023.98px) {
+  .more-btn {
+    display: inline-flex; flex: none; align-items: center; gap: 8px; min-height: 48px; padding: 12px;
+    border: none; border-radius: 0; background: none; color: var(--dim); font-weight: 500;
+  }
+  .more-btn .ico { display: block; }
+  .more-btn[aria-expanded="true"], .more-btn.active { color: var(--text); }
+  .sheet:not([hidden]) {
+    display: block; position: fixed; left: 0; right: 0; z-index: 54;
+    bottom: 0; max-height: 72dvh; overflow-y: auto; padding-bottom: env(safe-area-inset-bottom);
+    padding: 6px 10px 10px; background: var(--panel); border-top: 1px solid var(--line); border-radius: 16px 16px 0 0;
+    box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .5);
+  }
+  .sheet .nav-group {
+    display: block; padding: 14px 12px 4px;
+    font-size: var(--fs-xs); font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--dim);
+  }
+  .sheet button {
+    display: flex; align-items: center; gap: 14px; width: 100%; min-height: 48px; padding: 10px 12px;
+    background: none; border: none; border-radius: var(--radius-sm); text-align: left; font-size: 16px; color: var(--text);
+  }
+  .sheet button .ico { width: 20px; height: 20px; color: var(--dim); }
+  .sheet button.active { background: var(--accent-soft); font-weight: 650; }
+  .sheet button.active .ico { color: var(--accent); }
+}
+
+/* ---------- phone ---------- */
+@media (max-width: 760px) {
+  .sheet:not([hidden]) { bottom: calc(59px + env(safe-area-inset-bottom)); padding-bottom: 10px; }
+  :root { --gutter: 12px; }
+  .brand { padding-top: max(var(--sp-2), env(safe-area-inset-top)); }
+  header.topbar { padding-top: var(--sp-2); padding-bottom: var(--sp-2); }
+  .brand img { width: 28px; height: 28px; }
+  /* Deadlines, week and view-only on one line that scrolls sideways instead of wrapping. */
+  .controls {
+    width: 100%; flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .controls::-webkit-scrollbar { display: none; }
+  .controls > *, #deadline-chips { flex: none; flex-wrap: nowrap; }
+  /* The week first (it changes what every tab shows), without its "Week" label. */
+  header .week { order: -1; font-size: 0; }
+  header .week select { font-size: 16px; }
+  .long { display: none; }
+  .short { display: inline; }
+
+  /* Bottom tab bar: the four weekly sections plus More, which opens every section. */
+  body { padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
+  .navbar {
+    position: fixed; top: auto; left: 0; right: 0; bottom: 0; z-index: 55; gap: 0;
+    padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    border-top: 1px solid var(--line); border-bottom: none;
+  }
+  #tabs { flex: 4; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; overflow: visible; }
+  #tabs button[data-tab="model-trends"], .rail-links { display: none; }
+  #tabs .ico { display: block; }
+  #tabs button, .more-btn {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    min-width: 0; min-height: 58px; padding: 7px 2px 6px; border: none; border-radius: 0; background: none;
+    font-size: 11px; font-weight: 550; color: var(--dim);
+  }
+  #tabs button .ico, .more-btn .ico { width: 22px; height: 22px; }
+  #tabs button::after { top: 0; bottom: auto; left: 28%; right: 28%; border-radius: 0 0 2px 2px; }
+  #tabs button.active, .more-btn.active, .more-btn[aria-expanded="true"] { color: var(--text); font-weight: 650; }
+  #tabs button.active .ico, .more-btn.active .ico { color: var(--accent); }
+  .more-btn { flex: 1; }
+  #tabs button .badge {
+    position: absolute; top: 3px; left: calc(50% + 7px); margin: 0;
+    padding: 0 4px; font-size: 10px; line-height: 14px; background: var(--panel);
+  }
+  #tabs button .badge.dot { top: 8px; left: calc(50% + 9px); padding: 0; }
+  .more-btn:hover { border: none; }
+
+  #toast-host { bottom: calc(72px + env(safe-area-inset-bottom)); }
+  main { padding-top: var(--sp-3); gap: var(--sp-3); }
+  .panel { padding: 14px; border-radius: 10px; }
+  .game-card { padding: 12px; }
+  .epa-viz-col { padding: 10px 6px; }
+  .vgauge-row { gap: 10px; }
+}
+
+/* Touch: 44px targets and 16px inputs (iOS zooms into anything smaller). */
+@media (pointer: coarse) {
+  button, select, input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea {
+    min-height: 44px; font-size: 16px;
+  }
+  button { min-width: 44px; }
+  .link-btn { min-height: 44px; }
+  .viewonly { padding-top: 0; padding-bottom: 0; }
+  .sort-btn { min-height: 44px; min-width: 44px; font-size: var(--fs-xs); }
+  summary, .game-card-details summary { padding-block: 12px; line-height: 20px; }
+  .game-card-pick > button { min-width: 64px; }
+  #backtest-cell-chip button { min-height: 32px; }
+  /* view-only pick buttons aren't tap targets: keep them compact */
+  body.read-only button[data-act="pick"],
+  body.read-only button[data-act="atspick"],
+  body.read-only button[data-act="gutpick"] { min-height: 0; min-width: 0; }
+  input[type="range"] { min-height: 44px; }
+}
+
+/* View-only gut-pick cards: pickem.js shows only the teams until the owner makes a blind
+   pick, with a hint telling them to pick. Viewers get a hint that fits them instead.
+   (Matches the gut card's "game-card-mine muted small" span; normal cards lack .muted.) */
+body.read-only .game-card-pick > .game-card-mine.muted.small { font-size: 0; }
+body.read-only .game-card-pick > .game-card-mine.muted.small::after {
+  content: "Waiting for the owner's blind pick. The rest of the card shows once it's made.";
+  font-size: var(--fs-sm);
+}
+
+/* ---------- desktop: left rail + sticky top bar, content uses the full width ----------
+   The rail holds the brand, the section list (grouped, with icons) and this week's games
+   (built by hub/nav.js from the Moneyline cards). The top bar names the section and keeps
+   the week, deadlines and view-only state in sight while scrolling. */
+@media (min-width: 1024px) {
+  :root { --rail-w: 252px; --gutter: 28px; }
+  .app { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); align-items: start; }
+  .rail {
+    display: flex; flex-direction: column; gap: var(--sp-5);
+    position: sticky; top: 0; height: 100dvh; overflow-y: auto; overscroll-behavior: contain;
+    padding: max(var(--sp-4), env(safe-area-inset-top)) var(--sp-3) var(--sp-4) max(var(--sp-3), env(safe-area-inset-left));
+    background: var(--panel); border-right: 1px solid var(--line-soft);
+    scrollbar-width: thin; scrollbar-color: var(--line) transparent;
+  }
+  .page { display: block; min-width: 0; }
+  .brand, .navbar { order: 0; }
+  .brand { padding: 2px 10px 0; }
+
+  .navbar {
+    position: static; display: block; padding: 0;
+    background: none; backdrop-filter: none; -webkit-backdrop-filter: none; border: none;
+  }
+  #tabs { flex-direction: column; overflow: visible; gap: 2px; }
+  .rail .nav-group {
+    display: block; padding: var(--sp-4) 10px 6px;
+    font-size: var(--fs-xs); font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--dim);
+  }
+  #tabs .nav-group:first-child, .rail-games .nav-group { padding-top: 0; }
+  #tabs .ico { display: block; }
+  #tabs button {
+    width: 100%; min-height: 38px; padding: 8px 10px; gap: 12px;
+    border-radius: var(--radius-sm); text-align: left; white-space: nowrap;
+  }
+  #tabs button::after { display: none; }
+  #tabs button:hover { background: var(--panel2); }
+  #tabs button.active { background: var(--accent-soft); color: var(--text); }
+  #tabs button.active .ico { color: var(--accent); }
+  #tabs button:focus-visible { outline-offset: -2px; border-radius: var(--radius-sm); }
+
+  .rail-links { display: flex; flex-direction: column; gap: 2px; margin-top: calc(-1 * var(--sp-3)); }
+  .rail-links a {
+    display: flex; align-items: center; gap: 12px; min-height: 38px; padding: 8px 10px;
+    border-radius: var(--radius-sm); color: var(--dim); font-weight: 500;
+  }
+  .rail-links a:hover { background: var(--panel2); color: var(--text); text-decoration: none; }
+  .rail-links .badge { margin-left: auto; }
+  .rail-games { display: block; }
+  #rail-games { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+  .rail-game {
+    display: flex; align-items: center; gap: var(--sp-2); width: 100%; min-height: 32px; padding: 5px 10px;
+    background: none; border: none; border-radius: var(--radius-sm); text-align: left;
+    font-size: var(--fs-sm); font-variant-numeric: tabular-nums; color: var(--text);
+  }
+  .rail-game:hover { background: var(--panel2); border: none; }
+  .rail-game-teams { flex: 1; min-width: 0; font-weight: 550; }
+  .rail-game-at { color: var(--dim); font-weight: 400; }
+  .rail-game-when { color: var(--dim); font-size: var(--fs-xs); white-space: nowrap; }
+  .rail-game.is-live .rail-game-when { color: var(--warn); font-weight: 650; }
+  /* your pick's result once the game is final (or live), from the card's tint */
+  .rail-game-mark { width: 6px; height: 6px; border-radius: 50%; flex: none; background: transparent; }
+  .rail-game.result-win .rail-game-mark { background: var(--good); }
+  .rail-game.result-loss .rail-game-mark { background: var(--bad); }
+  .rail-game.result-tie .rail-game-mark { background: var(--warn); }
+  .rail-games-empty { padding: 0 10px; font-size: var(--fs-sm); color: var(--dim); }
+
+  header.topbar {
+    position: sticky; top: 0; z-index: 40; flex-wrap: nowrap; min-height: 64px;
+    padding: 12px var(--page-r) 12px var(--gutter);
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: saturate(140%) blur(10px);
+    -webkit-backdrop-filter: saturate(140%) blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .page-title { display: block; white-space: nowrap; }
+
+  main { max-width: none; margin: 0; padding: var(--sp-5) var(--page-r) 48px var(--gutter); }
+  /* game cards side by side instead of one per row */
+}
+
+/* Wide desktop: short companion panels share a row instead of each taking a full one. */
+@media (min-width: 1280px) {
+  main { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  main > section { grid-column: 1 / -1; }
+  #history, #edge { grid-column: auto; }
+  #parlays-trends, #pipeline-health { display: grid; gap: var(--sp-4); align-items: start; }
+  #parlays-trends { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  #pipeline-health { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+  #parlays-trends > .panel + .panel, #pipeline-health > .panel + .panel { margin-top: 0; }
+}
+
+/* ---------- slate: one row per game + the selected game's pane (js/slate.js) ---------- */
+.split { margin-top: var(--sp-3); }
+.slate {
+  display: grid;
+  grid-template-columns: 4.75rem minmax(11rem, 1.8fr) repeat(var(--cols, 4), minmax(4.75rem, 1fr)) max-content;
+  background: var(--panel2); border: 1px solid var(--line-soft); border-radius: var(--radius);
+  overflow: hidden; font-variant-numeric: tabular-nums;
+}
+.slate-row {
+  position: relative; display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; align-items: center;
+  border-top: 1px solid var(--line-soft); cursor: pointer; transition: background-color .12s, box-shadow .3s;
+}
+.slate-row > * { min-width: 0; padding: 10px 8px; }
+.slate-row > :first-child { padding-left: 16px; }
+.slate-row > :last-child { padding-right: 12px; }
+.slate-head {
+  border-top: none; cursor: default; background: var(--panel);
+  font-size: var(--fs-xs); font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--dim);
+}
+.slate-head > * { padding-block: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slate-head > :last-child { text-align: right; }
+/* alternating rows (the header is the first child, so games are 2, 3, 4...) */
+.slate-row:nth-child(odd):not(.slate-head) { background: color-mix(in srgb, var(--panel2) 80%, var(--line-soft)); }
+.slate-row:not(.slate-head):hover { background: color-mix(in srgb, var(--panel2) 70%, var(--line-soft)); }
+.slate-row.is-selected, .slate-row.is-selected:hover { background: var(--accent-soft); }
+.slate-row.flash { box-shadow: inset 0 0 0 2px var(--accent); }
+/* your pick's result: a bar on the row's left edge */
+.slate-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.slate-row.result-win::before { background: var(--good); }
+.slate-row.result-loss::before { background: var(--bad); }
+.slate-row.result-tie::before { background: var(--warn); }
+
+.slate-status { font-size: var(--fs-sm); color: var(--dim); white-space: nowrap; }
+.slate-row.is-live .slate-status { color: var(--warn); font-weight: 650; }
+.slate-open {
+  display: block; max-width: 100%; min-height: 0; padding: 0; border: none; background: none;
+  color: var(--text); font-size: var(--fs-base); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.slate-open:hover { border: none; }
+.slate-open .matchup { font-weight: 650; }
+.slate-open .team-record { font-size: var(--fs-xs); }
+.slate-sub { display: flex; gap: var(--sp-2); font-size: var(--fs-xs); color: var(--dim); white-space: nowrap; overflow: hidden; }
+.slate-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.slate-tags .chip, .slate-tags .qb-injury-chips { margin: 0; }
+.slate-tags .qb-injury-chips { display: contents; }
+.slate-tags .chip {
+  max-width: 100%; padding: 1px 7px; font-size: 11px; font-weight: 550; line-height: 16px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.slate-stat { font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.slate-stat > * { display: inline; white-space: nowrap; }
+.slate-stat .dissent { color: var(--warn); }
+/* Blind gut picks: the pick takes over the row (js/slate.js) with two big team buttons.
+   Viewers (body.read-only) see them dimmed and inactive. */
+.blind { display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding-block: 8px; }
+.blind-label {
+  margin-right: 6px; font-size: var(--fs-xs); font-weight: 650; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--accent); white-space: nowrap;
+}
+.blind-at { color: var(--dim); font-weight: 600; }
+button.blind-btn {
+  display: inline-flex; align-items: baseline; justify-content: center; gap: 8px;
+  flex: 1 1 0; max-width: 300px; min-width: 120px; min-height: 48px; padding: 8px 18px; border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  background: var(--accent-soft); color: var(--text); font-weight: 700;
+  transition: background-color .12s, color .12s, transform .08s;
+}
+button.blind-btn:hover { background: var(--accent); border-color: var(--accent); color: #04121f; }
+button.blind-btn:hover .blind-rec { color: inherit; opacity: .75; }
+button.blind-btn:active { transform: scale(.97); }
+.blind-team { font-size: 17px; letter-spacing: .01em; }
+.blind-rec { font-size: var(--fs-xs); font-weight: 500; color: var(--dim); font-variant-numeric: tabular-nums; }
+.slate-row.is-blind::before { background: var(--accent); }
+/* View-only: same buttons, inactive (this beats the base view-only rule for gut-pick buttons). */
+body.read-only .blind { cursor: not-allowed; }
+body.read-only button.blind-btn[data-act="gutpick"] {
+  pointer-events: none; opacity: .5; min-width: 120px; min-height: 48px; padding: 8px 18px;
+  background: var(--panel); border-color: var(--line); color: var(--text); font-weight: 700;
+}
+body.read-only .blind-label { color: var(--dim); }
+body.read-only .slate-row.is-blind::before { background: var(--line); }
+.slate.all-blind .slate-head { display: none; }
+
+.blind-banner {
+  display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; margin-top: var(--sp-3);
+  padding: 12px 16px; border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--panel2));
+}
+.blind-copy { flex: 1 1 320px; min-width: 0; }
+.blind-copy strong { display: block; font-size: var(--fs-md); }
+.blind-copy span { font-size: var(--fs-sm); color: var(--dim); }
+.blind-viewer, body.read-only .blind-owner { display: none; }
+body.read-only .blind-viewer { display: block; }
+body.read-only .blind-banner { border-color: var(--line); background: var(--panel2); }
+.blind-progress { display: flex; align-items: center; gap: 10px; font-size: var(--fs-sm); color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.blind-bar { width: 140px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.blind-bar > span { display: block; height: 100%; width: var(--done, 0%); background: var(--accent); border-radius: 3px; }
+.blind-banner + .split { margin-top: var(--sp-2); }
+
+/* A blind game's own card in the pane: the gut-pick buttons as big as the row's. */
+.pane .game-card-pick:has(> button[data-act="gutpick"]) > button {
+  min-width: 120px; min-height: 52px; font-size: 18px; font-weight: 700;
+}
+.slate-pick { display: flex; gap: 6px; justify-content: flex-end; }
+.slate-pick > button { min-height: 32px; min-width: 52px; padding: 4px 10px; font-size: var(--fs-sm); font-weight: 600; }
+
+/* the pane: the selected game's card, details always showing */
+.pane { display: none; }
+.pane-close {
+  align-self: flex-end; width: 44px; height: 44px; min-height: 0; margin: 6px 6px 0; padding: 0;
+  background: none; border: none; color: var(--dim); font-size: 24px; line-height: 1;
+}
+.pane-close:hover { color: var(--text); border: none; }
+.pane-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 20px 24px; }
+.pane .game-card,
+.pane .game-card.result-win, .pane .game-card.result-loss, .pane .game-card.result-tie {
+  display: block; padding: 0; background: none; border: none; box-shadow: none;
+}
+.pane .game-card-head .matchup { font-size: var(--fs-lg); }
+.pane .game-card-body { grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); }
+.pane .game-card-details { margin-top: var(--sp-2); }
+.pane .game-card-details > summary { display: none; }
+.pane .game-card-matchup { padding-top: var(--sp-4); }
+.pane .game-card-matchup > .stat-label { margin-bottom: var(--sp-2); }
+
+/* Narrow desktops and tablets: records stay in the pane, columns tighten. */
+@media (min-width: 761px) and (max-width: 1279.98px) {
+  .slate { grid-template-columns: 4.25rem minmax(8.5rem, 1.5fr) repeat(var(--cols, 4), minmax(4rem, 1fr)) max-content; }
+  .slate-open .team-record { display: none; }
+  .slate-row > * { padding-inline: 6px; }
+  .slate-row > :first-child { padding-left: 14px; }
+}
+
+/* Jump links on long tabs (js/shell.js), pinned under the top bar. */
+.toc:not([hidden]) {
+  position: sticky; top: var(--sticky-h); z-index: 30; grid-column: 1 / -1;
+  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  margin: calc(-1 * var(--sp-2)) 0 0; padding: var(--sp-2) 0;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+}
+.toc::-webkit-scrollbar { display: none; }
+.toc button {
+  flex: none; min-height: 32px; padding: 4px 12px; border-radius: 999px;
+  font-size: var(--fs-sm); font-weight: 550; color: var(--dim); background: var(--panel); border-color: var(--line-soft);
+}
+.toc button:hover { color: var(--text); }
+.toc button.active { color: var(--text); background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+main .panel { scroll-margin-top: calc(var(--sticky-h) + 64px); }
+
+/* Methodology: prose at a readable line length (tables keep the full width). */
+#methodology .panel > p, #methodology .panel > ul, #methodology .panel > ol,
+#methodology .panel > h3, #methodology .lean { max-width: 78ch; }
+
+/* Pick'em: the pool optimizer summary as tiles (js/pickem.js). */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--sp-2); margin: 0 0 var(--sp-3); }
+.tile { padding: 10px 14px 11px; background: var(--panel2); border: 1px solid var(--line-soft); border-radius: var(--radius-sm); min-width: 0; }
+.tile-label { font-size: var(--fs-xs); font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--dim); }
+.tile-value { margin-top: 2px; font-size: var(--fs-lg); font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile-sub { margin-top: 1px; font-size: var(--fs-xs); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile.bad { border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+.tile.bad .tile-value { color: var(--bad); }
+.tile.warn { border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.tile.warn .tile-value { color: var(--warn); }
+.tile.good .tile-value { color: var(--good); }
+@media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Power Rankings: a team's detail in the same pane (js/power.js). */
+.team-split { margin-top: 0; }
+.team-title { margin: 0 0 2px; font-size: var(--fs-lg); font-weight: 700; }
+.team-pane .power-detail-grid {
+  position: static; width: auto; margin-top: var(--sp-4);
+  grid-template-columns: minmax(0, 1fr); gap: var(--sp-5);
+}
+#power tr.power-row-open > td { background: var(--accent-soft); }
+
+/* Below 1700px the pane is a drawer over the page (a full-screen sheet on phones). */
+@media (max-width: 1699.98px) {
+  .split.is-open .pane {
+    display: flex; flex-direction: column;
+    position: fixed; z-index: 60; top: 0; right: 0; bottom: 0; width: min(560px, 100vw);
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) 0;
+    background: var(--panel); border-left: 1px solid var(--line); box-shadow: -16px 0 40px rgba(0, 0, 0, .5);
+  }
+}
+/* From 1700px it sits beside the list and follows you down the page. */
+@media (min-width: 1700px) {
+  .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(420px, 36%); gap: var(--sp-4); align-items: start; }
+  .split.all-blind { grid-template-columns: minmax(0, 1fr); }
+  .split.all-blind > .pane { display: none; }
+  /* No scrollbar of its own: hub/pane-stick.js moves `top` so the page is the only scroll. */
+  .pane {
+    display: flex; flex-direction: column;
+    position: sticky; top: calc(var(--sticky-h) + var(--sp-3));
+    background: var(--panel2); border: 1px solid var(--line-soft); border-radius: var(--radius);
+  }
+  .pane-close { display: none; }
+  .pane-body { padding: 18px 20px 22px; overflow: visible; }
+}
+
+/* Phones: each game is two lines, the sources wrapping under the matchup with their names. */
+@media (max-width: 760px) {
+  .slate { display: block; }
+  .slate-row.slate-head { display: none; }
+  .slate-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 12px 12px 12px 14px; }
+  .slate-row > *, .slate-row > :first-child, .slate-row > :last-child { padding: 0; }
+  .slate-status { order: 1; flex-basis: 100%; font-size: var(--fs-xs); }
+  .slate-game { order: 2; flex: 1 1 calc(100% - 150px); min-width: 0; }
+  .slate-open .team-record { display: none; }
+  .slate-pick { order: 3; }
+  .slate-stat { order: 4; font-size: var(--fs-xs); }
+  .blind { order: 4; flex-basis: 100%; padding-block: 4px 0; flex-wrap: wrap; }
+  .blind { justify-content: flex-start; }
+  .blind-label { flex-basis: 100%; margin-right: 0; }
+  button.blind-btn { flex: 1; max-width: none; min-width: 0; min-height: 52px; }
+  .blind-progress { flex-basis: 100%; white-space: normal; }
+  .blind-bar { flex: 1; }
+  .slate-stat::before { content: attr(data-label) " "; color: var(--dim); }
+  .slate-row:first-child { border-top: none; }
+}

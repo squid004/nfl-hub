@@ -43,10 +43,19 @@ const App = {
   // chips) and Historical Power always stay on the LIVE week regardless of this -- browsing
   // old data shouldn't make the "locks at" countdown show a date that already passed.
   _viewWeek: null,
+  // The historical rankings blob, the kv updated_at it was read at, and a download under way.
+  _hist: null,
+  _histStamp: null,
+  _histLoad: null,
+  _histLoadStamp: null,
 
   async init() {
     DB.init();
     Auth.init();
+    Shell.init();
+    Slate.init();
+    PaneStick.init();
+    Info.init();
     Tabs.init();
     KeepDetailsOpen.init();
     document.body.addEventListener('click', e => {
@@ -98,8 +107,8 @@ const App = {
   async reload(quiet = false) {
     if (!quiet) document.getElementById('status').textContent = 'Loading…';
     try {
-      await DB.loadKvMeta();
-      const [weekRaw, seasonRaw] = await Promise.all([DB.kv('week'), DB.kv('season')]);
+      // The kv metadata and the week/season don't depend on each other: one round trip.
+      const [, weekRaw, seasonRaw] = await Promise.all([DB.loadKvMeta(), DB.kv('week'), DB.kv('season')]);
       const liveWeek = parseInt(weekRaw || '1', 10);
       const season = parseInt(seasonRaw || '2025', 10);
       // A stale selection from before a week rollover (or before the season's first week)
@@ -107,6 +116,20 @@ const App = {
       if (this._viewWeek != null && (this._viewWeek >= liveWeek || this._viewWeek < 1)) this._viewWeek = null;
       const viewWeek = this._viewWeek ?? liveWeek;
       const isPast = viewWeek !== liveWeek;
+
+      // The historical rankings blob (~2.7 MB) is only needed by Power Rankings' Historical view,
+      // Model Trends and the "similar games" box in a game's details, so it no longer holds up
+      // the first render: it loads alongside, and those re-render when it lands. Later reloads
+      // reuse it until its updated_at changes; a reload that starts mid-download shares it.
+      const histStamp = DB._kvMeta.historical_power_rankings;
+      let histFetch = null;
+      if (!this._hist || histStamp !== this._histStamp) {
+        if (!this._histLoad || this._histLoadStamp !== histStamp) {
+          this._histLoad = DB.historicalPower();
+          this._histLoadStamp = histStamp;
+        }
+        histFetch = this._histLoad;
+      }
 
       const [games, odds, bestPrice, bookOdds, elway, yRoster, eRoster, pPicks, aPicks, refreshReq, lastRefresh, hist, bSnap,
              edgeLog, edgeBias, edgeLeaderboard, injuries, spreadHist, elwayQb1,
@@ -119,7 +142,7 @@ const App = {
           DB.refreshRequest(), DB.kv('last_refresh'), DB.hist(), DB.budgetSnapshot(viewWeek),
           Promise.resolve({}) /* old FADE/CHALK log: no longer shown, no longer fetched */, DB.edgeBiasAll(), DB.edgeLeaderboard(),
           DB.injuries(), DB.spreadHistory(viewWeek), DB.elwayQb1(),
-          DB.teamRatings(), DB.qbDepthChart(), DB.parlayRatingsSnapshot(), DB.historicalPower(),
+          DB.teamRatings(), DB.qbDepthChart(), DB.parlayRatingsSnapshot(), Promise.resolve(this._hist),
           DB.weeklyPowerRankings(), isPast ? DB.weekGames(liveWeek) : Promise.resolve(null), DB.elwayScoreHistory(),
           DB.pipelineHealth(), DB.gutPicks(), DB.prospectiveLog(), DB.poolRecommendation(), DB.poolSim(), DB.poolTiebreaks(), DB.poolBacktest(),
         ]);
@@ -190,25 +213,27 @@ const App = {
       Odds.render(ctx);
       Power.render(ctx);
       Parlays.render(ctx);
-      ModelTrends.render(ctx);
+      // Until the historical blob has loaded once, Model Trends keeps index.html's "Loading" panel.
+      if (historicalPower) ModelTrends.render(ctx);
       this.renderStatus(ctx);
-      this.renderHealthLink(ctx);
+      Shell.render(ctx);
       this._syncLivePolling();
+      if (histFetch) {
+        histFetch.then(h => {
+          this._hist = h;
+          this._histStamp = histStamp;
+          const c = this._ctx;   // the latest reload's context, if another has finished since
+          if (!c) return;
+          c.historicalPower = h;
+          ModelTrends.render(c);
+          Power.render(c);
+          Pickem.render(c, 'ml');
+          Shell.render(c);
+        }).catch(e => console.warn('historical rankings unavailable:', e.message || e));
+      }
     } catch (e) {
       document.getElementById('status').textContent = 'Error: ' + e.message;
     }
-  },
-
-  // The header's "Pipeline health" link carries a status chip so a failing refresh is visible without opening the page.
-  renderHealthLink(ctx) {
-    const chip = document.getElementById('health-chip');
-    if (!chip) return;
-    const cur = ctx.pipelineHealth && ctx.pipelineHealth.current;
-    if (!cur) { chip.className = 'chip'; chip.textContent = '?'; chip.title = 'No health data yet'; return; }
-    const n = (cur.errors || []).length;
-    chip.className = 'chip ' + (cur.ok ? 'good' : 'bad');
-    chip.textContent = cur.ok ? 'OK' : `${n} failing`;
-    chip.title = cur.ok ? 'All sources OK' : (cur.errors || []).join('\n');
   },
 
   renderStatus(ctx) {

@@ -43,6 +43,8 @@ const Odds = {
     const injuries = ctx.injuries || {};
     const elwayQb1 = ctx.elwayQb1 || {};
     const depthChart = ctx.qbDepthChart || {};
+    // ELWAY's columns only once its weekly sheet has this week (otherwise they're all dashes).
+    const hasElway = ctx.games.some(g => { const e = (ctx.elway || {})[g.game_id]; return e && (e.spread_home != null || e.total != null); });
     const rows = ctx.games.map(g => {
       const o = ctx.odds[g.game_id] || {};
       const el = (ctx.elway || {})[g.game_id] || {};
@@ -62,14 +64,14 @@ const Odds = {
         <td class="muted">${fmtLocal(g.kickoff, false)}</td>
         <td>${g.away}${qbChip(g.away, injuries, depthChart)} @ ${g.home}${qbChip(g.home, injuries, depthChart)} ${state}</td>
         <td class="muted${move && move.steam ? ' warn' : ''}" title="${move ? `opened ${signed(move.open)}, now ${signed(move.cur)}` : ''}">${signed(o.spread)}</td>
-        ${elwaySpreadCell}
+        ${hasElway ? elwaySpreadCell : ''}
         <td class="muted">${o.total ?? '—'}</td>
-        <td class="muted">${el.total ?? '—'}</td>
+        ${hasElway ? `<td class="muted">${el.total ?? '—'}</td>` : ''}
         <td class="num muted">${o.ml_away ?? '—'}</td>
         <td class="num muted">${o.ml_home ?? '—'}</td>
         <td class="num muted">${pct(o.implied_away)}</td>
         <td class="num muted">${pct(o.implied_home)}</td>
-        <td class="num muted">${elwayFav ? `${elwayFav.team} ${pct(elwayFav.pct)}` : '—'}</td>
+        ${hasElway ? `<td class="num muted">${elwayFav ? `${elwayFav.team} ${pct(elwayFav.pct)}` : '—'}</td>` : ''}
         <td class="muted">${o.book ?? '—'}</td>
       </tr>`;
     }).join('');
@@ -93,19 +95,25 @@ const Odds = {
     }).join('');
     const bookHeaders = bookNames.map(n => `<th>${n}</th>`).join('');
 
-    document.getElementById('odds').innerHTML = `
-      <div class="panel">
-        <h2>Odds board</h2>
-        <table><thead><tr><th>Kick</th><th>Matchup</th><th>Spread</th>
-          <th title="Home-spread equivalent from ELWAY's avg-points model: away avg pts minus home avg pts. Compare against the Spread column, not the sheet's own line.">ELWAY Spread</th>
+    // Shop the line before the books have posted anything for the week: say so, not a table of dashes.
+    const hasShop = bookNames.length > 0 || ctx.games.some(g => {
+      const bp = (ctx.bestPrice || {})[g.game_id] || {};
+      return bp.avg_spread_home != null || bp.spread_home_price != null || bp.ml_home_price != null;
+    });
+    const el = document.getElementById('odds');
+    el.innerHTML = `
+      <div class="panel${Info.cls('odds')}">
+        <h2>Odds board${Info.btn('odds')}</h2>
+        <div class="frame"><div class="frame-scroll"><table class="wide" data-pin="2"><thead><tr><th>Kick</th><th>Matchup</th><th>Spread</th>
+          ${hasElway ? `<th title="Home-spread equivalent from ELWAY's avg-points model: away avg pts minus home avg pts. Compare against the Spread column, not the sheet's own line.">ELWAY Spread</th>` : ''}
           <th>Total</th>
-          <th title="Sum of ELWAY's home + away avg-points projections. Compare against the Total column, not the sheet's own line.">ELWAY Total</th>
+          ${hasElway ? `<th title="Sum of ELWAY's home + away avg-points projections. Compare against the Total column, not the sheet's own line.">ELWAY Total</th>` : ''}
           <th class="num">Away ML</th><th class="num">Home ML</th>
           <th class="num">Away%</th><th class="num">Home%</th>
-          <th class="num" title="ELWAY's favorite and its win probability, from its avg-points model">ELWAY Fav%</th>
+          ${hasElway ? `<th class="num" title="ELWAY's favorite and its win probability, from its avg-points model">ELWAY Fav%</th>` : ''}
           <th>Book</th></tr></thead>
-          <tbody>${rows}</tbody></table>
-        <p class="tablefoot muted">ELWAY columns come from Nate Silver's Silver Bulletin
+          <tbody>${rows}</tbody></table></div></div>
+        <p class="tablefoot muted explain">ELWAY columns come from Nate Silver's Silver Bulletin
           NFL forecasting model (transcribed weekly into a Google Sheet) — compare them
           against the paired market column, not each other.
           <span class="elway-flip">Highlighted</span> ELWAY Spread = ELWAY's model favors
@@ -116,17 +124,18 @@ const Odds = {
           A <span class="elway-stale">red</span> ELWAY Spread cell means ELWAY's weekly
           sheet is still rating a team with a QB1 our live injury feed now shows hurt.</p>
       </div>
-      <div class="panel">
-        <h2>Shop the line</h2>
-        <table><thead><tr><th>Kick</th><th>Matchup</th><th>Avg spread<br>(home)</th>
+      <div class="panel${Info.cls('shop')}">
+        <h2>Shop the line${hasShop ? Info.btn('shop') : ''}</h2>
+        ${hasShop ? `<div class="frame"><div class="frame-scroll"><table class="wide" data-pin="2"><thead><tr><th>Kick</th><th>Matchup</th><th>Avg spread<br>(home)</th>
           ${bookHeaders}
           <th>Best spread<br>away / home</th><th>Best ML<br>away / home</th></tr></thead>
-          <tbody>${shopRows}</tbody></table>
-        <p class="tablefoot muted">Each book cell: home spread (price) on top, away/home
+          <tbody>${shopRows}</tbody></table></div></div>` : '<p class="muted">Nothing from the sportsbooks for this week yet.</p>'}
+        <p class="tablefoot muted explain"${hasShop ? '' : ' hidden'}>Each book cell: home spread (price) on top, away/home
           moneyline below. <span class="line-narrow">Red border</span> = narrower than this
           week's average line across these books; <span class="line-wide">green border</span>
           = wider. Sourced from actionnetwork.com (unofficial, best-effort — blank once a
           game has kicked off, and only real sportsbooks count toward the average).</p>
       </div>`;
+    Tables.pin(el);
   },
 };
