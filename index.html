@@ -2,15 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>NFL Hub</title>
-<link rel="stylesheet" href="style.css?v=2026-10-29b">
+<link rel="stylesheet" href="style.css?v=2026-10-31a">
 
 <!-- PWA: "Add to Home Screen" install support -- manifest.json + sw.js (registered at the
      bottom of this file). theme-color/background_color match --bg so the OS status bar and
      the standalone splash screen are dark instead of defaulting to white. -->
 <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#0f1216">
+<meta name="theme-color" content="#0b0e13">
 <link rel="icon" type="image/png" href="icons/favicon-32.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -18,54 +18,80 @@
 <meta name="apple-mobile-web-app-title" content="NFL Hub">
 </head>
 <body>
-<header>
-  <div>
-    <h1>NFL Hub</h1>
-    <span id="status" class="muted">Loading…</span>
+<div class="app">
+<!-- Sidebar on desktop; on phones its parts are laid out in the page (brand on top, the tabs as a bottom bar). -->
+<aside class="rail">
+  <div class="brand">
+    <img src="icons/icon-192.png" alt="" width="32" height="32">
+    <div>
+      <h1>NFL Hub</h1>
+      <span id="status" class="muted">Loading…</span>
+    </div>
   </div>
-  <div class="chips">
-    <span class="header-links">
-      <a href="methodology.html">Methodology</a>
-      <a href="health.html">Pipeline health <span id="health-chip" class="chip" title="Loading">&hellip;</span></a>
-    </span>
+  <div class="navbar">
+    <nav id="tabs" role="tablist" aria-label="Sections" aria-orientation="vertical">
+      <div class="nav-group" aria-hidden="true">This week</div>
+      <button data-tab="pickem" role="tab"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 2.6 2.5L16 9.5"/></svg><span class="nav-label"><span class="long">Moneyline </span>Pick'em</span></button>
+      <button data-tab="ats" role="tab"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v8M8 8h8M8 18h8"/></svg><span class="nav-label"><span class="long">Against the Spread</span><span class="short">ATS</span></span></button>
+      <button data-tab="parlays" role="tab"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 13 9 5 9-5"/></svg><span class="nav-label">Parlays</span></button>
+      <div class="nav-group" aria-hidden="true">Ratings</div>
+      <button data-tab="power" role="tab"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V11M12 20V4M19 20v-6"/></svg><span class="nav-label">Power<span class="long"> Rankings</span></span></button>
+      <div class="nav-group" aria-hidden="true">Model</div>
+      <button data-tab="model-trends" role="tab"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 17 6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg><span class="nav-label"><span class="long">Model </span>Trends</span></button>
+    </nav>
+    <button type="button" class="more-btn" aria-expanded="false" aria-controls="sheet"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/></svg><span class="nav-label">More</span></button>
+  </div>
+  <nav class="rail-links" aria-label="Other pages">
+    <a href="methodology.html"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2V5Z"/><path d="M4 19a2 2 0 0 1 2-2h13"/></svg><span class="nav-label">Methodology</span></a>
+    <a href="health.html" id="health-link"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span class="nav-label">Pipeline health</span><span id="health-chip" class="badge dot" hidden></span></a>
+  </nav>
+  <nav id="sheet" class="sheet" aria-label="All sections" hidden></nav>
+  <div class="rail-games">
+    <div class="nav-group" id="rail-games-label">This week's games</div>
+    <ul id="rail-games" aria-labelledby="rail-games-label"></ul>
+  </div>
+</aside>
+
+<div class="page">
+<header class="topbar">
+  <h2 id="page-title" class="page-title">NFL Hub</h2>
+  <div class="chips controls">
     <span id="deadline-chips"></span>
-    <label class="small muted" style="display:flex;align-items:center;gap:4px;">Week
+    <label class="small muted week">Week
       <select id="week-select" title="View a previous week's Moneyline Pick'em, ATS, Power Rankings, and Parlays. The Power Rankings page's Historical Rankings view is unaffected -- it already covers every season."></select>
     </label>
     <button data-act="refresh">Refresh now</button>
+    <div id="read-only-note" class="viewonly" hidden>
+      <span>View only</span><span aria-hidden="true">&middot;</span><button data-auth="signin" class="link-btn">Sign in to edit</button><span class="notowner">not the owner account</span>
+    </div>
     <span id="auth-box" class="chips"></span>
   </div>
 </header>
-<div id="read-only-note" class="muted small" hidden style="padding:4px 20px;">Read-only: sign in as the owner to change picks or request a refresh.</div>
-
-<nav id="tabs" role="tablist" aria-label="Sections">
-  <button data-tab="pickem" role="tab">Moneyline Pick'em</button>
-  <button data-tab="ats" role="tab">Against the Spread</button>
-  <button data-tab="power" role="tab">Power Rankings</button>
-  <button data-tab="parlays" role="tab">Parlays</button>
-  <button data-tab="model-trends" role="tab">Model Trends</button>
-</nav>
 
 <main>
-  <section id="pickem" data-tab="pickem"></section>
+  <nav id="toc" class="toc" aria-label="On this page" hidden></nav>
+  <section id="pickem" data-tab="pickem"><div class="panel"><h2>Moneyline Pick'em</h2><p class="muted">Loading this week's games…</p></div></section>
   <section id="upsets" data-tab="pickem"></section>
   <section id="history" data-tab="pickem"></section>
   <section id="edge" data-tab="pickem"></section>
 
-  <section id="atspickem" data-tab="ats"></section>
+  <section id="atspickem" data-tab="ats"><div class="panel"><h2>Against the Spread</h2><p class="muted">Loading this week's games…</p></div></section>
+  <!-- Odds board and Shop the line: on ATS with the other lines. -->
+  <section id="odds" data-tab="ats"></section>
   <section id="atsupsets" data-tab="ats"></section>
   <section id="atshistory" data-tab="ats"></section>
 
   <section id="parlays-trends" data-tab="parlays"></section>
-  <section id="odds" data-tab="parlays"></section>
 
   <section id="power" data-tab="power"></section>
 
-  <section id="model-trends" data-tab="model-trends"></section>
+  <section id="model-trends" data-tab="model-trends"><div class="panel"><h2>Model Trends</h2><p class="muted">Loading every graded game since 2007…</p></div></section>
 </main>
+</div>
+</div>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/4.1.2/plotly.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/4.1.2/plotly.min.js"></script>
 <!-- Cache-busting: GitHub Pages serves every local file with Cache-Control: max-age=600
      (confirmed via response headers, 2026-10-11) -- without a version query string, a
      browser that already has an old copy can keep using it for up to 10 minutes after a
@@ -74,22 +100,26 @@
      actually changes, so every browser is forced to fetch the new version immediately
      instead of waiting out its own cache -- date-only collided the first time two separate
      same-day deploys both touched JS (2026-10-11 twice), hence the trailing letter; append
-     another letter (c, d, ...) rather than reusing a date already spent today. -->
-<script src="js/util.js?v=2026-10-29b"></script>
-<script src="js/db.js?v=2026-10-29b"></script>
-<script src="js/auth.js?v=2026-10-29b"></script>
-<script src="js/deadlines.js?v=2026-10-29b"></script>
-<script src="js/history.js?v=2026-10-29b"></script>
-<script src="js/edge.js?v=2026-10-29b"></script>
-<script src="js/agreement.js?v=2026-10-29b"></script>
-<script src="js/pickem.js?v=2026-10-29b"></script>
-<script src="js/odds.js?v=2026-10-29b"></script>
-<script src="js/power.js?v=2026-10-29b"></script>
-<script src="js/parlays.js?v=2026-10-29b"></script>
-<script src="js/historical.js?v=2026-10-29b"></script>
-<script src="js/modeltrends.js?v=2026-10-29b"></script>
-<script src="js/tabs.js?v=2026-10-29b"></script>
-<script src="js/app.js?v=2026-10-29b"></script>
+     another letter (c, d, ...) rather than reusing a date already spent today.
+     All deferred: they still run in this order, before DOMContentLoaded (when app.js starts),
+     but the page draws straight away instead of waiting about a second for Plotly to parse. -->
+<script defer src="js/util.js?v=2026-10-31a"></script>
+<script defer src="js/db.js?v=2026-10-31a"></script>
+<script defer src="js/auth.js?v=2026-10-31a"></script>
+<script defer src="js/deadlines.js?v=2026-10-31a"></script>
+<script defer src="js/history.js?v=2026-10-31a"></script>
+<script defer src="js/edge.js?v=2026-10-31a"></script>
+<script defer src="js/agreement.js?v=2026-10-31a"></script>
+<script defer src="js/slate.js?v=2026-10-31a"></script>
+<script defer src="js/pickem.js?v=2026-10-31a"></script>
+<script defer src="js/odds.js?v=2026-10-31a"></script>
+<script defer src="js/power.js?v=2026-10-31a"></script>
+<script defer src="js/parlays.js?v=2026-10-31a"></script>
+<script defer src="js/historical.js?v=2026-10-31a"></script>
+<script defer src="js/modeltrends.js?v=2026-10-31a"></script>
+<script defer src="js/tabs.js?v=2026-10-31a"></script>
+<script defer src="js/shell.js?v=2026-10-31a"></script>
+<script defer src="js/app.js?v=2026-10-31a"></script>
 <script>
   // Registered relative to this page (not a hardcoded /nfl-hub/ path) so it resolves
   // correctly under GitHub Pages' project-page subpath without being coupled to the repo

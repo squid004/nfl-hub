@@ -25,7 +25,12 @@ const Tabs = {
 
   init() {
     document.querySelectorAll('#tabs button[data-tab]').forEach(b => {
-      b.addEventListener('click', () => this.show(b.dataset.tab));
+      b.addEventListener('click', () => {
+        // A history entry per tab change, so back/forward walk through the tabs (hashchange below follows them).
+        const want = b.dataset.tab === 'power' && Power._view === 'history' ? 'power-history' : b.dataset.tab;
+        if (location.hash.slice(1) !== want) history.pushState(null, '', '#' + want);
+        this.show(b.dataset.tab);
+      });
     });
     window.addEventListener('hashchange', () => {
       const h = this._resolve(location.hash.slice(1));
@@ -54,5 +59,6 @@ const Tabs = {
       history.replaceState(null, '', '#' + name);
     }
     if (!fromInit) window.scrollTo(0, 0);
+    Shell.onTab(name);
   },
 };
