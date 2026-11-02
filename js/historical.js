@@ -50,7 +50,7 @@ function fmtHistVal(key, v) {
 
 const Historical = {
   _sort: { col: 'rank', dir: 1 },
-  _open: new Set(),          // "season-team" keys whose dropdown is open; survives the 90-second re-renders
+  _open: new Set(),          // the "season-team" key whose detail is open (one at a time); survives the 90-second re-renders
   _season: 'all',            // 'all' or a season number (as a string)
   _team: 'all',
 
@@ -61,7 +61,9 @@ const Historical = {
   },
 
   toggle(key) {
-    if (this._open.has(key)) this._open.delete(key); else this._open.add(key);
+    const wasOpen = this._open.has(key);
+    this._open.clear();
+    if (!wasOpen) this._open.add(key);
     this.render(App._ctx);
   },
 
@@ -75,6 +77,10 @@ const Historical = {
     if (!el) return;
     const data = ctx.historicalPower;
     const all = (data && data.rankings) || [];
+    if (!data) {
+      el.innerHTML = `<p class="muted">Loading every season since 2007…</p>`;   // app.js loads this blob after the first render
+      return;
+    }
     if (!all.length) {
       el.innerHTML = `<p class="muted">No historical data yet.</p>`;
       return;
@@ -138,14 +144,18 @@ const Historical = {
         if (key === 'team') return `<td class="num"><span class="power-chev">${open ? '&#9662;' : '&#9656;'}</span> ${esc(r.team)}</td>`;
         return `<td class="num">${fmtHistVal(key, r[key])}</td>`;
       }).join('');
-      const detail = open ? `<tr class="power-detail" data-hdetail="${esc(r.key)}"><td colspan="${HIST_COLS.length}">
-          <div class="power-detail-grid">
-            <div class="power-detail-cell"><div class="power-detail-cap">${esc(r.team)} ${r.season} &mdash; EPA profile</div><div class="power-radar-chart" data-hradar="${esc(r.key)}"></div></div>
-            <div class="power-detail-cell"><div class="power-detail-cap">Where ${esc(r.team)} sat in the ${r.season} league</div>${Power._teamStrips(r.team, rows.filter(x => x.season === r.season))}</div>
-            <div class="power-detail-cell"><div class="power-detail-cap">${esc(r.team)} ${r.season} &mdash; Power Score and Elo, ratings entering each week</div><div class="power-trend-chart" data-htrend="${esc(r.key)}"></div></div>
-          </div></td></tr>` : '';
-      return `<tr data-hkey="${esc(r.key)}" class="${open ? 'power-row-open' : ''}">${cells}</tr>${detail}`;
+      return `<tr data-hkey="${esc(r.key)}" class="${open ? 'power-row-open' : ''}">${cells}</tr>`;
     }).join('');
+
+    // The open team-season's detail goes in the pane beside the table.
+    const openRow = rows.find(r => this._open.has(r.key));
+    const pane = openRow ? Power.paneHtml(`${openRow.team} ${openRow.season}`,
+      `Rank ${openRow.rank} of the era &middot; ${openRow.record_text ?? '—'} &middot; Power Score ${fmtHistVal('score', openRow.score)}`,
+      `<div class="power-detail-grid">
+        <div class="power-detail-cell"><div class="power-detail-cap">${esc(openRow.team)} ${openRow.season} &mdash; EPA profile</div><div class="power-radar-chart" data-hradar="${esc(openRow.key)}"></div></div>
+        <div class="power-detail-cell"><div class="power-detail-cap">Where ${esc(openRow.team)} sat in the ${openRow.season} league</div>${Power._teamStrips(openRow.team, rows.filter(x => x.season === openRow.season))}</div>
+        <div class="power-detail-cell"><div class="power-detail-cap">${esc(openRow.team)} ${openRow.season} &mdash; Power Score and Elo, ratings entering each week</div><div class="power-trend-chart" data-htrend="${esc(openRow.key)}"></div></div>
+      </div>`) : '';
 
     const firstSeason = data.seasons[0], lastSeason = data.seasons[data.seasons.length - 1];
     const filters = `<div class="filters">
@@ -165,7 +175,10 @@ const Historical = {
     el.innerHTML = `
       <p class="muted small">${firstSeason}-${lastSeason}, ${all.length} team-seasons. ${showing} Click a row for its profile and season trend.</p>
       ${filters}
-      <table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>`;
+      <div class="split team-split${pane ? ' is-open' : ''}">
+        <div class="frame"><div class="frame-scroll"><table class="wide" data-pin="3"><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></div></div>
+        ${pane}
+      </div>`;
 
     // Charts exist only for open rows; drawn after the markup is in place (Plotly needs the node).
     this._open.forEach(key => {
@@ -182,5 +195,7 @@ const Historical = {
       const trendEl = el.querySelector(`[data-htrend="${CSS.escape(key)}"]`);
       if (trendEl) Power._drawTrend(trendEl, row.team, weeklySeries(row), ranges);
     });
+    Tables.pin(el);
+    Power._paneShown(openRow ? openRow.key : null);
   },
 };

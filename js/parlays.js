@@ -139,13 +139,13 @@ const Parlays = {
       : `<p class="muted small">No game this week where weather is worth a point of note.</p>`;
 
     el.innerHTML = `
-      <div class="panel">
-        <h2>Biggest matchups (EPA)</h2>
+      <div class="panel${Info.cls('matchups')}">
+        <h2>Biggest matchups (EPA)${Info.btn('matchups')}</h2>
         <h3>Pass</h3>
         ${edgeRows('pass', 'Pass')}
         <h3>Run</h3>
         ${edgeRows('rush', 'Run')}
-        <p class="tablefoot muted">Only real mismatches: one side has to be
+        <p class="tablefoot muted explain">Only real mismatches: one side has to be
           <strong class="result-good">Elite</strong> or <strong class="result-bad">Weak</strong>,
           and the other side has to clear the matching bar — Elite needs an opponent that's at
           least <strong class="mild-bad">Below average</strong>, Weak needs an opponent that's
@@ -156,19 +156,19 @@ const Parlays = {
           out here stays put even after the game it describes is final — descriptive only, not a
           betting edge.</p>
       </div>
-      <div class="panel">
-        <h2>ELWAY vs. the total</h2>
+      <div class="panel${Info.cls('elway-total')}">
+        <h2>ELWAY vs. the total${Info.btn('elway-total')}</h2>
         ${totalHtml}
-        <p class="tablefoot muted">Only shown when ELWAY's avg-points total disagrees with
+        <p class="tablefoot muted explain">Only shown when ELWAY's avg-points total disagrees with
           the DraftKings total by ${TOTAL_DISAGREEMENT_MIN}+ points.
           <span class="result-good">Green</span> = ELWAY projects MORE points than DraftKings;
           <span class="result-bad">red</span> = fewer. Ranked by size of the gap, biggest
           first.</p>
       </div>
-      <div class="panel">
-        <h2>Weather vs. the total</h2>
+      <div class="panel${Info.cls('weather-total')}">
+        <h2>Weather vs. the total${Info.btn('weather-total')}</h2>
         ${wxHtml}
-        <p class="tablefoot muted">Our own wind/precip/cold-adjusted points model
+        <p class="tablefoot muted explain">Our own wind/precip/cold-adjusted points model
           (<code>predict_points</code>) vs. the same model with no weather adjustment applied —
           <span class="result-bad">red</span> = weather likely suppresses the total,
           <span class="result-good">green</span> = likely lifts it. We don't have total-line

@@ -216,15 +216,15 @@ const ModelTrends = {
           <div id="season-hitrate-chart" style="height:400px;"></div>
         </div>
 
-        <div class="panel" id="pool-backtest-panel" style="overflow:visible;">
-          <h2>Pool optimizer vs. the pool</h2>
+        <div class="panel${Info.cls('pool-backtest')}" id="pool-backtest-panel" style="overflow:visible;">
+          <h2>Pool optimizer vs. the pool${Info.btn('pool-backtest')}</h2>
           <div id="pool-backtest-summary" class="muted small"></div>
           <div id="pool-backtest-chart" style="height:340px;"></div>
-          <p class="muted small" id="pool-backtest-note"></p>
+          <p class="muted small explain" id="pool-backtest-note"></p>
         </div>
 
-        <div class="panel" id="distribution-panel" style="overflow:visible;">
-          <h2>Distribution: market spread vs. model delta</h2>
+        <div class="panel${Info.cls('distribution')}" id="distribution-panel" style="overflow:visible;">
+          <h2>Distribution: market spread vs. model delta${Info.btn('distribution')}</h2>
           <div class="backtest-control-row">
             <label>Games <select id="dist-scope">
               <option value="all">All graded seasons</option>
@@ -234,19 +234,19 @@ const ModelTrends = {
           </div>
           <div id="dist-chart" style="height:340px;"></div>
           <div id="dist-stats" style="overflow-x:auto;"></div>
-          <p class="muted small">Both on the market's scale: home-favored positive, in points. The
+          <p class="muted small explain">Both on the market's scale: home-favored positive, in points. The
             model's delta is converted at <span id="dist-slope">—</span> pts per 1.0 delta (refit on
             every graded game). Rebuilds as each week's games are graded.</p>
         </div>
 
-        <div class="panel" id="prospective-panel" style="overflow:visible;">
-          <h2>Prospective scorecard</h2>
+        <div class="panel${Info.cls('prospective')}" id="prospective-panel" style="overflow:visible;">
+          <h2>Prospective scorecard${Info.btn('prospective')}</h2>
           <div id="prosp-body" class="small"></div>
         </div>
 
-        <div class="panel" id="backtest-panel">
-          <h2>Model vs. market, every graded game</h2>
-          <p class="muted small">Market spread against the live Power Rankings model's own
+        <div class="panel${Info.cls('backtest')}" id="backtest-panel">
+          <h2>Model vs. market, every graded game${Info.btn('backtest')}</h2>
+          <p class="muted small explain">Market spread against the live Power Rankings model's own
             weighted delta for that matchup (today's weights, applied to each game's pre-game
             rating). Positive = home favored by that measure.
             <span class="result-good">Green</span>/<span class="result-bad">red</span>/
@@ -319,7 +319,7 @@ const ModelTrends = {
           <div id="backtest-chart"></div>
           <div id="backtest-selected" class="muted small"></div>
           <h2 style="margin-top:18px;">When those games happened</h2>
-          <p class="muted small">Count of the games currently shown above, by season and week --
+          <p class="muted small explain">Count of the games currently shown above, by season and week --
             every filter and toggle above applies here automatically, and clicking a cell here
             filters the scatter down to just that season/week (clear it with the chip above).</p>
           <div id="backtest-weekyear"></div>
@@ -391,7 +391,7 @@ const ModelTrends = {
     };
     const first = entries.map(g => g.gameday).sort()[0];
     el.innerHTML = `
-      <p class="muted">Each prediction is logged the day before its game and never changed afterward, then scored against
+      <p class="muted explain">Each prediction is logged the day before its game and never changed afterward, then scored against
         the result and the de-vigged moneyline from the same moment. First game logged ${first}; ${scored.length} scored,
         ${pending} awaiting results. Log loss and Brier: lower is better; the model rows use the same games the market has odds for.</p>
       ${scored.length ? `<div style="overflow-x:auto;"><table class="small">
@@ -646,7 +646,8 @@ const ModelTrends = {
     Plotly.react('backtest-weekyear', [{
       type: 'heatmap',
       x: weeks, y: seasons, z: counts,
-      colorscale: [[0, colors.panel], [1, colors.accent]],
+      // Empty cells blend into the panel; counts run from deep to light blue so neighbours differ.
+      colorscale: [[0, colors.panel], [0.02, '#1a3150'], [0.5, '#2f6db5'], [1, '#9fd4ff']],
       showscale: true,
       colorbar: { tickfont: { color: colors.dim, size: 10 }, outlinewidth: 0, len: 1 },
       hovertemplate: 'Season %{y}, week %{x}: %{z} game(s)<extra></extra>',
@@ -756,7 +757,7 @@ const ModelTrends = {
     const cssVar = name => cs.getPropertyValue(name).trim();
     const colors = {
       text: cssVar('--text'), dim: cssVar('--dim'), line: cssVar('--line'), panel: cssVar('--panel2'),
-      market: cssVar('--accent'), elway: cssVar('--warn'), power: cssVar('--good'), gut: cssVar('--text'),
+      market: cssVar('--accent'), elway: cssVar('--warn'), power: cssVar('--good'), gut: cssVar('--violet'),
     };
 
     const season = scatter.length ? Math.max(...scatter.map(r => r.season)) : null;

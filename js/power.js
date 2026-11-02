@@ -166,7 +166,7 @@ function trendHtml(delta, title, fmt = v => v) {
 
 const Power = {
   _sort: { col: 'rank', dir: 1 },
-  _open: new Set(),   // teams whose dropdown is open; survives the 90-second re-renders
+  _open: new Set(),   // the team whose detail is open (one at a time); survives the 90-second re-renders
   // Which of the page's two views is showing: 'current' (this season, live) or 'history' (every team-season since 2007). The
   // last choice is remembered; a #power-history link (see Tabs) overrides it.
   _view: (() => { try { return localStorage.getItem('nflhub.powerView') === 'history' ? 'history' : 'current'; } catch { return 'current'; } })(),
@@ -271,14 +271,18 @@ const Power = {
         if (key === 'elo') return `<td class="num">${fmtPowerVal(key, r.elo)}${trendHtml(r.eloDelta, 'Change in Elo since last week')}</td>`;
         return `<td class="num${cls ? ' ' + cls : ''}">${fmtPowerVal(key, r[key])}</td>`;
       }).join('');
-      const detail = open ? `<tr class="power-detail" data-detail="${esc(r.team)}"><td colspan="${POWER_COLS.length}">
-          <div class="power-detail-grid">
-            <div class="power-detail-cell"><div class="power-detail-cap">${esc(r.team)} &mdash; EPA profile</div><div class="power-radar-chart" data-radar="${esc(r.team)}"></div></div>
-            <div class="power-detail-cell"><div class="power-detail-cap">Where ${esc(r.team)} sits in the league</div>${this._teamStrips(r.team, rows, classifications)}</div>
-            <div class="power-detail-cell"><div class="power-detail-cap">${esc(r.team)} &mdash; Power Score and Elo, ratings entering each week</div><div class="power-trend-chart" data-trend="${esc(r.team)}"></div></div>
-          </div></td></tr>` : '';
-      return `<tr data-team="${esc(r.team)}" class="${open ? 'power-row-open' : ''}">${cells}</tr>${detail}`;
+      return `<tr data-team="${esc(r.team)}" class="${open ? 'power-row-open' : ''}">${cells}</tr>`;
     }).join('');
+
+    // The open team's detail goes in the pane beside the table (as a game does on the slate).
+    const openRow = rows.find(r => this._open.has(r.team));
+    const pane = openRow ? Power.paneHtml(openRow.team,
+      `Rank ${openRow.rank} &middot; ${openRow.record} &middot; Power Score ${fmtPowerVal('score', openRow.score)}`,
+      `<div class="power-detail-grid">
+        <div class="power-detail-cell"><div class="power-detail-cap">${esc(openRow.team)} &mdash; EPA profile</div><div class="power-radar-chart" data-radar="${esc(openRow.team)}"></div></div>
+        <div class="power-detail-cell"><div class="power-detail-cap">Where ${esc(openRow.team)} sits in the league</div>${this._teamStrips(openRow.team, rows, classifications)}</div>
+        <div class="power-detail-cell"><div class="power-detail-cap">${esc(openRow.team)} &mdash; Power Score and Elo, ratings entering each week</div><div class="power-trend-chart" data-trend="${esc(openRow.team)}"></div></div>
+      </div>`) : '';
 
     const statLabel = key => (POWER_COLS.find(([k]) => k === key) || [null, key])[1];
     const weightsList = meta
@@ -296,7 +300,10 @@ const Power = {
           <summary class="muted small">Weights used (click to expand)</summary>
           <ul class="power-weights">${weightsList}</ul>
         </details>` : ''}
-        <table><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table>
+        <div class="split team-split${pane ? ' is-open' : ''}">
+          <div class="frame"><div class="frame-scroll"><table class="wide" data-pin="2"><thead><tr>${header}</tr></thead><tbody>${body}</tbody></table></div></div>
+          ${pane}
+        </div>
         ${this._tiersHtml(classifications)}
       </div>`;
 
@@ -313,21 +320,56 @@ const Power = {
       if (trendEl) this._drawTrend(trendEl, team, ctx.powerSeries ? ctx.powerSeries[team] : null, this._trendRanges(ctx.powerSeries));
     });
 
+    Tables.pin(el);
+    this._paneShown(openRow ? openRow.team : null);
     this._wire(el);
+  },
+
+  // A team's (or team-season's) detail in the pane beside the table: docked from 1700px wide, a
+  // drawer below that, a full-screen sheet on phones -- the same pane as a game on the slate.
+  paneHtml(title, sub, body) {
+    return `<aside class="pane team-pane" data-stick="power" aria-label="${esc(title)} detail">
+      <button type="button" class="pane-close" aria-label="Close">&times;</button>
+      <div class="pane-body"><h3 class="team-title">${esc(title)}</h3><div class="muted small">${sub}</div>${body}</div>
+    </aside>`;
+  },
+
+  // A different team starts its pane from the top; a re-render of the same one stays put.
+  _paneShown(key) {
+    if (key && key !== this._paneKey) PaneStick.reset('power', document.querySelector('#power tr.power-row-open'));
+    else PaneStick.refresh();
+    this._paneKey = key;
+  },
+
+  closePane() {
+    this._open.clear();
+    Historical._open.clear();
+    this.render(App._ctx);
   },
 
   // Delegated, wired once -- #power itself survives every re-render (only its innerHTML's children are replaced).
   _wire(el) {
     if (this._clickWired) return;
     el.addEventListener('click', e => {
-      if (e.target.closest('button, a, select, .power-detail')) return;   // buttons, filters and open dropdowns handle themselves
+      if (e.target.closest('.pane-close')) { this.closePane(); return; }
+      if (e.target.closest('button, a, select, .pane')) return;   // buttons, filters and the open pane handle themselves
       const hr = e.target.closest('tr[data-hkey]');
       if (hr) { Historical.toggle(hr.dataset.hkey); return; }
       const tr = e.target.closest('tr[data-team]');
       if (!tr) return;
       const team = tr.dataset.team;
-      if (this._open.has(team)) this._open.delete(team); else this._open.add(team);
+      // One team at a time: another row switches the pane, the open row closes it.
+      const wasOpen = this._open.has(team);
+      this._open.clear();
+      if (!wasOpen) this._open.add(team);
       this.render(App._ctx);
+    });
+    // Below 1700px the pane is a drawer: Escape or a click outside it closes it.
+    const isOpen = () => this._open.size || Historical._open.size;
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && isOpen() && !Slate.docked.matches) this.closePane(); });
+    document.addEventListener('click', e => {
+      if (!isOpen() || Slate.docked.matches || !e.target.isConnected || el.closest('section').hidden) return;
+      if (!e.target.closest('#power .pane, #power tr[data-team], #power tr[data-hkey]')) this.closePane();
     });
     el.addEventListener('change', e => {
       if (e.target.id === 'hist-season') Historical.setFilter('season', e.target.value);

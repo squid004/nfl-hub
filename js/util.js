@@ -109,6 +109,26 @@ const KeepDetailsOpen = {
 // Plotly attaches its own non-passive touchstart handler to each drag layer and calls
 // preventDefault on it, which blocks scrolling even with dragmode off -- so those handlers
 // are removed after every draw; the emulated mouse events from a tap still drive hover/click.
+// Charts take their colours from the CSS palette; this fills in what they leave to Plotly's
+// defaults -- the page's font and hover labels in the panel colours. Anything a chart sets
+// itself wins.
+(function plotlyThemeDefaults() {
+  if (typeof Plotly === 'undefined') return;
+  const css = getComputedStyle(document.documentElement);
+  const v = name => css.getPropertyValue(name).trim();
+  const font = v('--font') || 'system-ui, sans-serif';
+  ['react', 'newPlot'].forEach(fn => {
+    const orig = Plotly[fn].bind(Plotly);
+    Plotly[fn] = (target, data, layout, config) => {
+      const lay = Object.assign({}, layout);
+      lay.font = Object.assign({ family: font }, lay.font);
+      lay.hoverlabel = Object.assign({ bgcolor: v('--panel2'), bordercolor: v('--line') }, lay.hoverlabel);
+      lay.hoverlabel.font = Object.assign({ family: font, color: v('--text') }, lay.hoverlabel.font);
+      return orig(target, data, lay, config);
+    };
+  });
+})();
+
 (function makePlotlyTouchFriendly() {
   if (typeof Plotly === 'undefined' || !window.matchMedia || !matchMedia('(pointer: coarse)').matches) return;
 
@@ -143,3 +163,72 @@ const KeepDetailsOpen = {
     };
   });
 })();
+
+// Explanations behind an ⓘ on a panel's title, so the numbers come first. A renderer puts
+// Info.btn(key) in the panel's <h2>, Info.cls(key) on the panel, and class="explain" on each
+// explanatory paragraph; the open/closed state survives re-renders.
+const Info = {
+  _open: new Set(),
+  btn(key) {
+    const open = this._open.has(key);
+    return `<button type="button" class="info-btn" data-info="${esc(key)}" aria-expanded="${open}" title="What this shows" aria-label="About this panel">i</button>`;
+  },
+  cls(key) { return this._open.has(key) ? ' explain-open' : ''; },
+  init() {
+    document.addEventListener('click', e => {
+      const b = e.target.closest('.info-btn');
+      if (!b) return;
+      const key = b.dataset.info;
+      if (this._open.has(key)) this._open.delete(key); else this._open.add(key);
+      const open = this._open.has(key);
+      b.setAttribute('aria-expanded', String(open));
+      const panel = b.closest('.panel');
+      if (panel) panel.classList.toggle('explain-open', open);
+    });
+  },
+};
+
+// Wide tables: a renderer wraps the table as
+//   <div class="frame"><div class="frame-scroll"><table class="wide" data-pin="2">...</table></div></div>
+// and calls Tables.pin(container) after rendering. The first data-pin columns stay put when
+// the table scrolls sideways, a fade shows there's more to see, and a table that fits its
+// panel pins its header row to the page instead (a sideways-scrolling box can't do both).
+const Tables = {
+  pin(root) {
+    if (!root) return;
+    root.querySelectorAll('table.wide').forEach(table => {
+      const frame = table.closest('.frame');
+      const scroll = table.closest('.frame-scroll');
+      if (!frame || !scroll) return;
+      const n = +table.dataset.pin || 0;
+      const rows = Array.from(table.rows).filter(r => !r.querySelector('[colspan]'));
+      const place = () => {
+        let left = 0;
+        const head = table.tHead && table.tHead.rows[0];
+        for (let i = 0; i < n && head && i < head.cells.length; i++) {
+          rows.forEach(r => {
+            const c = r.cells[i];
+            if (!c) return;
+            c.classList.add('pin');
+            c.classList.toggle('pin-last', i === n - 1);
+            c.style.left = `${left}px`;
+          });
+          left += head.cells[i].getBoundingClientRect().width;
+        }
+        frame.style.setProperty('--pin-w', `${left}px`);
+        frame.classList.toggle('scrolls-x', table.offsetWidth > scroll.clientWidth + 1);
+        frame.classList.toggle('more-right', scroll.scrollLeft + scroll.clientWidth < scroll.scrollWidth - 2);
+        frame.classList.toggle('more-left', scroll.scrollLeft > 2);
+      };
+      if (!scroll._pinWired) {
+        scroll.addEventListener('scroll', place, { passive: true });
+        scroll._pinWired = true;
+      }
+      if (table._pinObserver) table._pinObserver.disconnect();
+      table._pinObserver = new ResizeObserver(place);
+      table._pinObserver.observe(table);
+      table._pinObserver.observe(scroll);
+      place();
+    });
+  },
+};

@@ -207,13 +207,16 @@ function weatherChip(wx) {
 // when nflverse's own location flag (or our manual fallback for games it still mislabels,
 // e.g. JAX's London "home" games) says neither side gets a home-field edge -- see
 // is_neutral_site()/STADIUM_LOCATIONS in team_ratings.py for how this is derived.
+function neutralChipHtml(matchup) {
+  return matchup && matchup.neutral_site
+    ? ` <span class="chip warn" title="Neither team gets a home-field edge here -- no HFA term applied to the Power Model pick for this game.">Neutral Site</span>`
+    : '';
+}
+
 function stadiumLineHtml(matchup) {
   if (!matchup || !matchup.stadium) return '';
   const loc = matchup.stadium_location ? `, ${matchup.stadium_location}` : '';
-  const neutralChip = matchup.neutral_site
-    ? ` <span class="chip warn" title="Neither team gets a home-field edge here -- no HFA term applied to the Power Model pick for this game.">Neutral Site</span>`
-    : '';
-  return `<div class="stadium-line muted small">${esc(matchup.stadium)}${esc(loc)}${neutralChip}</div>`;
+  return `<div class="stadium-line muted small">${esc(matchup.stadium)}${esc(loc)}${neutralChipHtml(matchup)}</div>`;
 }
 
 // Venue line + QB-injury chips on the same row -- chips right-aligned (margin-left:auto, CSS)
@@ -462,11 +465,6 @@ function poolOptimizerSummaryHtml(rec, picks, simPayload, tbStore) {
   const recGames = Object.entries(rec.games || {});
   const cbsCount = recGames.filter(([, g]) => g.cbs_pick).length;
   const mismatched = recGames.filter(([gid, g]) => ((picks[gid] || {}).pick || null) !== (g.cbs_pick || null)).length;
-  const cbsNote = cbsCount === 0
-    ? '<span class="result-bad"><strong>CBS Picks Empty</strong></span>'
-    : mismatched
-    ? '<span class="chip warn" style="padding:1px 8px;"><strong>CBS Picks do not match</strong></span>'
-    : '<span class="result-good"><strong>CBS Picks Match</strong></span>';
   // Open games where the saved pick differs from the optimizer's: the teams taken instead of the recommendation.
   const instead = recGames.filter(([gid, g]) => !g.locked && (picks[gid] || {}).pick && picks[gid].pick !== g.pick).map(([gid]) => esc(picks[gid].pick));
   const gen = rec.generated ? new Date(rec.generated).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
@@ -487,21 +485,25 @@ function poolOptimizerSummaryHtml(rec, picks, simPayload, tbStore) {
   const sel = live ? { p_win: live.pWin, unpicked: live.unpicked } : rec.selection;
   const gain = 100 * (rec.p_win - (af.p_win || 0));
   const info = `20,000 simulated weeks from the market odds and this pool's pick tendencies (${rec.inputs.entrants} entrants, ${rec.inputs.history_weeks.length} weeks of history). Optimizes this week's win chance only; the season pot is not considered. Each game's impact is how much the win chance drops if only that pick is switched.${nLocked ? ' Locked games keep your saved pick and their result; only the open games and the tiebreaker are re-optimized.' : ''}`;
-  return `<div class="pool-optimizer" style="margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:6px;background:var(--panel2);">
-    <div title="${esc(info)}"><strong>Pool optimizer</strong> &mdash; recommended card wins the week <strong>${pct(rec.p_win)}</strong> of the time
-      <span title="Gain over always taking the favorite (${pct(af.p_win || 0)})">(${gain >= 0 ? '+' : ''}${gain.toFixed(1)}%)</span>.</div>
-    <div style="margin-top:8px;">${ups.length ? `${ups.length} upset pick${ups.length === 1 ? '' : 's'}: ${ups.map(g => {
-        // green = you've selected this team; red = you've selected the opponent; plain = no selection yet (in-app picks, live)
-        const gid = Object.keys(rec.games).find(k => rec.games[k] === g);
-        const mine = (picks[gid] || {}).pick;
-        const cls = !mine ? '' : (mine === g.pick ? 'result-good' : 'result-bad');
-        return `<span class="${cls}" title="${mine ? (mine === g.pick ? 'You have this pick' : 'You have ' + esc(mine) + ' instead') : 'No selection yet'}"><strong>${esc(g.pick)}</strong></span>`;
-      }).join(', ')}.` : 'No upset picks.'}
-      Tiebreaker guess: <strong>${rec.tiebreak_guess}</strong>.</div>
-    ${sel ? `<div style="margin-top:8px;">Current selection provides <strong>${pct(sel.p_win)}</strong> win${instead.length ? ` (${instead.join(', ')})` : ''}.${sel.unpicked ? ` <span class="muted small">(${sel.unpicked} unpicked game${sel.unpicked === 1 ? '' : 's'} counted as the favorite)</span>` : ''}</div>` : ''}
-    ${contHtml}
-    <div style="margin-top:8px;" title="Updated ${esc(gen)}">${cbsNote}</div>
-  </div>`;
+  const ups_ = ups.map(g => {
+    // green = you've selected this team; red = you've selected the opponent; plain = no selection yet (in-app picks, live)
+    const gid = Object.keys(rec.games).find(k => rec.games[k] === g);
+    const mine = (picks[gid] || {}).pick;
+    const cls = !mine ? '' : (mine === g.pick ? 'result-good' : 'result-bad');
+    return `<span class="${cls}" title="${mine ? (mine === g.pick ? 'You have this pick' : 'You have ' + esc(mine) + ' instead') : 'No selection yet'}">${esc(g.pick)}</span>`;
+  }).join(', ');
+  const tile = (label, value, sub, { tone = '', title = '' } = {}) => `<div class="tile${tone ? ' ' + tone : ''}"${title ? ` title="${esc(title)}"` : ''}>
+    <div class="tile-label">${label}</div><div class="tile-value">${value}</div>${sub ? `<div class="tile-sub">${sub}</div>` : ''}</div>`;
+  return `<div class="tiles">
+      ${tile('Optimizer card', pct(rec.p_win), `${gain >= 0 ? '+' : ''}${gain.toFixed(1)}% vs. all favorites (${pct(af.p_win || 0)})`, { title: info })}
+      ${sel ? tile('Your card', pct(sel.p_win), instead.length ? `differs on ${instead.join(', ')}` : (sel.unpicked ? `${sel.unpicked} unpicked count as favorites` : '')) : ''}
+      ${tile(ups.length === 1 ? 'Upset pick' : 'Upset picks', ups.length ? ups_ : 'None', ups.length ? 'underdogs to take' : '')}
+      ${tile('Tiebreaker', esc(String(rec.tiebreak_guess)), 'total points, last game')}
+      ${tile('CBS', cbsCount === 0 ? 'Empty' : mismatched ? 'Mismatch' : 'Match', gen ? `updated ${esc(gen)}` : '', {
+        tone: cbsCount === 0 ? 'bad' : mismatched ? 'warn' : 'good',
+        title: cbsCount === 0 ? 'No CBS picks read yet' : mismatched ? `${mismatched} game(s) differ between this app and CBS` : 'CBS picks match this app' })}
+    </div>
+    ${contHtml}`;
 }
 
 const Pickem = {
@@ -530,7 +532,7 @@ const Pickem = {
     // The pool's tiebreaker is the total points of the week's last game (Monday night). The optimizer's guess for it
     // is shown as an extra box on that card, mirroring the CBS tiebreaker field.
     const tbGameId = poolRecWeek ? (poolRecWeek.tiebreak_game_id || (games.length ? games[games.length - 1].game_id : null)) : null;
-    const cards = games.map(g => {
+    const items = games.map(g => {
       const o = odds[g.game_id] || {};
       const matchup = matchupFor(teamRatings, g.home, g.away);
       const pm = matchup && matchup.power_model;
@@ -563,7 +565,18 @@ const Pickem = {
         const gutBtn = team => `<button data-act="gutpick" data-week="${week}" data-game="${g.game_id}"
           data-team="${team}" data-home="${g.home}" data-away="${g.away}"
           data-spread="${hasLine ? effSpread : ''}">${team}</button>`;
-        return `<div class="game-card">
+        // On the slate the gut call takes over the row: the same buttons, big, with the record.
+        const bigGutBtn = team => {
+          const r = records[team];
+          return `<button class="blind-btn" data-act="gutpick" data-week="${week}" data-game="${g.game_id}"
+            data-team="${team}" data-home="${g.home}" data-away="${g.away}" data-spread="${hasLine ? effSpread : ''}"
+            aria-label="Gut pick: ${team}"><span class="blind-team">${team}</span><span class="blind-rec">${r ? `${r.wins}-${r.losses}${r.ties ? '-' + r.ties : ''}` : ''}</span></button>`;
+        };
+        return Object.assign(Slate.row({
+          id: g.game_id, g, matchupHtml: `${g.away}${recordLabel(g.away)} @ ${g.home}${recordLabel(g.home)}`,
+          tags: [matchup ? weatherChip(matchup.weather) : '', neutralChipHtml(matchup), qbInjuryRowHtml(g.away, g.home, injuries, depthChart)],
+          blind: [bigGutBtn(g.away), bigGutBtn(g.home)],
+        }), { pane: `<div class="game-card">
           <div class="game-card-head">
             <span class="muted">${fmtLocal(g.kickoff, false)}</span>
             <span class="matchup">${g.away}${recordLabel(g.away)} @ ${g.home}${recordLabel(g.home)}</span>
@@ -574,7 +587,7 @@ const Pickem = {
             ${gutBtn(g.away)} ${gutBtn(g.home)}
             <span class="game-card-mine muted small">Pick blind to lock in your gut call &mdash; the rest of the card loads once you do.</span>
           </div>
-        </div>`;
+        </div>` });
       }
 
       // `live` tracks a game currently in progress the SAME way `postGame` tracks a final
@@ -656,18 +669,40 @@ const Pickem = {
         missing_on_cbs: `<span class="chip bad" title="This app has ${esc(mc.app_pick)} but the CBS pool shows no pick for this locked game.">No CBS pick!</span>`,
       })[mc.flag] || '';
 
-      return `<div class="game-card${tied ? ' result-tie' : pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
+      const chips = [
+        elwayFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY underdog</span>` : '',
+        squidFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="The Power Model favors the OTHER team entirely, not just by a smaller or larger margin">Squid Underdog</span>` : '',
+        shown && shown.contrarian ? `<span class="chip ${mine && mine === shown.pick ? 'good' : 'warn'}" title="The pool optimizer's pick is the underdog here: ${esc(shown.pick)} over ${esc(shown.other)}${mc && mc.locked ? ' (frozen from before kickoff)' : ''}. A calculated upset pick for the pool, not a market or model underdog flag.">Pool Pick</span>` : '',
+        ...[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
+          `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`),
+        matchup ? weatherChip(matchup.weather) : '',
+      ];
+      const matchupHtml = `${teamSpan(g.away)}${recordLabel(g.away)} @ ${teamSpan(g.home)}${recordLabel(g.home)}`;
+      const resultCls = tied ? 'result-tie' : pickHit === true ? 'result-win' : pickHit === false ? 'result-loss' : '';
+      // Before kickoff, a source leaning to the other team from the market is marked on the slate.
+      const lean = team => (!postGame && !live && favTeam && team && team !== favTeam) ? ' dissent' : '';
+      const row = Slate.row({
+        id: g.game_id, g, matchupHtml, resultCls,
+        line: [hasLine ? esc(favLabel) : '', move && move.deltaHome ? `moved ${move.deltaHome > 0 ? '+' : ''}${move.deltaHome.toFixed(1)}` : ''].filter(Boolean).join(' &middot; '),
+        tags: [...chips, neutralChipHtml(matchup), qbInjuryRowHtml(g.away, g.home, injuries, depthChart),
+          mineIsDog ? `<span class="chip warn">${M.dogChip}</span>` : '', cbsFlag,
+          poolRecWeek && g.game_id === tbGameId ? '<span class="chip" title="The pool\'s tiebreaker is this game\'s total points; your guess is on its card">Tiebreaker</span>' : ''],
+        cells: {
+          Market: (postGame || live) ? Slate.score(g) : (hasLine ? `${favTeam} ${pct(favTeam === g.home ? o.implied_home : o.implied_away)}` : null),
+          History: histCell ? `<span class="${resultClass(histHit)}">${favTeam} ${pct(histCell.su)}</span>` : null,
+          ELWAY: elwayFav ? `<span class="${resultClass(elwayHit)}${lean(elwayFav.team)}">${elwayFav.team} ${pct(elwayFav.pct)}</span>` : null,
+          'Power Model': pm && pm.favorite ? `<span class="${resultClass(pmHit)}${lean(pm.favorite)}">${pm.favorite} ${pct(pm.prob)}</span>` : null,
+          'Pool optimizer': shown ? `<span class="${resultClass(poolHit)}${lean(shown.pick)}">${shown.pick}${shown.contrarian ? ' (upset)' : ''} +${pts(shown.impact_pts)}</span>` : null,
+        },
+        pickHtml: `${btn(g.away)} ${btn(g.home)}`,
+      });
+
+      return Object.assign(row, { pane: `<div class="game-card">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
-          <span class="matchup">${teamSpan(g.away)}${recordLabel(g.away)} @ ${teamSpan(g.home)}${recordLabel(g.home)}</span>
+          <span class="matchup">${matchupHtml}</span>
           ${stateChip}
-          ${elwayFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY underdog</span>` : ''}
-          ${squidFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="The Power Model favors the OTHER team entirely, not just by a smaller or larger margin">Squid Underdog</span>` : ''}
-          ${shown && shown.contrarian ? `<span class="chip ${mine && mine === shown.pick ? 'good' : 'warn'}" title="The pool optimizer's pick is the underdog here: ${esc(shown.pick)} over ${esc(shown.other)}${mc && mc.locked ? ' (frozen from before kickoff)' : ''}. A calculated upset pick for the pool, not a market or model underdog flag.">Pool Pick</span>` : ''}
-          ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
-            `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
-          ).join('')}
-          ${matchup ? weatherChip(matchup.weather) : ''}
+          ${chips.join('')}
           ${lineMoveChip(move)}
         </div>
         ${venueRowHtml(matchup, g.away, g.home, injuries, depthChart)}
@@ -713,8 +748,7 @@ const Pickem = {
           ${btn(g.away)} ${btn(g.home)}
           <span class="game-card-mine">${mine ? `Your pick: <strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}${mcMineNote} ${cbsFlag}` : `<span class="muted">No pick yet</span> ${cbsFlag}`}</span>
         </div>
-        <details class="game-card-details" id="ml-details-${g.game_id}">
-          <summary>Details</summary>
+        <div class="game-card-details">
           <div class="game-card-matchup">
             <div class="stat-label" title="Each side's own offense (0-100 EPA scale) against the OTHER side's defense -- the 9-stat foundation every prediction on this card is built from, before any of the adjustments below.">EPA matchup</div>
             ${epaMatchupVizHtml(matchup, g.home, g.away)}
@@ -729,18 +763,20 @@ const Pickem = {
           ${gut ? `<div class="small" style="padding-top:8px;">Gut pick: <strong>${esc(gut.pick)}</strong>
             <span class="chip gut">GUT</span>
             <span class="muted"> &mdash; your first pick, made before anything else on this card was visible. It doesn't change even if your pick above does.</span></div>` : ''}
-        </details>
-      </div>`;
-    }).join('');
+        </div>
+      </div>` });
+    });
 
     const made = Object.keys(picks).length;
-    document.getElementById(M.id).innerHTML = `
-      <div class="panel">
-        <h2>${M.title} &mdash; ${made}/${games.length} made
+    // The sidebar's game list reads this (Shell.renderGames).
+    this._mlGames = items.map(i => ({ g: i.g, id: i.id, resultCls: i.resultCls }));
+    Slate.render(document.getElementById(M.id), 'ml', {
+      head: `<h2>${M.title} &mdash; ${made}/${games.length} made
           &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
-        ${poolRecWeek ? poolOptimizerSummaryHtml(poolRecWeek, picks, ctx.poolSim, ctx.poolTb) : ''}
-        <div class="game-card-grid">${cards}</div>
-        <details>
+        ${poolRecWeek ? poolOptimizerSummaryHtml(poolRecWeek, picks, ctx.poolSim, ctx.poolTb) : ''}`,
+      columns: ['Market', 'History', 'ELWAY', 'Power Model', 'Pool optimizer'],
+      items,
+      foot: `<details>
           <summary class="muted small">Chip legend</summary>
           <p class="tablefoot muted"><span class="pick-fav">Green</span> in the matchup =
             the favorite is the suggested pick; <span class="pick-dog">yellow</span> = the
@@ -794,8 +830,8 @@ const Pickem = {
             This tab is about picking winners and playing the pool well; point totals and the
             weather-adjusted forecast/ratings breakdown live on the Against the Spread tab
             instead.</p>
-        </details>
-      </div>`;
+        </details>`,
+    });
   },
 
   // Score-distribution bar chart for one ATS card's details dropdown -- lazy-rendered on
@@ -917,9 +953,9 @@ const Pickem = {
     const spreadFavLabel = (spreadHome, home, away) =>
       spreadHome == null ? null : { team: spreadHome <= 0 ? home : away, label: spreadHome === 0 ? 'Pick’em' : `${spreadHome <= 0 ? home : away} ${-Math.abs(spreadHome)}` };
 
-    const chartsToWire = [];
+    const charts = {};   // game id -> its score-distribution chart, drawn when the game shows in the pane
 
-    const cards = games.map(g => {
+    const items = games.map(g => {
       const o = odds[g.game_id] || {};
       const matchup = matchupFor(teamRatings, g.home, g.away);
       const sd = matchup && matchup.score_distribution;
@@ -982,22 +1018,41 @@ const Pickem = {
         class="${mine === team ? 'primary' : ''}">${team}</button>`;
 
       const distChartId = `ats-dist-${g.game_id}`;
-      if (sd) chartsToWire.push({
+      if (sd) charts[g.game_id] = {
         id: distChartId, sd, home: g.home, away: g.away,
         final: postGame ? { homeScore: g.home_score, awayScore: g.away_score } : null,
+      };
+
+      const chips = [
+        elwayFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY underdog</span>` : '',
+        squidFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="The Power Ranking favors the OTHER team entirely, not just by a smaller or larger margin">Squid Underdog</span>` : '',
+        ...[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
+          `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`),
+        matchup ? weatherChip(matchup.weather) : '',
+      ];
+      const matchupHtml = `${g.away}${recordLabel(g.away)} @ ${g.home}${recordLabel(g.home)}`;
+      const lean = team => (!postGame && !live && favTeam && team && team !== favTeam) ? ' dissent' : '';
+      const row = Slate.row({
+        id: g.game_id, g, matchupHtml,
+        resultCls: pushed ? 'result-tie' : pickHit === true ? 'result-win' : pickHit === false ? 'result-loss' : '',
+        line: move && move.deltaHome ? `moved ${move.deltaHome > 0 ? '+' : ''}${move.deltaHome.toFixed(1)}` : '',
+        tags: [...chips, neutralChipHtml(matchup), qbInjuryRowHtml(g.away, g.home, injuries, depthChart),
+          mineIsDog ? `<span class="chip warn">${M.dogChip}</span>` : ''],
+        cells: {
+          Market: (postGame || live) ? Slate.score(g) : (hasLine ? esc(favLabel) : null),
+          ELWAY: elwaySf ? `<span class="${resultClass(elwayHit)}${lean(elwaySf.team)}">${esc(elwaySf.label)}</span>` : null,
+          History: histCell && histCell.ats != null ? `<span class="${resultClass(histHit)}">${favTeam} ${pct(histCell.ats)}</span>` : null,
+          'Power Ranking': prSf ? `<span class="${resultClass(prHit)}${lean(prSf.team)}">${esc(prSf.label)}</span>` : null,
+        },
+        pickHtml: `${btn(g.away)} ${btn(g.home)}`,
       });
 
-      return `<div class="game-card${pushed ? ' result-tie' : pickHit === true ? ' result-win' : pickHit === false ? ' result-loss' : ''}">
+      return Object.assign(row, { pane: `<div class="game-card">
         <div class="game-card-head">
           <span class="muted">${fmtLocal(g.kickoff, false)}</span>
-          <span class="matchup">${g.away}${recordLabel(g.away)} @ ${g.home}${recordLabel(g.home)}</span>
+          <span class="matchup">${matchupHtml}</span>
           ${stateChip}
-          ${elwayFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="ELWAY's avg-points model favors the OTHER team entirely, not just by a smaller or larger margin">ELWAY underdog</span>` : ''}
-          ${squidFlip ? `<span class="chip ${mine && mine === dogTeam ? 'good' : 'warn'}" title="The Power Ranking favors the OTHER team entirely, not just by a smaller or larger margin">Squid Underdog</span>` : ''}
-          ${[[staleHome, g.home], [staleAway, g.away]].filter(([s]) => s).map(([s, t]) =>
-            `<span class="chip bad" title="ELWAY's rating still assumes ${s.assumedName} at QB1 for ${t}, but our injury report lists him ${s.status}: ${esc(s.detail || '')}">ELWAY stale QB (${t})</span>`
-          ).join('')}
-          ${matchup ? weatherChip(matchup.weather) : ''}
+          ${chips.join('')}
           ${lineMoveChip(move)}
         </div>
         ${venueRowHtml(matchup, g.away, g.home, injuries, depthChart)}
@@ -1031,8 +1086,7 @@ const Pickem = {
           ${btn(g.away)} ${btn(g.home)}
           <span class="game-card-mine">${mine ? `Your pick: <strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}` : '<span class="muted">No pick yet</span>'}</span>
         </div>
-        <details class="game-card-details" id="ats-details-${g.game_id}">
-          <summary>Details</summary>
+        <div class="game-card-details">
           ${matchup ? `<div class="game-card-matchup">
             <div class="stat-label" title="Each side's own offense (0-100 EPA scale) against the OTHER side's defense -- the 9-stat foundation every prediction on this card is built from.">EPA matchup</div>
             ${epaMatchupVizHtml(matchup, g.home, g.away)}
@@ -1050,17 +1104,20 @@ const Pickem = {
             <div id="${distChartId}" class="dist-chart"></div>
             <div id="${distChartId}-caption" class="muted small dist-caption"></div>
           </div>` : ''}
-        </details>
-      </div>`;
-    }).join('');
+        </div>
+      </div>` });
+    });
 
     const made = Object.keys(picks).length;
-    document.getElementById(M.id).innerHTML = `
-      <div class="panel">
-        <h2>${M.title} &mdash; ${made}/${games.length} made
-          &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
-        <div class="game-card-grid">${cards}</div>
-        <details>
+    Slate.render(document.getElementById(M.id), 'ats', {
+      head: `<h2>${M.title} &mdash; ${made}/${games.length} made
+          &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>`,
+      columns: ['Market', 'ELWAY', 'History', 'Power Ranking'],
+      items,
+      // The score-distribution chart needs its node in place and sized, so it's drawn when the
+      // game shows in the pane.
+      onShow: id => { const c = charts[id]; if (c) this._drawDistChart(c.id, c.sd, c.home, c.away, c.final); },
+      foot: `<details>
           <summary class="muted small">Chip legend</summary>
           <p class="tablefoot muted">Each stat block states that source's own spread + O/U
             (Market/ELWAY/Power Ranking) or historical ATS cover rate (History) instead of a
@@ -1084,10 +1141,10 @@ const Pickem = {
             <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
             rating that team with a QB1 our live injury feed now shows hurt.
             <span class="chip bad">Bad Weather</span> = live forecast at kickoff is bad enough
-            to matter for scoring, shown in each card's Details section regardless.
+            to matter for scoring, shown in each game's detail pane regardless.
             <span class="stat-label" style="display:inline;text-transform:none;font-weight:600;">Power Ranking</span>
             states each side's most likely single score (the distribution MODE, not the
-            average) from the same score-distribution pipeline charted in each card's Details
+            average) from the same score-distribution pipeline charted in each game's detail
             section -- frozen at kickoff, like the market line, so it won't drift during a
             live game. Once a game is final, the ELWAY/History/Power Ranking numbers turn
             <span class="result-good">green</span> if the side they favored actually covered
@@ -1095,19 +1152,7 @@ const Pickem = {
             whole card gets a light green/red tint if your own pick covered, and O/U swaps to
             the actual Over/Under result. The market line itself is frozen at whatever it was
             just before kickoff.</p>
-        </details>
-      </div>`;
-
-    // Lazy chart render: a Plotly chart drawn into a closed <details> can't size itself
-    // correctly, and there's no reason to render ~15 charts nobody's opened yet. Draw (once)
-    // the first time each card's own details element opens.
-    chartsToWire.forEach(({ id, sd, home, away, final }) => {
-      const gid = id.replace('ats-dist-', '');
-      const details = document.getElementById(`ats-details-${gid}`);
-      if (!details) return;
-      details.addEventListener('toggle', () => {
-        if (details.open) this._drawDistChart(id, sd, home, away, final);
-      });
+        </details>`,
     });
   },
 
