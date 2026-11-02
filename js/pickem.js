@@ -574,7 +574,7 @@ const Pickem = {
         };
         return Object.assign(Slate.row({
           id: g.game_id, g, matchupHtml: `${g.away}${recordLabel(g.away)} @ ${g.home}${recordLabel(g.home)}`,
-          tags: [matchup ? weatherChip(matchup.weather) : '', neutralChipHtml(matchup), qbInjuryRowHtml(g.away, g.home, injuries, depthChart)],
+          tags: [matchup ? weatherChip(matchup.weather) : '', neutralChipHtml(matchup)],   // QB injuries: in the pane only
           blind: [bigGutBtn(g.away), bigGutBtn(g.home)],
         }), { pane: `<div class="game-card">
           <div class="game-card-head">
@@ -634,14 +634,11 @@ const Pickem = {
       const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
       const squidFlip = hasLine && pm && squidFullDisagree(pm.favorite, favTeam);
 
-      // Which side to highlight as "the suggested pick": the pool Monte Carlo's pick when it
-      // has run this week, otherwise the upset-budget flag (same source as the "budget dog" chip).
-      const mcOpen = mc && !mc.locked ? mc : null;
-      const suggestedIsDog = hasLine && (mcOpen ? mcOpen.contrarian : !!(bucketRank && bucketRank.taken));
-      const suggestedTeam = mcOpen ? mcOpen.pick : (hasLine ? (suggestedIsDog ? dogTeam : favTeam) : null);
+      // Highlight your own pick in the matchup: green for the favorite, yellow for an upset
+      // (the market underdog). This replaces a separate "upset" chip.
       const teamSpan = team => {
-        if (team !== suggestedTeam) return team;
-        return `<span class="${suggestedIsDog ? 'pick-dog' : 'pick-fav'}">${team}</span>`;
+        if (team !== mine) return team;
+        return `<span class="${mineIsDog ? 'pick-dog' : 'pick-fav'}">${team}</span>`;
       };
 
       const btn = team => `<button data-act="${M.act}" data-week="${week}" data-game="${g.game_id}"
@@ -657,7 +654,7 @@ const Pickem = {
       const edgeChip = shown
         ? `<div class="${resultClass(poolHit)}" style="white-space:nowrap;"
              title="Take ${shown.pick} over ${shown.other}${mc && mc.locked ? ' (frozen from before kickoff)' : ''}. Impact: the simulated weekly win chance is ${pts(shown.impact_pts)} lower if only this pick is switched and every other pick stays optimized. The market gives the favorite ${(shown.p_favorite * 100).toFixed(0)}%; the pool is expected to take the favorite ${(shown.pool_favorite_share * 100).toFixed(0)}% of the time.">
-             ${shown.pick}${shown.contrarian ? ' (upset)' : ''} +${pts(shown.impact_pts)}</div>
+             ${shown.pick} +${pts(shown.impact_pts)}</div>
            <div class="muted small">pool takes ${shown.favorite} ${(shown.pool_favorite_share * 100).toFixed(0)}%</div>`
         : '<span class="muted">&mdash;</span>';
       const mcMineNote = (mc && !mc.locked && mine && mine !== mc.pick)
@@ -684,15 +681,16 @@ const Pickem = {
       const row = Slate.row({
         id: g.game_id, g, matchupHtml, resultCls,
         line: [hasLine ? esc(favLabel) : '', move && move.deltaHome ? `moved ${move.deltaHome > 0 ? '+' : ''}${move.deltaHome.toFixed(1)}` : ''].filter(Boolean).join(' &middot; '),
-        tags: [...chips, neutralChipHtml(matchup), qbInjuryRowHtml(g.away, g.home, injuries, depthChart),
-          mineIsDog ? `<span class="chip warn">${M.dogChip}</span>` : '', cbsFlag,
+        // QB injuries stay off the row (they're on the pane's venue line) to keep the slate readable.
+        tags: [...chips, neutralChipHtml(matchup),
+          cbsFlag,
           poolRecWeek && g.game_id === tbGameId ? '<span class="chip" title="The pool\'s tiebreaker is this game\'s total points; your guess is on its card">Tiebreaker</span>' : ''],
         cells: {
           Market: (postGame || live) ? Slate.score(g) : (hasLine ? `${favTeam} ${pct(favTeam === g.home ? o.implied_home : o.implied_away)}` : null),
           History: histCell ? `<span class="${resultClass(histHit)}">${favTeam} ${pct(histCell.su)}</span>` : null,
           ELWAY: elwayFav ? `<span class="${resultClass(elwayHit)}${lean(elwayFav.team)}">${elwayFav.team} ${pct(elwayFav.pct)}</span>` : null,
           'Power Model': pm && pm.favorite ? `<span class="${resultClass(pmHit)}${lean(pm.favorite)}">${pm.favorite} ${pct(pm.prob)}</span>` : null,
-          'Pool optimizer': shown ? `<span class="${resultClass(poolHit)}${lean(shown.pick)}">${shown.pick}${shown.contrarian ? ' (upset)' : ''} +${pts(shown.impact_pts)}</span>` : null,
+          'Pool optimizer': shown ? `<span class="${resultClass(poolHit)}${lean(shown.pick)}">${shown.pick} +${pts(shown.impact_pts)}</span>` : null,
         },
         pickHtml: `${btn(g.away)} ${btn(g.home)}`,
       });
@@ -746,7 +744,7 @@ const Pickem = {
         </div>
         <div class="game-card-pick">
           ${btn(g.away)} ${btn(g.home)}
-          <span class="game-card-mine">${mine ? `Your pick: <strong>${mine}</strong>${mineIsDog ? ` <span class="chip warn">${M.dogChip}</span>` : ''}${mcMineNote} ${cbsFlag}` : `<span class="muted">No pick yet</span> ${cbsFlag}`}</span>
+          <span class="game-card-mine">${mine ? `Your pick: <strong class="${mineIsDog ? 'pick-dog' : 'pick-fav'}">${mine}</strong>${mcMineNote} ${cbsFlag}` : `<span class="muted">No pick yet</span> ${cbsFlag}`}</span>
         </div>
         <div class="game-card-details">
           <div class="game-card-matchup">
@@ -778,58 +776,28 @@ const Pickem = {
       items,
       foot: `<details>
           <summary class="muted small">Chip legend</summary>
-          <p class="tablefoot muted"><span class="pick-fav">Green</span> in the matchup =
-            the favorite is the suggested pick; <span class="pick-dog">yellow</span> = the
-            dog is — the pool optimizer's pick when it has run this week, otherwise
-            the upset-budget flag. The <strong>Pool optimizer</strong> chip shows its pick and its
-            impact: how much the simulated weekly win chance drops if only that pick is switched. ELWAY is Nate Silver's Silver Bulletin NFL forecasting
-            model, transcribed weekly into a Google Sheet — not a personal formula.
-            <span class="chip warn">ELWAY underdog</span> = ELWAY's model favors the OTHER
-            team entirely, not just by a smaller or larger margin than the market;
-            <span class="chip warn">Pool Pick</span> = the pool optimizer is recommending the underdog (an upset pick) in this game;
-            <span class="chip warn">Squid Underdog</span> is the same full-flip concept for
-            our OWN Power Model instead of ELWAY's. A <span class="chip warn">QB</span> chip
-            (right-aligned under the venue line, below the header) shows that team's QB
-            injury situation (red = Out/IR) regardless of what ELWAY currently assumes at
-            QB1 — if ELWAY's assumed starter is the one flagged, another flagged QB for that
-            team shows too (the presumptive next man up); if ELWAY has already moved QB1 off
-            an injured player (or we don't know who ELWAY has at QB1), this falls back to the
-            worst OTHER flagged QB at Doubtful/Out severity only (a merely "Questionable"
-            QB2/QB3 unrelated to a fine starter doesn't get a chip; a real starter change
-            does), so a real starter injury never goes unshown just because ELWAY's own sheet
-            caught up to it. Any net line move this week shows as a "Steam:" chip, pinned to
-            the right of the card header, with the signed point move itself
-            (<span class="chip good">Steam: +1.5</span> at/above a 1.5-point move in one
-            direction since this week's first snapshot, <span class="chip">Steam: +0.5</span>
-            plain below that).
-            <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
-            rating that team with a QB1 our live injury feed now shows hurt — a breaking-news
-            injury ELWAY's own depth-chart tracking hasn't caught up to yet.
-            <span class="chip bad">Bad Weather</span> = live forecast at kickoff (only shown
-            for outdoor stadiums within ~16 days out) is bad enough to matter for scoring —
-            &ge;20mph wind, &ge;10mm precip, any snow, or sub-20&deg;F highs; shown here as
-            context only -- the actual weather-adjusted point forecast lives on the Against
-            the Spread tab.
-            <span class="chip gut">GUT</span> = Moneyline cards stay locked (teams, records, QB
-            and weather chips only) until you click a team; that first click is saved as your
-            gut pick and never changes, while the pick itself stays editable. Cards for games
-            already started, past weeks, and games you picked before this existed are never
-            locked.
-            <span class="stat-label" style="display:inline;text-transform:none;font-weight:600;">Power Model</span>
-            is the Power Rankings composite (same 9 EPA/points/turnover/penalty stats as the Power
-            Rankings tab) applied to this matchup, with its margin (&Delta;) converted into a
-            win probability from a calibration curve fit against real backtested accuracy at
-            each confidence level (games where either team's QB was Out/Doubtful excluded from
-            that fit). Like ELWAY and History, backtesting found it does not beat the market
-            spread at picking winners -- a third independent data point, not a replacement.
-            Once a game is final, the ELWAY/History/Power Model numbers turn <span class="result-good">green</span>
-            if the side they favored actually won or <span class="result-bad">red</span> if it
-            didn't, and the whole card gets a light green/red tint if your own pick hit or
-            missed. The market line itself is frozen at whatever it was just before kickoff --
-            it won't keep changing once the game starts just because the live odds feed does.
-            This tab is about picking winners and playing the pool well; point totals and the
-            weather-adjusted forecast/ratings breakdown live on the Against the Spread tab
-            instead.</p>
+          <ul class="tablefoot muted">
+            <li>Your pick is highlighted in the matchup: <span class="pick-fav">green</span> for the favorite, <span class="pick-dog">yellow</span> for an upset.</li>
+            <li><strong>Market</strong> is the favorite's de-vigged win chance from the moneyline, frozen at kickoff and replaced by the score once the game starts.</li>
+            <li><strong>History</strong> is how often favorites at this spread have won historically.</li>
+            <li><strong>ELWAY</strong> is Nate Silver's Silver Bulletin forecasting model, transcribed weekly into a Google Sheet.</li>
+            <li><strong>Power Model</strong> is the Power Rankings composite applied to this matchup and calibrated to a win probability; like ELWAY and History, it does not beat the market in backtests.</li>
+            <li><strong>Pool optimizer</strong> shows its pick and how much the simulated weekly win chance drops if only that pick is switched.</li>
+            <li>A <span class="pick-dog">yellow</span> number means that source picks the other team from the market.</li>
+            <li><span class="chip warn">LIVE · Q3 4:12</span> / <span class="chip muted">Final</span>: the game is in progress or over.</li>
+            <li><span class="chip muted">1st &amp; 10 at KC 35</span>: who has the ball during a live game, red inside the red zone.</li>
+            <li><span class="chip warn">ELWAY underdog</span> / <span class="chip warn">Squid Underdog</span>: ELWAY or our Power Model favors the other team from the market, green if you took that team.</li>
+            <li><span class="chip warn">Pool Pick</span>: the pool optimizer recommends the underdog in this game, green if you took it.</li>
+            <li><span class="chip">Tiebreaker</span>: the pool's tiebreaker is this game's total points.</li>
+            <li><span class="chip bad">CBS has / No CBS pick!</span> / <span class="chip warn">On CBS</span>: your pick here and the official CBS pool disagree, or one side has no pick.</li>
+            <li><span class="chip warn">Neutral Site</span>: neither team gets home-field advantage.</li>
+            <li><span class="chip warn">QB</span> (in the detail pane): a starting QB on the injury report, red for Out or IR.</li>
+            <li><span class="chip bad">ELWAY stale QB</span>: ELWAY still rates that team with a QB1 our injury feed shows hurt.</li>
+            <li><span class="chip good">Steam: +1.5</span>: the line has moved 1.5+ points in one direction this week (plain below that).</li>
+            <li><span class="chip bad">Bad Weather</span>: the kickoff forecast has 20+ mph wind, 10+ mm precipitation, snow, or a high under 20&deg;F.</li>
+            <li><span class="chip gut">GUT</span>: a game's numbers stay hidden until your first click, which is saved once as your gut pick.</li>
+            <li>Once a game starts, each source turns <span class="result-good">green</span> or <span class="result-bad">red</span> by whether its side is winning, and the row is tinted by your own pick.</li>
+          </ul>
         </details>`,
     });
   },
@@ -1036,7 +1004,8 @@ const Pickem = {
         id: g.game_id, g, matchupHtml,
         resultCls: pushed ? 'result-tie' : pickHit === true ? 'result-win' : pickHit === false ? 'result-loss' : '',
         line: move && move.deltaHome ? `moved ${move.deltaHome > 0 ? '+' : ''}${move.deltaHome.toFixed(1)}` : '',
-        tags: [...chips, neutralChipHtml(matchup), qbInjuryRowHtml(g.away, g.home, injuries, depthChart),
+        // QB injuries stay off the row (they're on the pane's venue line) to keep the slate readable.
+        tags: [...chips, neutralChipHtml(matchup),
           mineIsDog ? `<span class="chip warn">${M.dogChip}</span>` : ''],
         cells: {
           Market: (postGame || live) ? Slate.score(g) : (hasLine ? esc(favLabel) : null),
@@ -1119,39 +1088,22 @@ const Pickem = {
       onShow: id => { const c = charts[id]; if (c) this._drawDistChart(c.id, c.sd, c.home, c.away, c.final); },
       foot: `<details>
           <summary class="muted small">Chip legend</summary>
-          <p class="tablefoot muted">Each stat block states that source's own spread + O/U
-            (Market/ELWAY/Power Ranking) or historical ATS cover rate (History) instead of a
-            straight-up pick. ELWAY is Nate Silver's Silver Bulletin NFL forecasting model,
-            transcribed weekly into a Google Sheet.
-            <span class="chip warn">ELWAY underdog</span> = ELWAY's model favors the OTHER
-            team entirely, not just by a smaller or larger margin than the market;
-            <span class="chip warn">Squid Underdog</span> is the same full-flip concept for
-            our OWN Power Ranking instead of ELWAY's. A
-            <span class="chip warn">QB</span> chip (right-aligned under the venue line, below
-            the header) shows that team's QB injury situation (red
-            = Out/IR) regardless of what ELWAY currently assumes at QB1 — if ELWAY's assumed
-            starter is the one flagged, another flagged QB for that team shows too (the
-            presumptive next man up); if ELWAY has already moved QB1 off an injured player (or
-            we don't know who ELWAY has at QB1), this falls back to the worst OTHER flagged QB
-            at Doubtful/Out severity only. Any net line move this week shows as a "Steam:"
-            chip, pinned to the right of the card header, with the signed point move itself
-            (<span class="chip good">Steam: +1.5</span> at/above a 1.5-point move in one
-            direction since this week's first snapshot, <span class="chip">Steam: +0.5</span>
-            plain below that).
-            <span class="chip bad">ELWAY stale QB</span> = ELWAY's weekly sheet is still
-            rating that team with a QB1 our live injury feed now shows hurt.
-            <span class="chip bad">Bad Weather</span> = live forecast at kickoff is bad enough
-            to matter for scoring, shown in each game's detail pane regardless.
-            <span class="stat-label" style="display:inline;text-transform:none;font-weight:600;">Power Ranking</span>
-            states each side's most likely single score (the distribution MODE, not the
-            average) from the same score-distribution pipeline charted in each game's detail
-            section -- frozen at kickoff, like the market line, so it won't drift during a
-            live game. Once a game is final, the ELWAY/History/Power Ranking numbers turn
-            <span class="result-good">green</span> if the side they favored actually covered
-            or <span class="result-bad">red</span> if it didn't (a push grades neither), the
-            whole card gets a light green/red tint if your own pick covered, and O/U swaps to
-            the actual Over/Under result. The market line itself is frozen at whatever it was
-            just before kickoff.</p>
+          <ul class="tablefoot muted">
+            <li>Market, ELWAY and Power Ranking show each source's own spread; History shows the historical ATS cover rate.</li>
+            <li><strong>ELWAY</strong> is Nate Silver's Silver Bulletin forecasting model, transcribed weekly into a Google Sheet.</li>
+            <li><strong>Power Ranking</strong> shows each side's most likely single score from the score distribution charted in the detail pane, frozen at kickoff.</li>
+            <li>A <span class="pick-dog">yellow</span> number means that source favors the other team from the market.</li>
+            <li><span class="chip warn">LIVE · Q3 4:12</span> / <span class="chip muted">Final</span>: the game is in progress or over.</li>
+            <li><span class="chip muted">1st &amp; 10 at KC 35</span>: who has the ball during a live game, red inside the red zone.</li>
+            <li><span class="chip warn">ELWAY underdog</span> / <span class="chip warn">Squid Underdog</span>: ELWAY or our Power Ranking favors the other team from the market, green if you took that team.</li>
+            <li><span class="chip warn">dog</span>: your pick is the market underdog.</li>
+            <li><span class="chip warn">Neutral Site</span>: neither team gets home-field advantage.</li>
+            <li><span class="chip warn">QB</span> (in the detail pane): a starting QB on the injury report, red for Out or IR.</li>
+            <li><span class="chip bad">ELWAY stale QB</span>: ELWAY still rates that team with a QB1 our injury feed shows hurt.</li>
+            <li><span class="chip good">Steam: +1.5</span>: the line has moved 1.5+ points in one direction this week (plain below that).</li>
+            <li><span class="chip bad">Bad Weather</span>: the kickoff forecast has 20+ mph wind, 10+ mm precipitation, snow, or a high under 20&deg;F.</li>
+            <li>Once a game starts, each source turns <span class="result-good">green</span> or <span class="result-bad">red</span> by whether its side is covering (a push grades neither), and the row is tinted by your own pick.</li>
+          </ul>
         </details>`,
     });
   },
