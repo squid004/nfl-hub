@@ -327,7 +327,7 @@ function forecastHtml(matchup, home, away) {
 // shipped (older frozen weeks have no such rating term). Oriented to whichever team is the actual FAVORITE, not home/away: +/green
 // always means "helped the favorite win," -/red always means "worked against them" -- so
 // e.g. home-field advantage shows red whenever the AWAY team is favored, since that edge is
-// then working against the favorite. The caption states whose perspective the table is in
+// then working against the favorite. The caption states whose perspective the breakdown is in
 // once, instead of repeating "(favors X)" on every row.
 function powerModelBreakdownHtml(matchup, home, away) {
   const pm = matchup && matchup.power_model;
@@ -339,11 +339,9 @@ function powerModelBreakdownHtml(matchup, home, away) {
   // No favorite only on an exact-0 delta (true pick'em) -- falls back to the home
   // perspective, an arbitrary but consistent choice since there's no favorite to orient to.
   const flip = (pm.favorite ? pm.favorite === home : true) ? 1 : -1;
-  const row = (label, rawTerm, detail) => {
-    const term = (rawTerm || 0) * flip;
-    const cls = term > 0 ? 'result-good' : term < 0 ? 'result-bad' : 'muted';
-    return `<tr><td>${label}</td><td class="num ${cls}">${term >= 0 ? '+' : ''}${term.toFixed(4)}</td><td class="muted small">${detail}</td></tr>`;
-  };
+  const row = (label, rawTerm, detail) => ({ label, term: (rawTerm || 0) * flip, detail });
+  const signCls = v => v > 0 ? 'result-good' : v < 0 ? 'result-bad' : 'muted';
+  const signed = (v, d) => `${v >= 0 ? '+' : ''}${v.toFixed(d)}`;
   const vs = (key, digits) => `${home} ${(hr[key] ?? 0).toFixed(digits)} vs ${away} ${(ar[key] ?? 0).toFixed(digits)}`;
 
   const hfaDetail = pm.hfa_term !== 0 ? `${home} gets the standard home-field edge` : 'no home-field term';
@@ -379,25 +377,49 @@ function powerModelBreakdownHtml(matchup, home, away) {
     ? `${pm.favorite} <span class="result-good">+${Math.abs(pm.delta).toFixed(2)}</span>`
     : `Pick&rsquo;em <span class="muted">${pm.delta.toFixed(2)}</span>`;
 
-  return `<table class="power-breakdown small">
-    <caption>${caption}</caption>
-    <thead><tr><th>Term</th><th class="num">Delta contribution</th><th>Why</th></tr></thead>
-    <tbody>
-      ${row('Rush Offense', rt.rush_off_epa, vs('rush_off_epa', 0))}
-      ${row('Pass Offense', rt.pass_off_epa, vs('pass_off_epa', 0))}
-      ${row('Rush Defense', rt.rush_def_epa_allowed, vs('rush_def_epa_allowed', 0))}
-      ${row('Pass Defense', rt.pass_def_epa_allowed, vs('pass_def_epa_allowed', 0))}
-      ${row('Points/G', rt.points_off, vs('points_off', 1))}
-      ${row('Points Allowed/G', rt.points_def_allowed, vs('points_def_allowed', 1))}
-      ${row('Turnovers/G', rt.turnovers_off, vs('turnovers_off', 2))}
-      ${rt.pen_presnap_yds != null ? row('Pre-snap Pen Yds/G', rt.pen_presnap_yds, vs('pen_presnap_yds', 1)) : ''}
-      ${rt.elo != null ? row('Elo rating', rt.elo, vs('elo', 0)) : ''}
-      ${row('Home-field advantage', pm.hfa_term, hfaDetail)}
-      ${row('QB health', pm.qb_term, qbDetail)}
-      ${row('Flex Health', pm.skill_term, skillDetail)}
-      ${pm.momentum_term ? row('Momentum', pm.momentum_term, streakDetail) : ''}
-    </tbody>
-  </table>`;
+  // Terms grouped so the pane shows four lines (one per group, with a subtotal bar); each group
+  // opens to its terms and their "why".
+  const groups = [
+    ['Offense', [
+      row('Rush Offense', rt.rush_off_epa, vs('rush_off_epa', 0)),
+      row('Pass Offense', rt.pass_off_epa, vs('pass_off_epa', 0)),
+      row('Points/G', rt.points_off, vs('points_off', 1)),
+      row('Turnovers/G', rt.turnovers_off, vs('turnovers_off', 2)),
+    ]],
+    ['Defense', [
+      row('Rush Defense', rt.rush_def_epa_allowed, vs('rush_def_epa_allowed', 0)),
+      row('Pass Defense', rt.pass_def_epa_allowed, vs('pass_def_epa_allowed', 0)),
+      row('Points Allowed/G', rt.points_def_allowed, vs('points_def_allowed', 1)),
+      rt.pen_presnap_yds != null ? row('Pre-snap Pen Yds/G', rt.pen_presnap_yds, vs('pen_presnap_yds', 1)) : null,
+    ]],
+    ['Team strength', [
+      rt.elo != null ? row('Elo rating', rt.elo, vs('elo', 0)) : null,
+      pm.momentum_term ? row('Momentum', pm.momentum_term, streakDetail) : null,
+    ]],
+    ['Adjustments', [
+      row('Home-field advantage', pm.hfa_term, hfaDetail),
+      row('QB health', pm.qb_term, qbDetail),
+      row('Flex Health', pm.skill_term, skillDetail),
+    ]],
+  ].map(([name, rows]) => {
+    const terms = rows.filter(Boolean);
+    return { name, terms, sum: terms.reduce((s, t) => s + t.term, 0) };
+  }).filter(g => g.terms.length);
+  // Bars are scaled to the largest group, half the track each side of zero.
+  const maxAbs = Math.max(...groups.map(g => Math.abs(g.sum)), 1e-9);
+
+  return `<div class="power-breakdown small">
+    <div class="pb-caption">${caption}</div>
+    ${groups.map(g => {
+      const w = 50 * Math.abs(g.sum) / maxAbs;
+      return `<details class="pb-group"><summary><span class="pb-chev" aria-hidden="true">&rsaquo;</span><span class="pb-name">${g.name}</span>
+          <span class="pb-bar"><i class="${g.sum >= 0 ? 'pos' : 'neg'}" style="left:${g.sum >= 0 ? 50 : 50 - w}%;width:${w}%"></i></span>
+          <span class="num ${signCls(g.sum)}">${signed(g.sum, 3)}</span></summary>
+        <div class="pb-terms">${g.terms.map(t => `<div class="pb-term"><span>${t.label}</span><span class="num ${signCls(t.term)}">${signed(t.term, 4)}</span>
+          <span class="pb-why muted">${t.detail}</span></div>`).join('')}</div>
+      </details>`;
+    }).join('')}
+  </div>`;
 }
 
 // Scores any selection against the week's stored simulation (kv pool_sim), live in the page, with the same rule the engine
@@ -769,8 +791,7 @@ const Pickem = {
     // The sidebar's game list reads this (Shell.renderGames).
     this._mlGames = items.map(i => ({ g: i.g, id: i.id, resultCls: i.resultCls }));
     Slate.render(document.getElementById(M.id), 'ml', {
-      head: `<h2>${M.title} &mdash; ${made}/${games.length} made
-          &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>
+      head: `<h2>${M.title} &mdash; ${made}/${games.length} made</h2>
         ${poolRecWeek ? poolOptimizerSummaryHtml(poolRecWeek, picks, ctx.poolSim, ctx.poolTb) : ''}`,
       columns: ['Market', 'History', 'ELWAY', 'Power Model', 'Pool optimizer'],
       items,
@@ -1079,8 +1100,7 @@ const Pickem = {
 
     const made = Object.keys(picks).length;
     Slate.render(document.getElementById(M.id), 'ats', {
-      head: `<h2>${M.title} &mdash; ${made}/${games.length} made
-          &middot; locks ${games.length ? fmtLocal(games[0].kickoff) : 'TBD'}</h2>`,
+      head: `<h2>${M.title} &mdash; ${made}/${games.length} made</h2>`,
       columns: ['Market', 'ELWAY', 'History', 'Power Ranking'],
       items,
       // The score-distribution chart needs its node in place and sized, so it's drawn when the

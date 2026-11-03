@@ -84,12 +84,22 @@ tr.tot td { border-top:2px solid var(--line); font-weight:600; }
 .stat-block { font-size:.85rem; }
 .stat-label { color:var(--dim); font-size:11px; font-weight:600; text-transform:uppercase; margin-bottom:2px; }
 .game-card-matchup { padding-top:8px; }
-.power-breakdown td, .power-breakdown th { white-space:normal; }
-.power-breakdown td:first-child { font-weight:600; }
-.power-breakdown caption {
-  caption-side:top; text-align:left; padding:2px 8px 9px; font-size:.85rem; font-weight:700;
-  color:var(--text);
-}
+/* Delta breakdown: one collapsible line per term group, with a subtotal bar either side of zero. */
+.pb-caption { padding:2px 0 6px; font-size:.85rem; font-weight:700; color:var(--text); }
+.pb-group { border-bottom:1px solid var(--line-soft); }
+.pb-group > summary { list-style:none; display:grid; grid-template-columns:12px 104px 1fr 52px; gap:8px; align-items:center; padding:6px 0; cursor:pointer; }
+.pb-group > summary::-webkit-details-marker { display:none; }
+.pb-chev { color:var(--dim); transition:transform .15s; }
+.pb-group[open] .pb-chev { transform:rotate(90deg); }
+.pb-name { font-weight:600; }
+.pb-bar { position:relative; height:8px; background:var(--panel2); border-radius:4px; }
+.pb-bar::before { content:""; position:absolute; left:50%; top:-2px; bottom:-2px; border-left:1px solid var(--line); }
+.pb-bar i { position:absolute; top:0; height:8px; border-radius:4px; }
+.pb-bar i.pos { background:var(--good); }
+.pb-bar i.neg { background:var(--bad); }
+.pb-terms { padding:0 0 8px 20px; }
+.pb-term { display:grid; grid-template-columns:1fr auto; column-gap:8px; padding:1px 0; }
+.pb-why { grid-column:1 / -1; font-size:var(--fs-xs); margin-top:-1px; }
 .dist-chart { width:100%; height:220px; margin-top:4px; }
 .dist-caption { margin-top:2px; }
 .game-card-details { margin-top:8px; }
