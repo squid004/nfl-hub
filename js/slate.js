@@ -25,11 +25,9 @@ const Slate = {
     return { label: fmtLocal(g.kickoff, false), cls: '' };
   },
 
-  // A score as "24–30" (away–home, like the matchup), the leader marked.
+  // A score as "24–30" (away–home, like the matchup).
   score(g) {
-    const a = +g.away_score || 0, h = +g.home_score || 0;
-    const lead = s => `<span class="${s ? 'result-good' : ''}">`;
-    return `<span class="slate-score">${lead(a > h)}${a}</span>&ndash;${lead(h > a)}${h}</span></span>`;
+    return `<span class="slate-score">${+g.away_score || 0}&ndash;${+g.home_score || 0}</span>`;
   },
 
   // One row. cells: {label: html|null}; blind: [awayButtonHtml, homeButtonHtml] while the
