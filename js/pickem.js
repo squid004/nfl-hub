@@ -253,6 +253,20 @@ function liveSituationHtml(g, live) {
   return `<div class="small" style="margin:-2px 0 6px;"><span class="chip ${cls}">${esc(g.live_situation)}</span></div>`;
 }
 
+// The game's scoreboard in its detail pane once it has started: a row per team with each
+// quarter (from ESPN's linescores, which App._pollLiveScores attaches) and the total. Before the
+// first ESPN read lands it is just the two totals.
+function scoreboardHtml(g) {
+  if (g.state !== 'in' && g.state !== 'post') return '';
+  const al = g.away_linescores || [], hl = g.home_linescores || [];
+  const periods = Math.max(al.length, hl.length);
+  const qName = i => i < 4 ? String(i + 1) : (periods > 5 ? `OT${i - 3}` : 'OT');
+  const cells = (ls, i) => ls[i] != null ? ls[i] : '';
+  return `<table class="scoreboard small"><thead><tr><th></th>${Array.from({ length: periods }, (_, i) => `<th class="num">${qName(i)}</th>`).join('')}<th class="num">T</th></tr></thead>
+    <tbody>${[[g.away, al, g.away_score], [g.home, hl, g.home_score]].map(([team, ls, total]) =>
+      `<tr><td>${esc(team)}</td>${Array.from({ length: periods }, (_, i) => `<td class="num">${cells(ls, i)}</td>`).join('')}<td class="num sb-total">${+total || 0}</td></tr>`).join('')}</tbody></table>`;
+}
+
 // Full forecast for the card's details layer -- everything fetch_forecast_weather() returns,
 // not just the 3 fields the points-prediction adjustment actually uses.
 function forecastSummary(wx) {
@@ -640,10 +654,6 @@ const Pickem = {
       const pickHit = (postGame || live) && mine && result !== 'TIE' ? mine === result : null;
       const tied = result === 'TIE';
       const resultClass = v => v === true ? 'result-good' : v === false ? 'result-bad' : '';
-      // Once started, the line/implied-% stop mattering -- show the real score instead,
-      // current/final leader bolded green.
-      const scorePart = (team, score) => result === team
-        ? `<span class="result-good">${team} ${score}</span>` : `${team} ${score}`;
 
       const bucketRank = bucketRanks[g.game_id] || null;
       // Prefer the bucket the ranking itself used (computeBudget prefers the cross-book
@@ -725,16 +735,15 @@ const Pickem = {
           ${chips.join('')}
           ${lineMoveChip(move)}
         </div>
+        ${scoreboardHtml(g)}
         ${venueRowHtml(matchup, g.away, g.home, injuries, depthChart)}
         ${liveSituationHtml(g, live)}
         ${hasLine ? `<div class="market-line">${esc(o.book ?? 'Market')}: ${favLabel}</div>` : ''}
         <div class="game-card-body">
           <div class="stat-block">
             <div class="stat-label">Market</div>
-            ${(postGame || live)
-              ? `<div>${scorePart(g.away, g.away_score)} - ${scorePart(g.home, g.home_score)}</div>`
-              : `<div>${favTeam} ${pct(favTeam === g.home ? o.implied_home : o.implied_away)}</div>
-                 ${move ? `<div class="muted small">opened ${signed(move.open)}</div>` : ''}`}
+            <div>${hasLine ? `${favTeam} ${pct(favTeam === g.home ? o.implied_home : o.implied_away)}` : '—'}</div>
+            ${move ? `<div class="muted small">opened ${signed(move.open)}</div>` : ''}
           </div>
           <div class="stat-block">
             <div class="stat-label">History</div>
@@ -996,8 +1005,6 @@ const Pickem = {
         ? (g.home_score + g.away_score > o.total ? `Over ${o.total}`
            : g.home_score + g.away_score < o.total ? `Under ${o.total}` : `Push ${o.total}`)
         : `O/U ${o.total ?? '—'}`;
-      const scorePart = (team, score) => result === team
-        ? `<span class="result-good">${team} ${score}</span>` : `${team} ${score}`;
 
       const elwayFlip = hasLine && elwayFullDisagree(el, g.home, g.away, favTeam);
       const squidFlip = hasLine && prSf && squidFullDisagree(prSf.team, favTeam);
@@ -1045,16 +1052,14 @@ const Pickem = {
           ${chips.join('')}
           ${lineMoveChip(move)}
         </div>
+        ${scoreboardHtml(g)}
         ${venueRowHtml(matchup, g.away, g.home, injuries, depthChart)}
         ${liveSituationHtml(g, live)}
         <div class="game-card-body">
           <div class="stat-block">
             <div class="stat-label">Market</div>
-            ${(postGame || live)
-              ? `<div>${scorePart(g.away, g.away_score)} - ${scorePart(g.home, g.home_score)}</div>
-                 <div class="muted">${ouLabel}</div>`
-              : `<div>${favLabel}</div>
-                 <div class="muted">${ouLabel}</div>`}
+            <div>${favLabel}</div>
+            <div class="muted">${ouLabel}</div>
           </div>
           <div class="stat-block">
             <div class="stat-label">ELWAY</div>

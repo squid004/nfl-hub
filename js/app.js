@@ -37,6 +37,9 @@ const App = {
   _ctx: null,
   _timer: null,
   _liveTimer: null,
+  // game_id -> {away, home} per-quarter scores from ESPN, kept across reloads (the games from
+  // Supabase don't carry them) so a finished game's scoreboard is fetched once.
+  _lineScores: new Map(),
   // null = viewing the live/current week; a number = browsing a past week's Moneyline
   // Pick'em, ATS, Power Rankings, and Parlays. The Power Rankings page's Historical Rankings view is never affected
   // (it already covers every season, independent of any single week). Deadlines (header
@@ -199,6 +202,10 @@ const App = {
                     injuries, spreadHist, elwayQb1, teamRatings, qbDepthChart, parlaySnapshot, historicalPower, elwayScoreHistory,
                     pipelineHealth, gutPicks, prospectiveLog, poolRec, poolSim, poolTb, poolBacktest };
       this._ctx = ctx;
+      for (const g of games) {
+        const ls = this._lineScores.get(g.game_id);
+        if (ls) { g.away_linescores = ls.away; g.home_linescores = ls.home; }
+      }
       this._renderWeekSelect(liveWeek, viewWeek);
       // Deadlines always reflects the REAL current week/games, never the browsed one -- a
       // "locks at" countdown for a week that already happened would just read as overdue.
@@ -218,6 +225,9 @@ const App = {
       this.renderStatus(ctx);
       Shell.render(ctx);
       this._syncLivePolling();
+      // A started game without its quarter scores yet (e.g. finished before this page opened):
+      // one ESPN read fills them in. Live games are covered by the live poll itself.
+      if (!this._liveTimer && games.some(g => g.state === 'post' && !this._lineScores.has(g.game_id))) this._pollLiveScores();
       if (histFetch) {
         histFetch.then(h => {
           this._hist = h;
@@ -293,6 +303,7 @@ const App = {
           // already shown elsewhere on the card).
           clock: (state === 'in' || state === 'post') ? (comp.status?.type?.shortDetail || null) : null,
           situation: state === 'in' ? _situationText(comp, possAbbr, otherAbbr) : null,
+          lines: { away: (away?.linescores || []).map(l => l.value), home: (home?.linescores || []).map(l => l.value) },
         });
       }
       let changed = false;
@@ -301,6 +312,12 @@ const App = {
         if (!upd) continue;
         const sitText = upd.situation ? upd.situation.text : null;
         const sitRedZone = upd.situation ? upd.situation.redZone : false;
+        if (upd.state !== 'pre') {
+          const prev = this._lineScores.get(g.game_id);
+          if (!prev || prev.away.join() !== upd.lines.away.join() || prev.home.join() !== upd.lines.home.join()) changed = true;
+          this._lineScores.set(g.game_id, upd.lines);
+          g.away_linescores = upd.lines.away; g.home_linescores = upd.lines.home;
+        }
         if (g.state !== upd.state || g.home_score !== upd.home_score || g.away_score !== upd.away_score
             || g.live_clock !== upd.clock || g.live_situation !== sitText || g.live_red_zone !== sitRedZone) {
           g.state = upd.state; g.home_score = upd.home_score; g.away_score = upd.away_score;
