@@ -85,28 +85,24 @@ const Agreement = {
       if ((nowAgree ? t.agreeN : t.disN) >= this.MIN_GAMES) break;
     }
 
+    // Only the row that applies to this game: when market and model agree they are both right
+    // or both wrong; when they disagree exactly one of them is right.
     const cell = (v, n) => n ? `${v} <span class="muted small">(${(100 * v / n).toFixed(0)}%)</span>` : '<span class="muted">—</span>';
-    const agreeRow = `<tr${nowAgree ? ' style="font-weight:600;"' : ''}>
-      <td>Market &amp; model agreed</td><td class="num">${t.agreeN}</td>
-      <td class="num">${cell(t.agreeRight, t.agreeN)}</td><td class="num">${cell(t.agreeRight, t.agreeN)}</td>
-      <td class="num">${cell(t.agreeN - t.agreeRight, t.agreeN)}</td></tr>`;
-    const disRow = `<tr${nowAgree ? '' : ' style="font-weight:600;"'}>
-      <td>Market &amp; model disagreed</td><td class="num">${t.disN}</td>
-      <td class="num">${cell(t.marketRight, t.disN)}</td><td class="num">${cell(t.powerRight, t.disN)}</td>
-      <td class="num muted">—</td></tr>`;
+    const [n, heads, vals] = nowAgree
+      ? [t.agreeN, ['Both right', 'Both wrong'], [t.agreeRight, t.agreeN - t.agreeRight]]
+      : [t.disN, ['Market right', 'Power right'], [t.marketRight, t.powerRight]];
 
     const f1 = x => (+x.toFixed(2)).toString();
     const mktTxt = lvl.m ? `${f1(mkt)} &plusmn;${f1(lvl.m)}` : `exactly ${f1(mkt)}`;
     const widened = lvl !== this.LEVELS[0];
-    const enough = (nowAgree ? t.agreeN : t.disN) >= this.MIN_GAMES;
+    const enough = n >= this.MIN_GAMES;
     return `<div class="game-card-matchup">
-      <div class="stat-label" title="Graded games (2007 on) with a similar market spread and a similar model delta, the delta converted to points at ${k.toFixed(2)} pts per 1.0 delta. The windows widen only until ${this.MIN_GAMES}+ games match in the agreed/disagreed row that applies to this game.">Similar games</div>
-      <div class="muted small">Market spread ${mktTxt} pts &middot; model &Delta; ${f1(Math.abs(delta))} &asymp; ${pts.toFixed(1)} pts (&plusmn;${f1(lvl.d)}) &mdash; they ${nowAgree ? '<strong>agree</strong>' : '<strong>disagree</strong>'} here.${widened ? (enough ? ` Window widened to reach ${this.MIN_GAMES}+ comparable games.` : ` Widest window used and still only ${nowAgree ? t.agreeN : t.disN} comparable games -- treat with caution.`) : ''}</div>
-      <div style="overflow-x:auto;"><table class="small" style="margin-top:4px;">
-        <thead><tr><th></th><th class="num">Games</th><th class="num">Market right</th><th class="num">Power right</th><th class="num">Both wrong</th></tr></thead>
-        <tbody>${agreeRow}${disRow}</tbody>
-      </table></div>
-      <div class="muted small">Ties excluded. When they agree both are right or both wrong; when they disagree exactly one is right.</div>
+      <div class="stat-label" title="Graded games (2007 on) with a similar market spread and a similar model delta, the delta converted to points at ${k.toFixed(2)} pts per 1.0 delta. The windows widen only until ${this.MIN_GAMES}+ games match in the agreed/disagreed group that applies to this game. Ties excluded.">Similar games</div>
+      <div class="muted small">Market spread ${mktTxt} pts &middot; model &Delta; ${f1(Math.abs(delta))} &asymp; ${pts.toFixed(1)} pts (&plusmn;${f1(lvl.d)}) &mdash; they ${nowAgree ? '<strong>agree</strong>' : '<strong>disagree</strong>'} here.${widened ? (enough ? ` Window widened to reach ${this.MIN_GAMES}+ comparable games.` : ` Widest window used and still only ${n} comparable games -- treat with caution.`) : ''}</div>
+      <table class="small" style="margin-top:4px;width:100%;">
+        <thead><tr><th class="num">Games</th>${heads.map(h => `<th class="num">${h}</th>`).join('')}</tr></thead>
+        <tbody><tr><td class="num">${n}</td>${vals.map(v => `<td class="num">${cell(v, n)}</td>`).join('')}</tr></tbody>
+      </table>
     </div>`;
   },
 };

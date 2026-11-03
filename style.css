@@ -973,6 +973,8 @@ main .panel { scroll-margin-top: calc(var(--sticky-h) + 64px); }
   .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(420px, 36%); gap: var(--sp-4); align-items: start; }
   .split.all-blind { grid-template-columns: minmax(0, 1fr); }
   .split.all-blind > .pane { display: none; }
+  /* Power/Historical: no team open means no pane, so the table gets the full width. */
+  .team-split:not(.is-open) { grid-template-columns: minmax(0, 1fr); }
   /* No scrollbar of its own: hub/pane-stick.js moves `top` so the page is the only scroll. */
   .pane {
     display: flex; flex-direction: column;
