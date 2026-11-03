@@ -816,6 +816,8 @@ body.read-only .game-card-pick > .game-card-mine.muted.small::after {
 
 .slate-status { font-size: var(--fs-sm); color: var(--dim); white-space: nowrap; }
 .slate-row.is-live .slate-status { color: var(--warn); font-weight: 650; }
+.slate-status .slate-score { display: block; color: var(--text); font-weight: 650; font-variant-numeric: tabular-nums; }
+.slate-when { display: block; }
 .slate-open {
   display: block; max-width: 100%; min-height: 0; padding: 0; border: none; background: none;
   color: var(--text); font-size: var(--fs-base); text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -991,7 +993,7 @@ main .panel { scroll-margin-top: calc(var(--sticky-h) + 64px); }
   .slate-row.slate-head { display: none; }
   .slate-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 12px 12px 12px 14px; }
   .slate-row > *, .slate-row > :first-child, .slate-row > :last-child { padding: 0; }
-  .slate-status { order: 1; flex-basis: 100%; font-size: var(--fs-xs); }
+  .slate-status { order: 1; flex-basis: 100%; font-size: var(--fs-xs); display: flex; gap: 8px; }
   .slate-game { order: 2; flex: 1 1 calc(100% - 150px); min-width: 0; }
   .slate-open .team-record { display: none; }
   .slate-pick { order: 3; }

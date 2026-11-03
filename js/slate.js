@@ -17,7 +17,8 @@ const Slate = {
   _wired: new Set(),
   docked: window.matchMedia('(min-width: 1700px)'),
 
-  // Status cell text: kickoff before the game, the live clock during it, Final after.
+  // Status cell text: kickoff before the game, the live clock during it, Final after (the score
+  // sits above it once the game starts).
   status(g) {
     if (g.state === 'in') return { label: g.live_clock ? g.live_clock.replace(/\s*-\s*/, ' · ') : 'Live', cls: 'is-live' };
     if (g.state === 'post') return { label: g.live_clock || 'Final', cls: 'is-final' };
@@ -38,7 +39,7 @@ const Slate = {
     return {
       id, g, resultCls, blind: !!blind, done: g.state === 'post', cells,
       html: columns => `<div class="slate-row ${st.cls} ${resultCls}${blind ? ' is-blind' : ''}" data-game="${esc(id)}" role="row">
-        <div class="slate-status" role="cell">${esc(st.label)}</div>
+        <div class="slate-status" role="cell">${g.state === 'in' || g.state === 'post' ? this.score(g) : ''}<span class="slate-when">${esc(st.label)}</span></div>
         <div class="slate-game" role="cell">
           <button type="button" class="slate-open" aria-label="${esc(`${g.away} at ${g.home}, ${st.label}. Show this game`)}"><span class="matchup">${matchupHtml}</span></button>
           ${line ? `<div class="slate-sub">${line}</div>` : ''}

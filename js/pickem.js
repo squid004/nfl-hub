@@ -708,7 +708,7 @@ const Pickem = {
           cbsFlag,
           poolRecWeek && g.game_id === tbGameId ? '<span class="chip" title="The pool\'s tiebreaker is this game\'s total points; your guess is on its card">Tiebreaker</span>' : ''],
         cells: {
-          Market: (postGame || live) ? Slate.score(g) : (hasLine ? `${favTeam} ${pct(favTeam === g.home ? o.implied_home : o.implied_away)}` : null),
+          Market: hasLine ? `${favTeam} ${pct(favTeam === g.home ? o.implied_home : o.implied_away)}` : null,   // frozen at kickoff; the score is in the status cell
           History: histCell ? `<span class="${resultClass(histHit)}">${favTeam} ${pct(histCell.su)}</span>` : null,
           ELWAY: elwayFav ? `<span class="${resultClass(elwayHit)}${lean(elwayFav.team)}">${elwayFav.team} ${pct(elwayFav.pct)}</span>` : null,
           'Power Model': pm && pm.favorite ? `<span class="${resultClass(pmHit)}${lean(pm.favorite)}">${pm.favorite} ${pct(pm.prob)}</span>` : null,
@@ -799,7 +799,7 @@ const Pickem = {
           <summary class="muted small">Chip legend</summary>
           <ul class="tablefoot muted">
             <li>Your pick is highlighted in the matchup: <span class="pick-fav">green</span> for the favorite, <span class="pick-dog">yellow</span> for an upset.</li>
-            <li><strong>Market</strong> is the favorite's de-vigged win chance from the moneyline, frozen at kickoff and replaced by the score once the game starts.</li>
+            <li><strong>Market</strong> is the favorite's de-vigged win chance from the moneyline, frozen at kickoff.</li>
             <li><strong>History</strong> is how often favorites at this spread have won historically.</li>
             <li><strong>ELWAY</strong> is Nate Silver's Silver Bulletin forecasting model, transcribed weekly into a Google Sheet.</li>
             <li><strong>Power Model</strong> is the Power Rankings composite applied to this matchup and calibrated to a win probability; like ELWAY and History, it does not beat the market in backtests.</li>
@@ -1029,7 +1029,7 @@ const Pickem = {
         tags: [...chips, neutralChipHtml(matchup),
           mineIsDog ? `<span class="chip warn">${M.dogChip}</span>` : ''],
         cells: {
-          Market: (postGame || live) ? Slate.score(g) : (hasLine ? esc(favLabel) : null),
+          Market: hasLine ? esc(favLabel) : null,   // frozen at kickoff; the score is in the status cell
           ELWAY: elwaySf ? `<span class="${resultClass(elwayHit)}${lean(elwaySf.team)}">${esc(elwaySf.label)}</span>` : null,
           History: histCell && histCell.ats != null ? `<span class="${resultClass(histHit)}">${favTeam} ${pct(histCell.ats)}</span>` : null,
           'Power Ranking': prSf ? `<span class="${resultClass(prHit)}${lean(prSf.team)}">${esc(prSf.label)}</span>` : null,
