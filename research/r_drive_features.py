@@ -28,12 +28,14 @@ SEASONS = list(range(2007, 2026))
 WP_LO, WP_HI = 0.05, 0.95
 THREE_MIN = 180
 PLAYS = ["run", "pass", "no_play", "punt", "field_goal", "qb_kneel", "qb_spike"]
-WANT = {"game_id", "play_id", "fixed_drive", "posteam", "play_type", "epa", "wp", "half_seconds_remaining", "season_type", "play_deleted"}
+WANT = {"game_id", "play_id", "fixed_drive", "posteam", "defteam", "play_type", "epa", "wp", "half_seconds_remaining", "season_type", "play_deleted"}
 
 
-def extract_season(season: int) -> pd.DataFrame:
-    path = os.path.join(CACHE, f"v83_epd_{season}.parquet")
-    if os.path.exists(path):
+def drive_table(season: int, use_cache: bool = True) -> pd.DataFrame:
+    """One row per ELIGIBLE drive (garbage drives already discarded): game_id, team (offense), def_team, epd, start (seconds left in the half when the
+    drive began), three_min. The current season is never cached."""
+    path = os.path.join(CACHE, f"v83_drives_{season}.parquet")
+    if use_cache and os.path.exists(path):
         return pd.read_parquet(path)
     for attempt in range(6):
         try:
@@ -47,12 +49,24 @@ def extract_season(season: int) -> pd.DataFrame:
     df = df[(df["season_type"] == "REG") & (df["play_deleted"].fillna(0) != 1)]
     df = df[df["play_type"].isin(PLAYS) & df["posteam"].notna() & df["fixed_drive"].notna()].sort_values(["game_id", "play_id"])
     d = df.groupby(["game_id", "fixed_drive"]).agg(
-        team=("posteam", "first"), n_off=("posteam", "nunique"), epd=("epa", "sum"), start=("half_seconds_remaining", "first"),
+        team=("posteam", "first"), def_team=("defteam", "first"), n_off=("posteam", "nunique"), epd=("epa", "sum"), start=("half_seconds_remaining", "first"),
         wp_min=("wp", "min"), wp_max=("wp", "max")).reset_index()
     d = d[(d["n_off"] == 1) & d["epd"].notna()]
     # garbage time: any play in the drive outside the win-probability band discards the whole drive
     d = d[~((d["wp_min"] < WP_LO) | (d["wp_max"] > WP_HI))]
     d["three_min"] = d["start"] <= THREE_MIN
+    d = d[["game_id", "team", "def_team", "epd", "start", "three_min"]].reset_index(drop=True)
+    if use_cache:
+        os.makedirs(CACHE, exist_ok=True)
+        d.to_parquet(path)
+    return d
+
+
+def extract_season(season: int) -> pd.DataFrame:
+    path = os.path.join(CACHE, f"v83_epd_{season}.parquet")
+    if os.path.exists(path):
+        return pd.read_parquet(path)
+    d = drive_table(season)
     g = d.groupby(["game_id", "team"]).apply(lambda x: pd.Series({
         "epd_reg": x.loc[~x.three_min, "epd"].mean(), "n_reg": float((~x.three_min).sum()),
         "epd_3min": x.loc[x.three_min, "epd"].mean(), "n_3min": float(x.three_min.sum()),
