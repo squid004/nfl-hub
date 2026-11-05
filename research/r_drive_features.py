@@ -31,6 +31,37 @@ PLAYS = ["run", "pass", "no_play", "punt", "field_goal", "qb_kneel", "qb_spike"]
 WANT = {"game_id", "play_id", "fixed_drive", "posteam", "defteam", "play_type", "epa", "wp", "half_seconds_remaining", "season_type", "play_deleted"}
 
 
+def _drives(season: int) -> pd.DataFrame:
+    """Every drive of the season's regular-season games, NO exclusions: game_id, team (offense), def_team, epd, start, wp_min, wp_max, n_off."""
+    for attempt in range(6):
+        try:
+            df = pd.read_csv(PBP_URL.format(season=season), compression="gzip", low_memory=False, usecols=lambda c: c in WANT)
+            break
+        except Exception as exc:  # noqa: BLE001
+            if attempt == 5:
+                raise
+            print(f"    {season}: download failed ({exc}); retry {attempt + 1}/5", file=sys.stderr)
+            time.sleep(15 * (attempt + 1))
+    df = df[(df["season_type"] == "REG") & (df["play_deleted"].fillna(0) != 1)]
+    df = df[df["play_type"].isin(PLAYS) & df["posteam"].notna() & df["fixed_drive"].notna()].sort_values(["game_id", "play_id"])
+    return df.groupby(["game_id", "fixed_drive"]).agg(
+        team=("posteam", "first"), def_team=("defteam", "first"), n_off=("posteam", "nunique"), epd=("epa", "sum"),
+        start=("half_seconds_remaining", "first"), wp_min=("wp", "min"), wp_max=("wp", "max")).reset_index()
+
+
+def all_drives(season: int, use_cache: bool = True) -> pd.DataFrame:
+    """All drives, no garbage-time or 3-minute exclusion (for drives-per-game counts). The current season is never cached."""
+    path = os.path.join(CACHE, f"v83_alldrives_{season}.parquet")
+    if use_cache and os.path.exists(path):
+        return pd.read_parquet(path)
+    d = _drives(season)
+    d = d[d["n_off"] == 1].reset_index(drop=True)
+    if use_cache:
+        os.makedirs(CACHE, exist_ok=True)
+        d.to_parquet(path)
+    return d
+
+
 def drive_table(season: int, use_cache: bool = True) -> pd.DataFrame:
     """One row per ELIGIBLE drive (garbage drives already discarded): game_id, team (offense), def_team, epd, start (seconds left in the half when the
     drive began), three_min. The current season is never cached."""
