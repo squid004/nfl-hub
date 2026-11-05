@@ -27,6 +27,10 @@ special-teams EPA (`st_kp`, +0.0009 AUC, p = 0.07, better in 73% of seasons, WAT
 v77: switching R to a team-points target (two rows per game, offense-vs-defense structure, win probability from the predicted margin) ties the win/loss logistic on the same stats (dAUC -0.0002) and gains +0.0010 AUC with the 17 extra stats added (p = 0.22). It does not buy accuracy by itself, but it gives points-valued components, totals and a spread, so it becomes R's working structure. Read: the missing information is small and spread thin, so one-at-a-time tests cannot resolve it. R0 is already within noise of
 production, which makes it a sound foundation. The larger upside is probably NEW information (below), not recovering PPG.
 
+## Update 2026-11-05 (v78)
+
+Added to the points-target model one family at a time: sacks and QB hits (F1, +0.0013 AUC, p = 0.18, WATCH), pass-game shape (F2, nothing), turnover quality (F3, nothing), injuries (F4, +0.0043 AUC, p < 0.001, driven by the QB gaps). Stack F1-F4 + 17 candidates: AUC 0.7020 vs. 0.6966 for the baseline. Pass protection is the most repeatable stat screened (QB hits allowed reliability 0.79); pass rush and turnovers are not (0.2-0.5). The F4 gain needs a leak-free re-test first (the historical QB gap uses who actually played). Next: v79 leak-free QB injury features, then a points-valued QB term.
+
 ## Rules of the track
 
 1. R never uses points scored or allowed, in any form.

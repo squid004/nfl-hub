@@ -507,6 +507,20 @@ revisiting.
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
+- **Research model R, points-target structure: pressure, pass-game, turnover-quality and injury families** (v78, 2026-11-05; research branch).
+  Each family added to the v77 team-points model (baseline B: AUC 0.6966, log loss 0.6279, 3,906 games 2011-2025; offense-vs-defense roles,
+  ridge lambda 300), judged on the win metrics with the pre-registered rule. F1 sacks and QB hits (allowed / forced): +0.0013 AUC, +0.0004 LL,
+  positive in both halves, p = 0.18 (WATCH). F2 completion rate, air yards, YAC: nothing. F3 interception and fumble rates: nothing
+  (negative; the stats barely repeat, reliability 0.2-0.3). **F4 injuries (own and opponent QB gap, skill-out): ADOPT-grade, +0.0043 AUC,
+  +0.0029 LL, both halves, p < 0.001, better in 87% of seasons**, almost entirely the QB gaps (QB-only +0.0040 AUC, p = 0.001, 93% of
+  seasons; skill-out alone +0.0005, p = 0.10). Stacks: F1-F4 AUC 0.7011, + the 17 v52 candidates 0.7020 (p = 0.016-0.023, not significant
+  against the strict bar but the best R configuration so far). Persistence screen (reliability): QB hits allowed 0.79 (the most repeatable stat
+  screened anywhere in this project), completion rate 0.71, air yards 0.69, sacks allowed 0.65, sacks forced 0.29, interceptions 0.30,
+  fumbles 0.29, takeaways 0.20-0.26. **Caveat on F4:** the historical QB gap is built from the passer who actually played (the same
+  construction as production's backtest), which includes surprise changes and in-game replacements that were not knowable before kickoff,
+  so the F4 gain may overstate what the pre-game injury report delivers; a leak-free version (primary QB's pre-game status from the
+  injury report only) is the next test before F4 is trusted.
+
 - **Team-points target instead of win/loss (research model R)** (v77, 2026-11-05). Two rows per game, ridge regression of each team's points
   on its own offense (rush/pass EPA, giveaways), the opponent's defense (rush/pass EPA allowed, takeaways), pre-snap penalties, Elo difference,
   home/away and, in the larger version, the 17 extra v52 stats; predicted margin = home minus away points, P(win) = Phi(margin / sigma);
