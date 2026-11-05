@@ -507,6 +507,15 @@ revisiting.
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
+- **Production's QB term on the pre-game gap** (v80, 2026-11-05; research branch). v64's fully walk-forward production pipeline (momentum removed),
+  2011-2026 (4,026 games), with three QB treatments: P0 today's hindsight gap, P1 the leak-free (injury-report-only) EPA gap, P3 no QB term. P0
+  vs P3: dAUC +0.0040, dLL +0.0027, p = 0.001, 88% of seasons: the term earns its place on the hindsight gap, as before. P1 vs P3: dAUC +0.0013, dLL
+  +0.0004, p = 0.32, 56% of seasons: on pre-game information alone the production-style linear QB term barely earns anything; P1 vs P0 is worse
+  (dAUC -0.0027, p = 0.98). The fitted weight on the leak-free gap is -3.16 against -1.23 on the hindsight gap, i.e. the live (report-flagged)
+  use is probably under-weighted by about 2.6x. On the 301 test games where one team's primary QB was flagged Out/Doubtful, the affected team won
+  34.2% of the time; the models predicted 45.5% (no QB term), 43.9% (production) and 41.8% (leak-free refit). Nothing changed in production:
+  the pre-registered rule is not met, but the slice calibration says the live QB adjustment is too small, which is a decision for the owner.
+
 - **Leak-free QB injury gap** (v79, 2026-11-05; research branch; follow-up to v78's F4 caveat). The historical QB gap (production's backtest and
   v78 F4) credits whoever actually played; rebuilt from pre-game information only (primary QB = plurality of the last 5 starters, flagged only
   when the nflverse injury report lists him Out/Doubtful, pooled backup average, 0.6^streak decay), it flags 309 team-games in 2011-2025 against
