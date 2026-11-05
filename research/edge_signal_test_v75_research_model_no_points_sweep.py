@@ -39,6 +39,25 @@ import edge_signal_test_v53_walkforward_extra_terms as v53  # noqa: E402
 from edge_signal_test_v52_extra_terms_screen import BENCH, build_team_games  # noqa: E402
 from edge_signal_test_v55_market_free_candidate_sweep import CANDS, judge  # noqa: E402
 
+# nflverse's release downloads (the uncached current-season play-by-play file in particular) intermittently time out with a 504; research runs
+# retry instead of dying 20 minutes in. Research-only: production's own function is untouched.
+_orig_phase_stats = tr._phase_stats_for_season
+
+
+def _phase_stats_retry(season: int, current_season: int):
+    import time
+    for attempt in range(6):
+        try:
+            return _orig_phase_stats(season, current_season)
+        except Exception as exc:  # noqa: BLE001
+            if attempt == 5:
+                raise
+            print(f"    play-by-play {season} download failed ({exc}); retry {attempt + 1}/5", file=sys.stderr)
+            time.sleep(20 * (attempt + 1))
+
+
+tr._phase_stats_for_season = _phase_stats_retry
+
 L2 = 0.03
 ALPHA, PRIOR_GAMES = 0.08, 8
 POINTS = ["points_off_b", "points_def_b"]
