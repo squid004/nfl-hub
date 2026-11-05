@@ -1478,6 +1478,17 @@ def elo_ratings(played_games: list[dict]) -> tuple[dict[str, tuple[float, float,
     return out, rating
 
 
+# Opponent adjustment of the four EPA stats inside compute_ratings (research v74; 0 = off, the shipped behavior). When on, each
+# game's observed value is discounted by how generous/tough that opponent had been BEFORE the game: a team's rush offense is
+# reduced by K * (opponent's rush defense allowed - league average), its rush defense allowed by K * (opponent's rush offense -
+# league average), and the same for pass. A bad rush defense against a very strong rush offense therefore counts for less.
+# Uses only pre-game ratings (no lookahead) and the same blended ratings everything else reads.
+OPP_ADJUST_K = 0.0
+OPP_ADJUST_PAIRS = {"rush_off_epa": "rush_def_epa_allowed", "pass_off_epa": "pass_def_epa_allowed",
+                    "rush_def_epa_allowed": "rush_off_epa", "pass_def_epa_allowed": "pass_off_epa"}
+OPP_ADJUST_MIN_TEAMS = 16
+
+
 def compute_ratings(
     played_games: list[dict], current_season: int, game_log: list[dict] | None = None,
     weekly_ratings: dict[tuple[int, int], dict[str, dict[str, float]]] | None = None,
@@ -1677,6 +1688,21 @@ def compute_ratings(
 
         if gid in elo_by_game:
             rating[home]["elo"], rating[away]["elo"] = elo_by_game[gid][2], elo_by_game[gid][3]
+        if OPP_ADJUST_K:
+            league_mean: dict[str, float] = {}
+            for mo in OPP_ADJUST_PAIRS:
+                vals = [r[mo] for r in rating.values() if r[mo] is not None]
+                if len(vals) >= OPP_ADJUST_MIN_TEAMS:
+                    league_mean[mo] = sum(vals) / len(vals)
+            home_adj, away_adj = dict(home_raw), dict(away_raw)
+            for m, mo in OPP_ADJUST_PAIRS.items():
+                if mo not in league_mean:
+                    continue
+                if rating[away][mo] is not None:
+                    home_adj[m] = home_raw[m] - OPP_ADJUST_K * (rating[away][mo] - league_mean[mo])
+                if rating[home][mo] is not None:
+                    away_adj[m] = away_raw[m] - OPP_ADJUST_K * (rating[home][mo] - league_mean[mo])
+            home_raw, away_raw = home_adj, away_adj
         for team, raw in ((home, home_raw), (away, away_raw)):
             for m in RATING_METRICS:
                 prev = season_ewma[team][m]
