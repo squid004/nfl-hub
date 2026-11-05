@@ -376,6 +376,30 @@ revisiting.
 
 ### 3.1 Confirmed null (don't re-attempt without new reasoning)
 
+- **Simultaneous (ridge) opponent adjustment of the EPA stats** (v76, 2026-10-31; follow-up to v74's naive version). Per stat, rush and
+  pass EPA/play per team-game fit as `mu + off(team) + def(opponent)` by time-decayed weighted ridge on all earlier games (pre-game ratings
+  only), replacing R0's four EWMA EPA stats; half-life H in {10, 20} weeks x lambda in {5, 15, 40}; weights refit walk-forward, 2011-2025
+  (3,906 games). Every pre-registered candidate loses to the EWMA baseline (AUC -0.003 to -0.0065, worse as the half-life grows). A control
+  with identical time weighting and shrinkage but NO opponent term shows why: the loss is the time structure (production's EWMA fades a
+  season prior over 8 games; a long-memory ridge carries last season too far), not the adjustment. Judged on its own, adjusted vs.
+  unadjusted at the same settings: dAUC -0.0007 to +0.0000, P(dLL <= 0) 0.56-0.92, better in 33-47% of seasons: nothing. Exploratory
+  second pass at H = 5 weeks (added after the first run, not pre-registered): adjusted vs. control dAUC +0.0001 to +0.0003, positive in the
+  <=2018 half and negative in the >2018 half, P = 0.17-0.27; adjusted vs. R0 still slightly worse. Reading: with ~17 games, balanced
+  schedules and a noisy rating (defensive EPA repeats at ~0.38) there is very little schedule strength to remove, and Elo already carries it.
+
+- **Opponent-adjusted EPA stats, and a composite without the points stats** (v74, 2026-10-29; user request). (A) Each game's four EPA
+  stats were discounted by how generous/tough the opponent had been before that game (rush offense minus K x the opponent's rush
+  defense allowed above the league mean, and so on; pre-game ratings only; `team_ratings.OPP_ADJUST_K`, off by default). K = 1.0 and
+  0.5, weights refit walk-forward, 2011-2026 (4,012 games): AUC 0.6971 -> 0.6966 / 0.6969, log loss 0.6280 -> 0.6283 / 0.6281,
+  better in only 31-38% of seasons: no gain (Elo's margin-aware update and the 6-10 game EWMA already carry schedule strength). The
+  fitted weights barely move and pass defense stays at 0. (B) `points_off` and `points_def_allowed` forced to weight 0 (about a third
+  of today's weight): AUC 0.6949, log loss 0.6292, accuracy 64.0% vs 64.3%; the freed weight goes to Elo (0.29 -> 0.39), rush and
+  pass offense EPA, and for the first time rush defense (0.055 -> 0.085) and pass defense (0 -> 0.065). Significantly worse than
+  production on log loss (P = 0.99) but small in size, and almost level in the >2018 half (dAUC -0.0002). Both together are worse than
+  either alone (AUC 0.6933-0.6943). All five candidates fail the pre-registered rule; nothing shipped. Dropping the points stats is the
+  one candidate that trades about 0.2 AUC points for a composite that weights defense the way football intuition does; that is a
+  presentation decision, not an accuracy gain.
+
 - **QB weight refit against the ATS residual** (v68, 2026-10-22; cowork B6.1) — the market
   residual (margin - closing spread) correlates with the QB gap even after delta uses it: the
   fitted shift is consistently toward a *larger* QB weight (about 0.7 delta units on the EPA gap,
@@ -482,6 +506,17 @@ revisiting.
   compensating for over-regularization, not adding information.
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
+
+- **Team-points target instead of win/loss (research model R)** (v77, 2026-11-05). Two rows per game, ridge regression of each team's points
+  on its own offense (rush/pass EPA, giveaways), the opponent's defense (rush/pass EPA allowed, takeaways), pre-snap penalties, Elo difference,
+  home/away and, in the larger version, the 17 extra v52 stats; predicted margin = home minus away points, P(win) = Phi(margin / sigma);
+  walk-forward 2011-2025 (3,906 games) against the win/loss logistic on the same stat set (R0). Same information, different target (P-A):
+  a tie (dAUC -0.0002 to -0.0001, dLL +0.0002 to -0.0001), as the earlier Cowork margin-vs-binary test found: the bottleneck is rating noise
+  (17 games per team), not the number of outcome rows. With the 17 extra stats added (P-B): dAUC +0.0010, dLL +0.0010 at lambda 300 (select
+  +0.0011 / confirm +0.0016 AUC), P(dLL <= 0) = 0.22, better in 60% of seasons: directionally right, not significant, about 45% of the
+  distance back to production's 10-stat model. Points accuracy per team-game: MAE 7.56 vs. 8.05 for the league mean, RMSE 9.53; implied margin
+  vs. actual margin r = 0.39. Worth keeping as R's structure (points units are interpretable, it yields totals and a spread, and it scales to
+  many features) rather than as an accuracy gain.
 
 - **Persistent team-level market bias ("Vegas over/under-values particular teams")** (v73, 2026-10-26). Market residual = actual margin
   minus closing spread, per team, 1999-2026 (7,073 games). Real but tiny: the spread of team-average residuals is far wider than luck
