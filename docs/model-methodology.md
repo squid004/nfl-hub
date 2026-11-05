@@ -527,6 +527,18 @@ revisiting.
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
+- **Expected points per drive (EPD), experimental research metric** (v83, 2026-11-05; research branch; production and the EPA stats untouched). Drive EPD =
+  the summed EPA of every play of the drive (rushes, passes, penalty no-plays including pre-snap ones, kneels, spikes, the closing punt or field goal;
+  kickoffs and extra points excluded), averaged over a team's eligible drives per game; a defense's value is the opponent offense's. Eligibility:
+  any play snapped under 5% or over 95% win probability discards the whole drive (about 20% of drives); drives beginning with 3:00 or less left in the
+  half form a separate "3-minute EPD" set (about 1.15 eligible drives per team-game; 79% of team-games have one) and are kept out of the main set
+  (7.9 eligible regular drives per team-game). Persistence (reliability): offense EPD 0.722 vs. pass EPA 0.691 and rush EPA 0.493; defense EPD 0.424
+  vs. 0.377 / 0.375; 3-minute EPD offense 0.23 and defense 0.03 (noise at ~1 drive per game). Team-points model (3,906 games, baseline B AUC 0.6966):
+  adding regular EPD +0.0006 AUC / +0.0007 LL (p = 0.10); adding regular + 3-minute +0.0012 / +0.0007 (p = 0.10); swapping the four rush/pass EPA stats
+  for two EPD stats +0.0007 / +0.0008 (p = 0.16, 67% of seasons); swap + 3-minute +0.0014 / +0.0009 (p = 0.14). None clears the bar, all four are
+  positive: a drive-level stat that repeats better than any single EPA stat and, with half as many inputs, predicts at least as well. Tracked as an
+  experimental metric; the 3-minute set is unrepeatable and adds nothing yet.
+
 - **Production's QB term on the pre-game gap** (v80, 2026-11-05; research branch). v64's fully walk-forward production pipeline (momentum removed),
   2011-2026 (4,026 games), with three QB treatments: P0 today's hindsight gap, P1 the leak-free (injury-report-only) EPA gap, P3 no QB term. P0
   vs P3: dAUC +0.0040, dLL +0.0027, p = 0.001, 88% of seasons: the term earns its place on the hindsight gap, as before. P1 vs P3: dAUC +0.0013, dLL

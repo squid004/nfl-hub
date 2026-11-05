@@ -39,6 +39,10 @@ The F4 injury gain holds up in reduced form once the QB gap uses only pre-game i
 
 Owner direction: a spot foul such as pass interference is the same outcome as a completed pass, so penalties belong in EPA, on both sides of the ball, pre-snap penalties included. R's rush and pass EPA therefore count every penalty play (live-ball by the play's own run/pass flag, pre-snap by the type of the replayed down); a defense's version is the opponent offense's value. Measured: persistence unchanged or slightly better (pass offense 0.696 vs 0.691), prediction neutral (AUC -0.0004, p = 0.89). Code: `research/r_penalty_features.py` (columns `rush_epa_allpen`, `pass_epa_allpen`), test `edge_signal_test_v82_*`. Also from v81: drawing live-ball flags is a weak repeatable offensive trait (0.44); committing them and pre-snap discipline are nearly noise.
 
+## Update 2026-11-05 (v83): expected points per drive (EPD), experimental
+
+New whole-drive metric for offense and defense (summed play EPA per drive, penalties included, garbage-time DRIVES discarded if any play is snapped under 5% or over 95% win probability, drives starting with 3:00 or less in the half tracked as a separate 3-minute set). Code `research/r_drive_features.py`, test `edge_signal_test_v83_*`; the EPA stats are kept alongside. Persistence beats every single EPA stat (offense 0.72, defense 0.42; the 3-minute set is noise). In the points model, EPD swapped in for the four rush/pass EPA stats gives +0.0007 AUC with half the inputs (p = 0.16); adding it on top +0.0006 to +0.0014. Not significant, consistently positive. Candidate directions: EPD split by what ended the drive, EPD by starting field position, and a 3-minute set once more seasons accrue.
+
 ## Rules of the track
 
 1. R never uses points scored or allowed, in any form.
