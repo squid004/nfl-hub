@@ -507,6 +507,16 @@ revisiting.
 
 ### 3.2 Plausible but not confirmed (parked, worth revisiting with more data or a cleaner test)
 
+- **Leak-free QB injury gap** (v79, 2026-11-05; research branch; follow-up to v78's F4 caveat). The historical QB gap (production's backtest and
+  v78 F4) credits whoever actually played; rebuilt from pre-game information only (primary QB = plurality of the last 5 starters, flagged only
+  when the nflverse injury report lists him Out/Doubtful, pooled backup average, 0.6^streak decay), it flags 309 team-games in 2011-2025 against
+  1,278 for the leaky version, and 1,006 of the leaky flags (79%) are changes the injury report never showed; the report accounts for only 20% of
+  the leaky gap's total size. The effect survives in reduced form: in the points-target model the leaky version gives +0.0040 AUC / +0.0026 LL
+  (p = 0.003, 93% of seasons) and the leak-free one +0.0027 AUC / +0.0014 LL (both halves positive, p = 0.05, 60% of seasons; with skill-out
+  +0.0030 / +0.0017, p = 0.03). So roughly two thirds of the AUC gain is real pregame information and one third was hindsight. Production note,
+  not acted on: the production QB weight and calibration were fit on the leaky gap and are applied live only to injury-report flags, so they
+  may be mis-scaled for the live use; refitting the production QB term on the leak-free gap is a separate, pre-registered test.
+
 - **Research model R, points-target structure: pressure, pass-game, turnover-quality and injury families** (v78, 2026-11-05; research branch).
   Each family added to the v77 team-points model (baseline B: AUC 0.6966, log loss 0.6279, 3,906 games 2011-2025; offense-vs-defense roles,
   ridge lambda 300), judged on the win metrics with the pre-registered rule. F1 sacks and QB hits (allowed / forced): +0.0013 AUC, +0.0004 LL,

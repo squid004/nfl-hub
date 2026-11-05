@@ -31,6 +31,10 @@ production, which makes it a sound foundation. The larger upside is probably NEW
 
 Added to the points-target model one family at a time: sacks and QB hits (F1, +0.0013 AUC, p = 0.18, WATCH), pass-game shape (F2, nothing), turnover quality (F3, nothing), injuries (F4, +0.0043 AUC, p < 0.001, driven by the QB gaps). Stack F1-F4 + 17 candidates: AUC 0.7020 vs. 0.6966 for the baseline. Pass protection is the most repeatable stat screened (QB hits allowed reliability 0.79); pass rush and turnovers are not (0.2-0.5). The F4 gain needs a leak-free re-test first (the historical QB gap uses who actually played). Next: v79 leak-free QB injury features, then a points-valued QB term.
 
+## Update 2026-11-05 (v79)
+
+The F4 injury gain holds up in reduced form once the QB gap uses only pre-game information (primary QB flagged Out/Doubtful on the injury report): +0.0027 AUC / +0.0014 LL (p = 0.05) against +0.0040 / +0.0026 for the hindsight version; 79% of the hindsight version's flags were surprise changes the report never showed. So R's injury term should be the leak-free QB gap plus skill-out (+0.0030 AUC, p = 0.03). Side finding for production: its QB weight was fit on the hindsight gap, so the live injury-report-only use may be mis-scaled.
+
 ## Rules of the track
 
 1. R never uses points scored or allowed, in any form.
