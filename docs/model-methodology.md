@@ -376,6 +376,18 @@ revisiting.
 
 ### 3.1 Confirmed null (don't re-attempt without new reasoning)
 
+- **Penalty-inclusive EPA** (v81, 2026-11-05; research branch). Production's four EPA stats keep only plays labeled run/pass, but nflverse labels
+  76% of penalty plays `no_play` (false start, defensive pass interference and illegal contact 100%, defensive holding 76%, offensive holding 64%)
+  while still giving them an EPA (DPI +1.76 to the offense on average, roughing the passer +1.77, offensive holding -0.75, false start -0.63).
+  Rebuilt with those plays counted toward rush or pass EPA by the play's own `rush`/`pass` flag (pre-snap penalties separate) and tested in the
+  team-points model (3,906 games): swapping them in changes AUC -0.0006 / LL -0.0004 (p = 0.95 that it is no better, better in 40% of seasons);
+  adding committed/drawn penalty-EPA pairs -0.0011 AUC; swap plus pre-snap EPA -0.0015. Persistence is unchanged (rush offense reliability 0.493
+  -> 0.484, pass offense 0.691 -> 0.689; pass defense 0.377 both). The new stats alone repeat at 0.44 (live-ball penalties drawn by an offense),
+  0.28 (live-ball committed), 0.23 (pre-snap): drawing flags is a weak but real offensive trait, committing them and pre-snap discipline are
+  nearly noise. Over 17 games penalty value largely washes out, so counting it changes team ratings very little. It is conceptually correct
+  (a spot foul is a pass outcome) and empirically neutral to slightly negative; adopting it in model R would be a definitional choice, not an
+  accuracy gain.
+
 - **Simultaneous (ridge) opponent adjustment of the EPA stats** (v76, 2026-10-31; follow-up to v74's naive version). Per stat, rush and
   pass EPA/play per team-game fit as `mu + off(team) + def(opponent)` by time-decayed weighted ridge on all earlier games (pre-game ratings
   only), replacing R0's four EWMA EPA stats; half-life H in {10, 20} weeks x lambda in {5, 15, 40}; weights refit walk-forward, 2011-2025
