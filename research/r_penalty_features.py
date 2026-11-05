@@ -8,8 +8,11 @@ Per (game_id, team = the OFFENSE):
   rush_epa_pen / pass_epa_pen   mean EPA over run (pass) plays PLUS the no_play penalty plays whose play was a run (pass) (nflverse `rush`/`pass` flags)
   live_committed / live_drawn   summed EPA of live-ball penalty plays (the play had a run or pass) committed by this offense / by the defense
   presnap_committed / presnap_drawn   the same for penalties before the snap (false start, delay of game, offside, encroachment, neutral zone...)
+  rush_epa_allpen / pass_epa_allpen   the same, ALSO counting pre-snap penalties: each pre-snap penalty's EPA goes to rush or pass according to the
+                                      type of the next scrimmage play by the same offense in that game (the replayed down), else to the more common
+                                      type in that game. This is research model R's definition of rush/pass EPA (owner direction 2026-11-05).
 A defense's version of each stat is the opponent offense's value in the same game, as everywhere else. Cached per season in
-research/cache/v81_pen_{season}.parquet (gitignored).
+research/cache/v82_pen_{season}.parquet (gitignored).
 """
 from __future__ import annotations
 
@@ -28,11 +31,11 @@ PBP_URL = "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_
 CACHE = os.path.join(HERE, "cache")
 SEASONS = list(range(2007, 2026))
 WP_LO, WP_HI = 0.05, 0.95
-WANT = {"game_id", "season_type", "play_type", "epa", "wp", "pass", "rush", "penalty", "penalty_team", "posteam", "defteam", "play_deleted"}
+WANT = {"game_id", "play_id", "season_type", "play_type", "epa", "wp", "pass", "rush", "penalty", "penalty_team", "posteam", "defteam", "play_deleted"}
 
 
 def extract_season(season: int) -> pd.DataFrame:
-    path = os.path.join(CACHE, f"v81_pen_{season}.parquet")
+    path = os.path.join(CACHE, f"v82_pen_{season}.parquet")
     if os.path.exists(path):
         return pd.read_parquet(path)
     for attempt in range(6):
@@ -46,7 +49,12 @@ def extract_season(season: int) -> pd.DataFrame:
             time.sleep(15 * (attempt + 1))
     for c in WANT - set(df.columns):
         df[c] = np.nan
-    df = df[(df["season_type"] == "REG") & (df["play_deleted"].fillna(0) != 1)]
+    df = df[(df["season_type"] == "REG") & (df["play_deleted"].fillna(0) != 1)].sort_values(["game_id", "play_id"]).copy()
+    # type and offense of the NEXT scrimmage play in the game (before any filtering), for assigning pre-snap penalties
+    scrim = df["play_type"].isin(["run", "pass"])
+    nxt_type = df["play_type"].where(scrim).groupby(df["game_id"]).shift(-1).groupby(df["game_id"]).bfill()
+    nxt_pos = df["posteam"].where(scrim).groupby(df["game_id"]).shift(-1).groupby(df["game_id"]).bfill()
+    df["next_type"] = nxt_type.where(nxt_pos == df["posteam"])
     df = df.dropna(subset=["wp", "epa", "posteam"])
     df = df[(df["wp"] >= WP_LO) & (df["wp"] <= WP_HI)].copy()
     pen_np = df[(df["play_type"] == "no_play") & (df["penalty"] == 1)].copy()
@@ -55,10 +63,17 @@ def extract_season(season: int) -> pd.DataFrame:
     run_all = pd.concat([df[df["play_type"] == "run"][K + ["epa"]], pen_np[pen_np["kind"] == "rush"][K + ["epa"]]])
     pass_all = pd.concat([df[df["play_type"] == "pass"][K + ["epa"]], pen_np[pen_np["kind"] == "pass"][K + ["epa"]]])
     live = pen_np[pen_np["kind"] != "presnap"]
-    pre = pen_np[pen_np["kind"] == "presnap"]
+    pre = pen_np[pen_np["kind"] == "presnap"].copy()
+    mix = df[df["play_type"].isin(["run", "pass"])].groupby(K)["play_type"].apply(lambda x: "pass" if (x == "pass").mean() >= 0.5 else "run")
+    pre = pre.join(mix.rename("mix_type"), on=K)
+    pre["to"] = pre["next_type"].fillna(pre["mix_type"]).fillna("pass")
+    run_all2 = pd.concat([run_all, pre[pre["to"] == "run"][K + ["epa"]]])
+    pass_all2 = pd.concat([pass_all, pre[pre["to"] == "pass"][K + ["epa"]]])
     g = pd.DataFrame({
         "rush_epa_pen": run_all.groupby(K)["epa"].mean(),
         "pass_epa_pen": pass_all.groupby(K)["epa"].mean(),
+        "rush_epa_allpen": run_all2.groupby(K)["epa"].mean(),
+        "pass_epa_allpen": pass_all2.groupby(K)["epa"].mean(),
         "live_committed": live[live["penalty_team"] == live["posteam"]].groupby(K)["epa"].sum(),
         "live_drawn": live[live["penalty_team"] == live["defteam"]].groupby(K)["epa"].sum(),
         "presnap_committed": pre[pre["penalty_team"] == pre["posteam"]].groupby(K)["epa"].sum(),

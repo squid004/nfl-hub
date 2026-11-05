@@ -376,6 +376,14 @@ revisiting.
 
 ### 3.1 Confirmed null (don't re-attempt without new reasoning)
 
+- **All penalties folded into rush/pass EPA, pre-snap included** (v82, 2026-11-05; research branch; adopted as research model R's definition on
+  principle, owner direction). Pre-snap penalties (false start, delay of game, offside, encroachment, neutral zone) have no rush/pass type, so each
+  one's EPA goes to the type of the next scrimmage play by that offense in the same game (the replayed down), else the game's more common type;
+  both sides of the ball (a defense's version is the opponent offense's value). In the team-points model (3,906 games): AUC -0.0004, LL -0.0003
+  against the original stats (p = 0.89 that it is no better, better in 47% of seasons), slightly less negative than v81's live-ball-only version
+  (-0.0006). Persistence is as good as or better than the original stats: rush offense 0.495 (0.493), pass offense 0.696 (0.691, the highest of any
+  EPA variant), rush defense 0.374 (0.375), pass defense 0.372 (0.377). Empirically neutral, conceptually complete.
+
 - **Penalty-inclusive EPA** (v81, 2026-11-05; research branch). Production's four EPA stats keep only plays labeled run/pass, but nflverse labels
   76% of penalty plays `no_play` (false start, defensive pass interference and illegal contact 100%, defensive holding 76%, offensive holding 64%)
   while still giving them an EPA (DPI +1.76 to the offense on average, roughing the passer +1.77, offensive holding -0.75, false start -0.63).

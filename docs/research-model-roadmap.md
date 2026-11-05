@@ -35,6 +35,10 @@ Added to the points-target model one family at a time: sacks and QB hits (F1, +0
 
 The F4 injury gain holds up in reduced form once the QB gap uses only pre-game information (primary QB flagged Out/Doubtful on the injury report): +0.0027 AUC / +0.0014 LL (p = 0.05) against +0.0040 / +0.0026 for the hindsight version; 79% of the hindsight version's flags were surprise changes the report never showed. So R's injury term should be the leak-free QB gap plus skill-out (+0.0030 AUC, p = 0.03). Side finding for production: its QB weight was fit on the hindsight gap, so the live injury-report-only use may be mis-scaled.
 
+## Update 2026-11-05 (v81, v82): penalties are part of EPA in model R
+
+Owner direction: a spot foul such as pass interference is the same outcome as a completed pass, so penalties belong in EPA, on both sides of the ball, pre-snap penalties included. R's rush and pass EPA therefore count every penalty play (live-ball by the play's own run/pass flag, pre-snap by the type of the replayed down); a defense's version is the opponent offense's value. Measured: persistence unchanged or slightly better (pass offense 0.696 vs 0.691), prediction neutral (AUC -0.0004, p = 0.89). Code: `research/r_penalty_features.py` (columns `rush_epa_allpen`, `pass_epa_allpen`), test `edge_signal_test_v82_*`. Also from v81: drawing live-ball flags is a weak repeatable offensive trait (0.44); committing them and pre-snap discipline are nearly noise.
+
 ## Rules of the track
 
 1. R never uses points scored or allowed, in any form.
