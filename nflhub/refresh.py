@@ -467,6 +467,27 @@ def _apply_edge(
     # tab). Every run, so a correction in the sheet shows up within one refresh cycle; the
     # paste box on the page writes the same table, so both sources coexist without conflict.
     if cfg.edge.sheet_id:
+        # Catch-up for past weeks with no stored picks. The pool posts a week's final "Week N"
+        # tab only after that week ends (mid-week it's "Week N live"), so the current-week pull
+        # below usually fails -- this must not sit behind it, and it must reach back further
+        # than one week or a week whose tab landed late is skipped for good. Idempotent insert.
+        backfilled = []
+        for past in range(1, week):
+            if store.edge_picks_count(season, past) > 0:
+                continue
+            try:
+                prev = edge_sheet.fetch_week(cfg.edge.sheet_id, past, normalize_team)
+            except edge_sheet.EdgeSheetUnavailable:
+                continue
+            store.edge_insert_opponent_picks([
+                {"season": season, "week": past, "opponent": p.opponent,
+                 "team_picked": p.team_picked, "source": "sheet"}
+                for p in prev.picks
+            ])
+            backfilled.append(f"wk{past}: {len(prev.picks)}")
+        if backfilled:
+            summary["edge_sheet_prev"] = "backfilled " + ", ".join(backfilled)
+
         try:
             sheet = edge_sheet.fetch_week(cfg.edge.sheet_id, week, normalize_team)
             store.edge_insert_opponent_picks([
@@ -475,21 +496,6 @@ def _apply_edge(
                 for p in sheet.picks
             ])
             summary["edge_sheet"] = f"{len(sheet.picks)} picks, {sheet.pool_size} opponents"
-
-            # Catch-up for the week that just ended: if the pool's tab for it only appeared
-            # after the week rolled over, its picks were never stored and the leaderboard /
-            # bias would silently skip that week. insert is idempotent on re-runs.
-            if week > 1 and store.edge_picks_count(season, week - 1) == 0:
-                try:
-                    prev = edge_sheet.fetch_week(cfg.edge.sheet_id, week - 1, normalize_team)
-                    store.edge_insert_opponent_picks([
-                        {"season": season, "week": week - 1, "opponent": p.opponent,
-                         "team_picked": p.team_picked, "source": "sheet"}
-                        for p in prev.picks
-                    ])
-                    summary["edge_sheet_prev"] = f"backfilled {len(prev.picks)} picks for week {week - 1}"
-                except edge_sheet.EdgeSheetUnavailable:
-                    pass
 
             if cfg.edge.my_name:
                 mine = next(
