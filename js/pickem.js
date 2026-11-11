@@ -247,6 +247,21 @@ function liveStateChip(g, live, postGame) {
 // for this exact moment (nothing during a kickoff, injury stoppage, or the brief window
 // before the first poll lands). Red-zone drives get the same "bad" (attention) chip color
 // everything else urgent on this card already uses, not a new color convention.
+// Both teams' Power Score and Elo across the season on one chart (Power._drawMatchupTrend), in the
+// Moneyline and ATS detail panes. Drawn on show, like the point distribution: Plotly can't size into a
+// node that isn't in the page yet. `mode` keeps the two tabs' chart ids apart.
+function trendSectionHtml(mode, g) {
+  return `<div class="game-card-matchup">
+    <div class="stat-label" title="Power Score (solid, left axis) and Elo (dotted, right axis) entering each week, plus the live value, for both teams. Same axis ranges as the Power Rankings tab.">Power Score + Elo trend</div>
+    <div id="${mode}-trend-${g.game_id}" class="power-trend-chart"></div>
+  </div>`;
+}
+
+function drawTrendSection(mode, g, ctx) {
+  const el = g && document.getElementById(`${mode}-trend-${g.game_id}`);
+  if (el) Power._drawMatchupTrend(el, g.home, g.away, ctx.powerSeries);
+}
+
 function liveSituationHtml(g, live) {
   if (!live || !g.live_situation) return '';
   const cls = g.live_red_zone ? 'bad' : 'muted';
@@ -786,6 +801,7 @@ const Pickem = {
             <div class="stat-label" title="Every term that moved delta for this matchup -- the 10-stat composite rating (9 rolling stats plus Elo) plus the 4 additive corrections on top of it -- see the Methodology tab for the full fit/weight for each.">Delta breakdown</div>
             ${powerModelBreakdownHtml(matchup, g.home, g.away)}
           </div>
+          ${trendSectionHtml('ml', g)}
           ${hasLine && pm && pm.delta != null ? Agreement.similarHtml(
             (ctx.historicalPower && ctx.historicalPower.backtest_scatter) || [],
             -effSpread, pm.delta, { season: ctx.season, week, home: g.home, away: g.away }) : ''}
@@ -804,6 +820,7 @@ const Pickem = {
         ${poolRecWeek ? poolOptimizerSummaryHtml(poolRecWeek, picks, ctx.poolSim, ctx.poolTb) : ''}`,
       columns: ['Market', 'History', 'ELWAY', 'Power Model', 'Pool optimizer'],
       items,
+      onShow: id => drawTrendSection('ml', games.find(x => x.game_id === id), ctx),
       foot: `<details>
           <summary class="muted small">Chip legend</summary>
           <ul class="tablefoot muted">
@@ -1099,6 +1116,7 @@ const Pickem = {
             <div id="${distChartId}" class="dist-chart"></div>
             <div id="${distChartId}-caption" class="muted small dist-caption"></div>
           </div>` : ''}
+          ${trendSectionHtml('ats', g)}
         </div>
       </div>` });
     });
@@ -1110,7 +1128,11 @@ const Pickem = {
       items,
       // The score-distribution chart needs its node in place and sized, so it's drawn when the
       // game shows in the pane.
-      onShow: id => { const c = charts[id]; if (c) this._drawDistChart(c.id, c.sd, c.home, c.away, c.final); },
+      onShow: id => {
+        const c = charts[id];
+        if (c) this._drawDistChart(c.id, c.sd, c.home, c.away, c.final);
+        drawTrendSection('ats', games.find(x => x.game_id === id), ctx);
+      },
       foot: `<details>
           <summary class="muted small">Chip legend</summary>
           <ul class="tablefoot muted">

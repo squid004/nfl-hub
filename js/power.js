@@ -478,6 +478,46 @@ const Power = {
     }, { displayModeBar: false, responsive: true });
   },
 
+  // Both sides of one matchup on a single _drawTrend-style chart, for the Moneyline/ATS detail panes: Power Score solid on
+  // the left axis, Elo dotted on the right, color = team (home accent, away warn, same as the point-distribution chart).
+  // Same league-wide axis ranges as the Power tab, so a gap here reads the same as it does there.
+  _drawMatchupTrend(el, home, away, allSeries) {
+    const sh = allSeries && allSeries[home], sa = allSeries && allSeries[away];
+    if (!sh || !sa || sh.length < 2 || sa.length < 2) {
+      el.innerHTML = '<p class="muted small">Needs at least two weekly snapshots for both teams.</p>';
+      return;
+    }
+    const cs = getComputedStyle(document.documentElement);
+    const cssVar = name => cs.getPropertyValue(name).trim();
+    const text = cssVar('--text'), dim = cssVar('--dim');
+    const teamColor = { [home]: cssVar('--accent'), [away]: cssVar('--warn') };
+    const ranges = this._trendRanges(allSeries);
+    // One category axis in week order, so a bye week (no snapshot) leaves a gap instead of shifting a team's line.
+    const order = [...new Set([...sh, ...sa].map(p => p.label))]
+      .sort((a, b) => (a === 'Now' ? 99 : +a.replace('Wk ', '')) - (b === 'Now' ? 99 : +b.replace('Wk ', '')));
+    const line = (team, series, key, axis, dash, fmt, metric) => {
+      const byLabel = new Map(series.map(p => [p.label, p[key]]));
+      return {
+        type: 'scatter', mode: 'lines+markers', name: `${team} ${metric}`, x: order, y: order.map(l => byLabel.get(l) ?? null),
+        yaxis: axis, connectgaps: true, line: { color: teamColor[team], width: 2.5, dash }, marker: { size: 6 },
+        hovertemplate: `%{y:${fmt}}<extra>${team} ${metric}</extra>`,
+      };
+    };
+    const traces = [
+      line(away, sa, 'score', 'y', 'solid', '.1f', 'Power'), line(home, sh, 'score', 'y', 'solid', '.1f', 'Power'),
+      line(away, sa, 'elo', 'y2', 'dot', '.0f', 'Elo'), line(home, sh, 'elo', 'y2', 'dot', '.0f', 'Elo'),
+    ];
+    const grid = 'rgba(255,255,255,.12)';
+    Plotly.react(el, traces, {
+      paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: text, size: 11 },
+      margin: { t: 8, b: 40, l: 52, r: 52 }, height: 300, hovermode: 'x unified',
+      legend: { orientation: 'h', y: -0.22, x: 0.5, xanchor: 'center' },
+      xaxis: { type: 'category', gridcolor: grid, linecolor: grid, tickfont: { color: dim } },
+      yaxis: { title: { text: 'Power Score (solid)' }, tickfont: { color: dim }, gridcolor: grid, zeroline: false, ...(ranges.score ? { range: ranges.score, autorange: false } : {}) },
+      yaxis2: { title: { text: 'Elo (dotted)' }, tickfont: { color: dim }, overlaying: 'y', side: 'right', showgrid: false, zeroline: false, tickformat: ',.0f', ...(ranges.elo ? { range: ranges.elo, autorange: false } : {}) },
+    }, { displayModeBar: false, responsive: true });
+  },
+
   // The four EPA number-line strips for ONE team: every team is a faint dot at its real 0-100 value, the selected team is
   // ringed and labeled so its position (and the actual gaps to its neighbors) reads at a glance.
   _teamStrips(team, rows, classifications) {
